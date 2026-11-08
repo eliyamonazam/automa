@@ -18,6 +18,14 @@
 | [CHANGELOG.md](CHANGELOG.md) | گزارش تغییرات هر اجرا |
 | [CLAUDE.md](CLAUDE.md) | دستورالعمل اجراهای خودکار توسعه |
 
+## توسعه
+
+```bash
+pip install -e '.[dev]'
+pytest
+ruff check .
+```
+
 ## راه‌اندازی (بعد از ساخته شدن هسته)
 
 ```bash
