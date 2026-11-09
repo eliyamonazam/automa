@@ -90,6 +90,7 @@ workspace/projects/<project-id>/
   events.jsonl      لاگ همه رویدادها
 ```
 لاگ رویدادها با `automa.events` نوشته می‌شه: `Event` (زمان UTC، نوع نقطه‌دار مثل `budget.warning`، `project_id`، `data`)، رابط `EventSink`، `JsonlEventLog` (یک JSON در هر خط، فقط افزودنی، خط خراب هنگام خوندن خطا می‌ده) و `MemoryEventSink`.
+پیاده‌سازی در `automa.project`: `ProjectStore` (ریشه `<workspace>/projects`) با `create`/`load`/`save`/`set_status`/`list_projects`. `project.json` مدل `Project` است (`schema_version`، `id`، `goal`، `status`، `created_at`، `updated_at`، `revision`) و اتمی نوشته می‌شه؛ `save` با `revision` همزمانی خوش‌بینانه داره (`ProjectConflict`). شناسه پروژه فقط `a-z0-9-` و پوشه پروژه نمی‌تونه symlink یا بیرون از ریشه باشه. `store.events(id)` یک `ProjectEventLog` برمی‌گردونه که `project_id` رویدادها رو اجباری می‌کنه و به‌عنوان `EventSink` به `BudgetGuard` داده می‌شه (جزئیات: D13).
 فایل‌محور بودن یعنی وضعیت قابل خوندن، قابل ادامه و قابل بررسی دستیه.
 
 ### حافظه (مرحله بعد)
