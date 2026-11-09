@@ -250,6 +250,9 @@ class LedgerOnlyGuard:
     def record(self, estimate: CallEstimate, result: LLMResult) -> None:
         self.ledger.record(estimate, result)
 
+    def release(self, estimate: CallEstimate) -> None:
+        return None
+
 
 def test_gateway_calls_are_recorded(ledger: CostLedger) -> None:
     config = AutomaConfig.model_validate(

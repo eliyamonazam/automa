@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
+import threading
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -106,7 +107,9 @@ class CostLedger:
         if self._path != ":memory:":
             Path(self._path).parent.mkdir(parents=True, exist_ok=True)
         self._clock = clock
-        self._conn = sqlite3.connect(self._path)
+        # One connection shared across threads, serialized by ``_lock``.
+        self._lock = threading.RLock()
+        self._conn = sqlite3.connect(self._path, check_same_thread=False)
         try:
             self._init_schema()
         except BaseException:
@@ -133,7 +136,8 @@ class CostLedger:
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     def __enter__(self) -> CostLedger:
         return self
@@ -146,6 +150,10 @@ class CostLedger:
         if now.tzinfo is None:
             raise LedgerError("clock must return a timezone-aware datetime")
         return now.astimezone(UTC)
+
+    def today(self) -> date:
+        """Current UTC day according to the ledger clock."""
+        return self._now().date()
 
     def record(self, estimate: CallEstimate, result: LLMResult) -> LedgerEntry:
         """Persist one completed call. Raises on any failure (fail closed)."""
@@ -170,7 +178,7 @@ class CostLedger:
             usd_to_nusd(estimate.max_cost_usd),
             reported,
         )
-        with self._conn:
+        with self._lock, self._conn:
             cur = self._conn.execute(
                 "INSERT INTO calls (ts, day, project_id, task_id, tier, model, response_model,"
                 " input_tokens, output_tokens, cost_nusd, estimate_nusd, reported_cost_nusd)"
@@ -182,10 +190,11 @@ class CostLedger:
         return self.get(entry_id)
 
     def get(self, entry_id: int) -> LedgerEntry:
-        row = self._conn.execute(
-            f"SELECT {_COLUMNS} FROM calls WHERE id = ?",  # noqa: S608 - constant columns
-            (entry_id,),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT {_COLUMNS} FROM calls WHERE id = ?",  # noqa: S608 - constant columns
+                (entry_id,),
+            ).fetchone()
         if row is None:
             raise KeyError(entry_id)
         return _row_to_entry(row)
@@ -195,19 +204,21 @@ class CostLedger:
     ) -> list[LedgerEntry]:
         """All entries in insertion order, optionally filtered by project and/or UTC day."""
         where, params = _filters(project_id, day)
-        rows = self._conn.execute(
-            f"SELECT {_COLUMNS} FROM calls{where} ORDER BY id",  # noqa: S608 - fixed clauses
-            params,
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT {_COLUMNS} FROM calls{where} ORDER BY id",  # noqa: S608 - fixed clauses
+                params,
+            ).fetchall()
         return [_row_to_entry(r) for r in rows]
 
     def spent_nusd(self, *, project_id: str | None = None, day: date | None = None) -> int:
         """Exact total spending in nano-USD for the given filters."""
         where, params = _filters(project_id, day)
-        (total,) = self._conn.execute(
-            f"SELECT COALESCE(SUM(cost_nusd), 0) FROM calls{where}",  # noqa: S608
-            params,
-        ).fetchone()
+        with self._lock:
+            (total,) = self._conn.execute(
+                f"SELECT COALESCE(SUM(cost_nusd), 0) FROM calls{where}",  # noqa: S608
+                params,
+            ).fetchone()
         return int(total)
 
     def total_cost(self) -> float:
@@ -218,7 +229,7 @@ class CostLedger:
 
     def daily_cost(self, day: date | None = None) -> float:
         """Spending on UTC ``day`` (default: today according to the ledger clock)."""
-        return nusd_to_usd(self.spent_nusd(day=day or self._now().date()))
+        return nusd_to_usd(self.spent_nusd(day=day or self.today()))
 
 
 def _filters(project_id: str | None, day: date | None) -> tuple[str, tuple[str, ...]]:

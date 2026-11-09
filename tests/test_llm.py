@@ -52,6 +52,7 @@ class RecordingGuard:
         self.refuse = refuse
         self.authorized: list[CallEstimate] = []
         self.recorded: list[tuple[CallEstimate, LLMResult]] = []
+        self.released: list[CallEstimate] = []
 
     def authorize(self, estimate: CallEstimate) -> None:
         self.authorized.append(estimate)
@@ -60,6 +61,9 @@ class RecordingGuard:
 
     def record(self, estimate: CallEstimate, result: LLMResult) -> None:
         self.recorded.append((estimate, result))
+
+    def release(self, estimate: CallEstimate) -> None:
+        self.released.append(estimate)
 
 
 # --- types -----------------------------------------------------------------
@@ -141,7 +145,7 @@ def test_fake_provider_default() -> None:
 
 def test_gateway_resolves_tier_and_prices(config: AutomaConfig) -> None:
     fake = FakeProvider(["hello"])
-    gw = LLMGateway(config, fake)
+    gw = LLMGateway(config, fake, guard=RecordingGuard())
     result = gw.complete([Message.user("hi")], tier=Tier.LARGE, max_tokens=50)
     assert fake.requests[0].model == "m-large"
     assert result.text == "hello" and result.tier is Tier.LARGE
@@ -152,7 +156,9 @@ def test_gateway_resolves_tier_and_prices(config: AutomaConfig) -> None:
 def test_gateway_unknown_tier(config: AutomaConfig) -> None:
     fake = FakeProvider(["x"])
     with pytest.raises(ConfigError):
-        LLMGateway(config, fake).complete([Message.user("hi")], tier=Tier.MEDIUM, max_tokens=5)
+        LLMGateway(config, fake, guard=RecordingGuard()).complete(
+            [Message.user("hi")], tier=Tier.MEDIUM, max_tokens=5
+        )
     assert fake.requests == []
 
 
@@ -182,6 +188,14 @@ def test_gateway_provider_failure_not_recorded(config: AutomaConfig) -> None:
     with pytest.raises(ProviderError):
         gw.complete([Message.user("hi")], tier=Tier.SMALL, max_tokens=10)
     assert len(guard.authorized) == 1 and guard.recorded == []
+    assert guard.released == guard.authorized
+
+
+def test_gateway_requires_guard(config: AutomaConfig) -> None:
+    with pytest.raises(TypeError):
+        LLMGateway(config, FakeProvider(["x"]), guard=None)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        LLMGateway(config, FakeProvider(["x"]))  # type: ignore[call-arg]
 
 
 def _resp(usage: Usage, model: str = "m-small") -> ChatResponse:
@@ -199,7 +213,9 @@ def test_gateway_missing_usage_charges_worst_case(config: AutomaConfig) -> None:
 def test_gateway_reported_cost_never_lowers_cost(config: AutomaConfig) -> None:
     usage_low = Usage(input_tokens=1000, output_tokens=1000, reported_cost_usd=0.0)
     usage_high = Usage(input_tokens=1000, output_tokens=1000, reported_cost_usd=5.0)
-    gw = LLMGateway(config, FakeProvider([_resp(usage_low), _resp(usage_high)]))
+    gw = LLMGateway(
+        config, FakeProvider([_resp(usage_low), _resp(usage_high)]), guard=RecordingGuard()
+    )
     computed = compute_cost(usage_low, config.price_for("m-small"))
     low = gw.complete([Message.user("a")], tier=Tier.SMALL, max_tokens=10)
     high = gw.complete([Message.user("a")], tier=Tier.SMALL, max_tokens=10)
@@ -210,14 +226,16 @@ def test_gateway_reported_cost_never_lowers_cost(config: AutomaConfig) -> None:
 def test_gateway_prices_requested_model_not_reported(config: AutomaConfig) -> None:
     # Provider claims a different (unpriced) model; we still price the requested one.
     usage = Usage(input_tokens=1000, output_tokens=0)
-    gw = LLMGateway(config, FakeProvider([_resp(usage, model="other/unknown")]))
+    gw = LLMGateway(
+        config, FakeProvider([_resp(usage, model="other/unknown")]), guard=RecordingGuard()
+    )
     result = gw.complete([Message.user("a")], tier=Tier.LARGE, max_tokens=10)
     assert result.cost_usd == pytest.approx(compute_cost(usage, config.price_for("m-large")))
 
 
 def test_from_config_requires_key(config: AutomaConfig) -> None:
     with pytest.raises(ConfigError):
-        LLMGateway.from_config(config)
+        LLMGateway.from_config(config, guard=RecordingGuard())
 
 
 # --- OpenAI-compatible provider (MockTransport, no network) -----------------

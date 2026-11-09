@@ -3,8 +3,9 @@
 Responsibilities:
 - resolve a capability tier to a concrete model (roles never name models);
 - bound every call (``max_tokens`` is mandatory) and estimate its worst-case cost;
-- ask the optional ``CallGuard`` for permission before sending, and report the
-  actual cost after the call (the budget layer plugs in here in M1);
+- ask the mandatory ``CallGuard`` (``automa.budget.BudgetGuard`` in production)
+  for permission before sending, report the actual cost after the call, and
+  release the reservation if the provider fails;
 - compute cost conservatively from configured prices.
 """
 
@@ -50,11 +51,17 @@ class CallEstimate(BaseModel):
 
 
 class CallGuard(Protocol):
-    """Budget hook. ``authorize`` must raise to block a call; it is never skipped."""
+    """Budget hook. ``authorize`` must raise to block a call; it is never skipped.
+
+    Exactly one of ``record`` (call completed) or ``release`` (call failed before
+    returning usage) follows every successful ``authorize``.
+    """
 
     def authorize(self, estimate: CallEstimate) -> None: ...
 
-    def record(self, estimate: CallEstimate, result: LLMResult) -> None: ...
+    def record(self, estimate: CallEstimate, result: LLMResult) -> object: ...
+
+    def release(self, estimate: CallEstimate) -> None: ...
 
 
 def compute_cost(usage: Usage, price: ModelPrice) -> float:
@@ -94,14 +101,16 @@ class LLMGateway:
         config: AutomaConfig,
         provider: Provider,
         *,
-        guard: CallGuard | None = None,
+        guard: CallGuard,
     ):
+        if guard is None:
+            raise TypeError("LLMGateway requires a CallGuard; calls are never unguarded")
         self._config = config
         self._provider = provider
         self._guard = guard
 
     @classmethod
-    def from_config(cls, config: AutomaConfig, *, guard: CallGuard | None = None) -> LLMGateway:
+    def from_config(cls, config: AutomaConfig, *, guard: CallGuard) -> LLMGateway:
         """Build a gateway that talks to the configured OpenAI-compatible endpoint."""
         from automa.llm.openai_compat import OpenAICompatProvider
 
@@ -157,13 +166,15 @@ class LLMGateway:
             messages, tier=tier, max_tokens=max_tokens, temperature=temperature, tools=tools
         )
         estimate = self.estimate(request, tier, context or CallContext())
-        if self._guard is not None:
-            self._guard.authorize(estimate)
-        response = self._provider.complete(request)
+        self._guard.authorize(estimate)
+        try:
+            response = self._provider.complete(request)
+        except BaseException:
+            self._guard.release(estimate)
+            raise
         cost = self._actual_cost(response.usage, request.model, estimate)
         result = LLMResult(tier=tier, response=response, cost_usd=cost)
-        if self._guard is not None:
-            self._guard.record(estimate, result)
+        self._guard.record(estimate, result)
         return result
 
     def _actual_cost(self, usage: Usage, model: str, estimate: CallEstimate) -> float:
