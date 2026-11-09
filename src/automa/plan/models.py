@@ -425,7 +425,7 @@ def parse_plan(text: str) -> Plan:
     ``PlanError`` whose ``details`` lists the problems in a form that can be sent back
     to the model for a retry. Never returns a partially valid plan.
     """
-    raw = _strip_fence(text)
+    raw = strip_code_fence(text)
     try:
         data: Any = json.loads(raw)
     except ValueError as e:
@@ -441,7 +441,8 @@ def parse_plan(text: str) -> Plan:
 _FENCE_RE = re.compile(r"^```[A-Za-z0-9_-]*\s*\n(.*)\n```$", re.DOTALL)
 
 
-def _strip_fence(text: str) -> str:
+def strip_code_fence(text: str) -> str:
+    """Strip surrounding whitespace and at most one Markdown code fence."""
     s = text.strip()
     m = _FENCE_RE.match(s)
     return m.group(1) if m else s

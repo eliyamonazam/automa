@@ -19,6 +19,7 @@ from automa.plan.models import (
     Verdict,
     VerdictOutcome,
     parse_plan,
+    strip_code_fence,
 )
 
 __all__ = [
@@ -40,4 +41,5 @@ __all__ = [
     "Verdict",
     "VerdictOutcome",
     "parse_plan",
+    "strip_code_fence",
 ]
