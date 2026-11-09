@@ -46,6 +46,7 @@
 - ابتدا سؤال‌های روشن‌کننده (در صورت لزوم) تولید می‌کنه.
 - خروجی: یک **برنامه** به شکل JSON: فهرست وظایف، هر کدوم با `id`، `title`، `role`، `inputs`، `depends_on`، `acceptance_criteria`.
 - وقتی یک وظیفه چند بار شکست بخوره، Executive می‌تونه برنامه رو بازنویسی کنه (re-plan).
+- **مدل‌های داده (`src/automa/plan/models.py`):** `Plan` (`schema_version`، `version`، `goal`، `tasks`) با اعتبارسنجی گراف (شناسه یکتا، وابستگی شناخته‌شده، بدون چرخه) و `topological_order`/`ready_tasks`/`dependents`؛ `Task` (`id`، `title`، `description`، `role`، `tier`، `inputs`، `depends_on`، `acceptance_criteria`)؛ `AcceptanceCriterion` با `check` اختیاری (`file_exists`، `file_contains`، `command`)؛ `TaskResult` (خروجی یک تلاش Worker) و `Verdict` (نظر Verifier، `pass`/`fail` + `checks` + `issues`، همیشه سازگار). مسیرها نسبی به `files/` و بدون `..`. `parse_plan` خروجی مدل رو اعتبارسنجی می‌کنه و `PlanError.details` بازخورد قابل فرستادن به مدل برای تلاش مجدده (جزئیات: D14).
 
 ### Worker Agents و نقش‌ها (Roles)
 هر نقش یک فایل در `roles/` داره: دستورالعمل سیستمی، ابزارهای مجاز، سطح مدل پیش‌فرض. نقش‌ها داده‌ان، نه کد؛ پس اضافه کردن نقش جدید نیاز به تغییر کد نداره. در آینده Skillها هم به نقش‌ها متصل می‌شن.
@@ -90,7 +91,7 @@ workspace/projects/<project-id>/
   events.jsonl      لاگ همه رویدادها
 ```
 لاگ رویدادها با `automa.events` نوشته می‌شه: `Event` (زمان UTC، نوع نقطه‌دار مثل `budget.warning`، `project_id`، `data`)، رابط `EventSink`، `JsonlEventLog` (یک JSON در هر خط، فقط افزودنی، خط خراب هنگام خوندن خطا می‌ده) و `MemoryEventSink`.
-پیاده‌سازی در `automa.project`: `ProjectStore` (ریشه `<workspace>/projects`) با `create`/`load`/`save`/`set_status`/`list_projects`. `project.json` مدل `Project` است (`schema_version`، `id`، `goal`، `status`، `created_at`، `updated_at`، `revision`) و اتمی نوشته می‌شه؛ `save` با `revision` همزمانی خوش‌بینانه داره (`ProjectConflict`). شناسه پروژه فقط `a-z0-9-` و پوشه پروژه نمی‌تونه symlink یا بیرون از ریشه باشه. `store.events(id)` یک `ProjectEventLog` برمی‌گردونه که `project_id` رویدادها رو اجباری می‌کنه و به‌عنوان `EventSink` به `BudgetGuard` داده می‌شه (جزئیات: D13).
+پیاده‌سازی در `automa.project`: `ProjectStore` (ریشه `<workspace>/projects`) با `create`/`load`/`save`/`set_status`/`list_projects`. `project.json` مدل `Project` است (`schema_version`، `id`، `goal`، `status`، `created_at`، `updated_at`، `revision`) و اتمی نوشته می‌شه؛ `save` با `revision` همزمانی خوش‌بینانه داره (`ProjectConflict`). شناسه پروژه فقط `a-z0-9-` و پوشه پروژه نمی‌تونه symlink یا بیرون از ریشه باشه. `store.events(id)` یک `ProjectEventLog` برمی‌گردونه که `project_id` رویدادها رو اجباری می‌کنه و به‌عنوان `EventSink` به `BudgetGuard` داده می‌شه (جزئیات: D13). `save_plan`/`load_plan` فایل `plan.json` رو اتمی و فقط با `version` بزرگ‌تر می‌نویسن و رویداد `plan.saved` ثبت می‌کنن (D14).
 فایل‌محور بودن یعنی وضعیت قابل خوندن، قابل ادامه و قابل بررسی دستیه.
 
 ### حافظه (مرحله بعد)

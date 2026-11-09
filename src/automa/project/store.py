@@ -36,6 +36,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from automa.events import Event, JsonlEventLog
+from automa.plan import Plan
 
 SCHEMA_VERSION = 1
 PROJECTS_DIRNAME = "projects"
@@ -324,6 +325,61 @@ class ProjectStore:
             )
         )
         return stored
+
+    # -- plan --------------------------------------------------------------
+
+    def has_plan(self, project_id: str) -> bool:
+        self._require(project_id)
+        return self.plan_file(project_id).is_file()
+
+    def load_plan(self, project_id: str) -> Plan:
+        """Read ``plan.json``. Raises ``ProjectStoreError`` if missing, corrupt or invalid."""
+        self._require(project_id)
+        path = self.plan_file(project_id)
+        if path.is_symlink() or not path.is_file():
+            raise ProjectStoreError(f"project {project_id!r} has no plan")
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise ProjectStoreError(f"{path}: unreadable plan file") from e
+        try:
+            return Plan.model_validate(raw)
+        except ValidationError as e:
+            raise ProjectStoreError(f"{path}: invalid plan file") from e
+
+    def save_plan(self, project_id: str, plan: Plan) -> Plan:
+        """Atomically write ``plan.json`` and log a ``plan.saved`` event.
+
+        The plan is re-validated before writing. A plan may only replace an older one:
+        its ``version`` must be greater than the stored plan's (re-plans never go back,
+        and an existing plan is never silently overwritten with the same version).
+        """
+        self._require(project_id)
+        try:  # model_copy/construct may skip validation; never write an unvalidated plan
+            plan = Plan.model_validate(plan.model_dump())
+        except ValidationError as e:
+            raise ProjectStoreError(f"invalid plan for project {project_id!r}") from e
+        path = self.plan_file(project_id)
+        with self._lock:
+            if path.is_symlink():
+                raise ProjectStoreError(f"{path}: plan file must not be a symlink")
+            if path.exists():
+                current = self.load_plan(project_id)
+                if plan.version <= current.version:
+                    raise ProjectConflict(
+                        f"plan version {plan.version} does not replace stored version "
+                        f"{current.version} of project {project_id!r}"
+                    )
+            _write_json_atomic(path, plan.model_dump(mode="json"))
+        self.events(project_id).emit(
+            Event(
+                ts=self._now(),
+                type="plan.saved",
+                project_id=project_id,
+                data={"version": plan.version, "tasks": len(plan.tasks)},
+            )
+        )
+        return plan
 
     # -- helpers -----------------------------------------------------------
 

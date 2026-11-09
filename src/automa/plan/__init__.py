@@ -1,0 +1,43 @@
+"""Plan, Task, TaskResult and Verdict: the contract between agents. See docs/ARCHITECTURE.md."""
+
+from automa.plan.models import (
+    PLAN_SCHEMA_VERSION,
+    TASK_ID_PATTERN,
+    AcceptanceCriterion,
+    Check,
+    CheckResult,
+    CommandCheck,
+    FileContainsCheck,
+    FileExistsCheck,
+    Issue,
+    Plan,
+    PlanError,
+    ResultStatus,
+    Task,
+    TaskResult,
+    TaskStatus,
+    Verdict,
+    VerdictOutcome,
+    parse_plan,
+)
+
+__all__ = [
+    "PLAN_SCHEMA_VERSION",
+    "TASK_ID_PATTERN",
+    "AcceptanceCriterion",
+    "Check",
+    "CheckResult",
+    "CommandCheck",
+    "FileContainsCheck",
+    "FileExistsCheck",
+    "Issue",
+    "Plan",
+    "PlanError",
+    "ResultStatus",
+    "Task",
+    "TaskResult",
+    "TaskStatus",
+    "Verdict",
+    "VerdictOutcome",
+    "parse_plan",
+]

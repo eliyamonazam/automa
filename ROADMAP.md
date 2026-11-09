@@ -19,7 +19,7 @@
 
 ## M2 — ذخیره پروژه و برنامه‌ریزی
 - [x] `ProjectStore`: ساخت، خوندن و ذخیره پروژه و `events.jsonl`
-- [ ] مدل‌های داده (`Plan`، `Task`، `TaskResult`، `Verdict`) با pydantic
+- [x] مدل‌های داده (`Plan`، `Task`، `TaskResult`، `Verdict`) با pydantic
 - [ ] `ExecutiveAgent`: سؤال‌های روشن‌کننده + تولید `plan.json` معتبر (با اعتبارسنجی و تلاش مجدد برای JSON نامعتبر)
 - [ ] CLI: `automa new "<هدف>"`، `automa status`
 
