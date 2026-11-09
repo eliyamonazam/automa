@@ -11,7 +11,7 @@
 - [x] CI ساده در GitHub Actions: اجرای `pytest` و `ruff` روی هر push
 
 ## M1 — درگاه مدل و لایه مالی
-- [ ] `LLMGateway` با API سازگار OpenAI + `FakeProvider` برای تست
+- [x] `LLMGateway` با API سازگار OpenAI + `FakeProvider` برای تست
 - [ ] `CostLedger` با SQLite: ثبت هر فراخوانی
 - [ ] `BudgetGuard`: سقف پروژه، روزانه و هر فراخوانی؛ توقف قطعی + خطای مشخص
 - [ ] هشدار ۵۰٪ و ۸۰٪ بودجه در لاگ رویدادها

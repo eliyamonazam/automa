@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-09 — M1: `LLMGateway` و `FakeProvider`
+- **انجام‌شده:** پکیج `automa.llm` با انواع داده مستقل از ارائه‌دهنده (`Message`، `ChatRequest`، `ChatResponse`، `Usage`، `ToolSpec`، `ToolCall`، `LLMResult`)، رابط `Provider`، ارائه‌دهنده HTTP سازگار OpenAI (`OpenAICompatProvider` با `httpx`، پشتیبانی از tool calling و `usage.cost`)، و `FakeProvider` قطعی با اسکریپت پاسخ‌ها و ثبت درخواست‌ها. `LLMGateway` سطح رو به مدل نگاشت می‌کنه، `max_tokens` رو اجباری می‌کنه، قبل از هر فراخوانی برآورد بدبینانه بدترین هزینه (`CallEstimate`) می‌سازه و از قلاب `CallGuard` اجازه می‌گیره (`authorize`) و بعد هزینه واقعی رو گزارش می‌ده (`record`). هزینه همیشه با قیمت مدلِ درخواست‌شده حساب می‌شه؛ هزینه گزارش‌شده درگاه فقط می‌تونه هزینه رو بالا ببره؛ نبود usage = محاسبه با بدترین حالت. خطاهای HTTP/شبکه به `ProviderError` (با `retryable`) تبدیل می‌شن و کلید API هیچ‌وقت در پیام خطا نمیاد.
+- **فایل‌های اصلی:** `src/automa/llm/{types,provider,fake,openai_compat,gateway}.py`، `tests/test_llm.py`.
+- **تست‌ها:** `pytest` ← ۷۰ تست سبز (۳۰ تست جدید، همه با FakeProvider یا `httpx.MockTransport`، بدون شبکه)؛ `ruff check` و `ruff format --check` ← بدون خطا.
+- **مشکلات:** `guard` فعلاً اختیاریه چون `BudgetGuard` هنوز وجود نداره؛ در مورد `BudgetGuard` باید اجباری بشه. تلاش مجدد خودکار برای خطاهای `retryable` هنوز پیاده نشده (عمداً، تا با بودجه هماهنگ بشه).
+- **قدم بعدی:** `CostLedger` با SQLite: ثبت هر فراخوانی (M1).
+
 ## 2026-11-09 — M0: CI در GitHub Actions
 - **انجام‌شده:** workflow `.github/workflows/ci.yml` روی هر push و pull request: نصب `.[dev]` و اجرای `ruff check`، `ruff format --check` و `pytest` روی Python 3.11، 3.12 و 3.13. توکن فقط‌خواندنی (`contents: read`)، بدون هیچ secret یا کلید API، سقف زمانی ۱۰ دقیقه، لغو اجراهای قدیمی همان شاخه. تست `tests/test_ci_workflow.py` تضمین می‌کنه workflow همه بررسی‌ها رو اجرا کنه و هیچ‌وقت به secret/کلید دسترسی نداشته باشه.
 - **فایل‌های اصلی:** `.github/workflows/ci.yml`، `tests/test_ci_workflow.py`.
