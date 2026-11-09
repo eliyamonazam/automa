@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-09 — M1: `CostLedger` با SQLite
+- **انجام‌شده:** پکیج جدید `automa.budget` با `CostLedger`: ثبت هر فراخوانی (زمان UTC، روز UTC، پروژه، وظیفه، سطح، مدل درخواستی و مدل پاسخ، توکن ورودی/خروجی، هزینه واقعی، برآورد بدترین حالت، هزینه گزارش‌شده درگاه) در جدول `calls`. پول به‌صورت عدد صحیح nano-USD و همیشه با گرد کردن رو به بالا ذخیره می‌شه تا جمع هزینه‌ها هیچ‌وقت کمتر از واقعیت نشه. پرس‌وجوهای `spent_nusd`/`total_cost`/`project_cost`/`daily_cost`/`entries` با فیلتر پروژه و روز. نسخه schema با `PRAGMA user_version`؛ پایگاه داده ناشناخته یا نسخه ناشناخته رد می‌شه. قیدهای `CHECK` در خود SQLite جلوی هزینه منفی رو می‌گیرن. خطای نوشتن هیچ‌وقت بلعیده نمی‌شه. متد `record(estimate, result)` با نیمه `record` از `CallGuard` سازگاره. مسیر پیش‌فرض: `<workspace>/ledger.sqlite3`.
+- **فایل‌های اصلی:** `src/automa/budget/{__init__,ledger}.py`، `tests/test_ledger.py`.
+- **تست‌ها:** `pytest` ← ۹۰ تست سبز (۲۰ تست جدید، شامل یکپارچگی با `LLMGateway` و `FakeProvider`)؛ `ruff check` و `ruff format --check` ← بدون خطا.
+- **مشکلات:** Ledger عمداً متد `authorize` نداره تا نتونه به‌جای Guard واقعی استفاده بشه؛ اتصال اجباری به Gateway در مورد `BudgetGuard` انجام می‌شه. فعلاً همزمانی چندپردازه‌ای بررسی نشده (اجرای موازی در M6).
+- **قدم بعدی:** `BudgetGuard`: سقف پروژه، روزانه و هر فراخوانی؛ توقف قطعی + خطای مشخص (M1).
+
 ## 2026-11-09 — M1: `LLMGateway` و `FakeProvider`
 - **انجام‌شده:** پکیج `automa.llm` با انواع داده مستقل از ارائه‌دهنده (`Message`، `ChatRequest`، `ChatResponse`، `Usage`، `ToolSpec`، `ToolCall`، `LLMResult`)، رابط `Provider`، ارائه‌دهنده HTTP سازگار OpenAI (`OpenAICompatProvider` با `httpx`، پشتیبانی از tool calling و `usage.cost`)، و `FakeProvider` قطعی با اسکریپت پاسخ‌ها و ثبت درخواست‌ها. `LLMGateway` سطح رو به مدل نگاشت می‌کنه، `max_tokens` رو اجباری می‌کنه، قبل از هر فراخوانی برآورد بدبینانه بدترین هزینه (`CallEstimate`) می‌سازه و از قلاب `CallGuard` اجازه می‌گیره (`authorize`) و بعد هزینه واقعی رو گزارش می‌ده (`record`). هزینه همیشه با قیمت مدلِ درخواست‌شده حساب می‌شه؛ هزینه گزارش‌شده درگاه فقط می‌تونه هزینه رو بالا ببره؛ نبود usage = محاسبه با بدترین حالت. خطاهای HTTP/شبکه به `ProviderError` (با `retryable`) تبدیل می‌شن و کلید API هیچ‌وقت در پیام خطا نمیاد.
 - **فایل‌های اصلی:** `src/automa/llm/{types,provider,fake,openai_compat,gateway}.py`، `tests/test_llm.py`.
