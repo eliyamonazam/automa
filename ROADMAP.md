@@ -24,7 +24,8 @@
 - [x] CLI: `automa new "<هدف>"`، `automa status`
 
 ## M3 — اجرا و راستی‌آزمایی (اولین حلقه کامل)
-- [ ] Tool Layer: `read_file`، `write_file`، `list_dir`، `run_command` (محدود به پوشه پروژه، با سطح ریسک)
+- [x] Tool Layer (پایه): `Tool` با سطح ریسک، `PermissionPolicy`، `ToolExecutor`، `Workspace` محدود به `files/`، ابزارهای `read_file`، `write_file`، `list_dir`
+- [ ] Tool Layer: `run_command` (سطح `execute`، بدون shell، cwd داخل `files/`، timeout، محدودیت خروجی، محیط پاک بدون کلیدها)
 - [ ] نقش‌ها به‌صورت فایل در `roles/`: `researcher`، `architect`، `developer`، `writer`
 - [ ] `WorkerAgent`: حلقه tool-use تا اتمام وظیفه یا رسیدن به سقف قدم
 - [ ] `VerifierAgent`: بررسی‌های قطعی + ارزیابی مدلی جدا از Worker
