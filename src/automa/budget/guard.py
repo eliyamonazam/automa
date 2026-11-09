@@ -14,6 +14,12 @@ Reaching the daily or project cap is a *hard stop*: the scope is latched and eve
 later call in it is refused, even a tiny one, until the user resolves it (approval
 flow arrives in M5). All arithmetic is in integer nano-USD; caps round *down* and
 costs round *up*, so the guard can never under-count.
+
+Warnings: when recorded spending first reaches 50% and 80% of the daily or project
+cap, a ``budget.warning`` event is emitted (once per scope, key and threshold);
+every new hard stop emits ``budget.stop``. Events go to the optional ``EventSink``
+and are always kept in memory (``events()``). A failing sink never undoes the
+ledger write or the latch; the failure is raised as ``BudgetError`` (fail closed).
 """
 
 from __future__ import annotations
@@ -26,8 +32,12 @@ from enum import StrEnum
 
 from automa.budget.ledger import NANO_PER_USD, CostLedger, LedgerEntry, nusd_to_usd, usd_to_nusd
 from automa.config import BudgetLimits
+from automa.events import Event, EventSink
 from automa.llm.gateway import CallEstimate
 from automa.llm.types import LLMResult
+
+# Percentages of the daily/project caps at which a warning event is emitted.
+WARNING_THRESHOLDS_PCT: tuple[int, ...] = (50, 80)
 
 
 class BudgetScope(StrEnum):
@@ -97,8 +107,18 @@ class _Reservation:
 class BudgetGuard:
     """Enforces ``BudgetLimits`` against a ``CostLedger``. Thread-safe."""
 
-    def __init__(self, limits: BudgetLimits, ledger: CostLedger):
+    def __init__(
+        self,
+        limits: BudgetLimits,
+        ledger: CostLedger,
+        *,
+        events: EventSink | None = None,
+    ):
         self._limits = limits
+        self._sink = events
+        self._events: list[Event] = []
+        # (scope, key, pct) thresholds already announced.
+        self._warned: set[tuple[BudgetScope, str, int]] = set()
         self._ledger = ledger
         self._per_call_cap = cap_to_nusd(limits.per_call_usd)
         self._daily_cap = cap_to_nusd(limits.daily_usd)
@@ -130,6 +150,11 @@ class BudgetGuard:
     def stops(self) -> list[BudgetExceeded]:
         with self._lock:
             return list(self._stopped.values())
+
+    def events(self) -> list[Event]:
+        """Every budget event emitted so far (also when no sink is configured)."""
+        with self._lock:
+            return list(self._events)
 
     # --- CallGuard protocol ---------------------------------------------------
 
@@ -181,9 +206,18 @@ class BudgetGuard:
                         key=key,
                     )
                     self._stopped[(scope, key)] = err
-                    raise err
-            self._next_token += 1
-            self._pending.append(_Reservation(self._next_token, estimate, requested))
+                    stop_event = self._stop_event_locked(err, project_id)
+                    break
+            else:
+                self._next_token += 1
+                self._pending.append(_Reservation(self._next_token, estimate, requested))
+                return
+        # The call is refused whatever happens to the event; a sink failure is chained.
+        try:
+            self._deliver([stop_event])
+        except BudgetError as sink_failure:
+            raise err from sink_failure
+        raise err
 
     def record(self, estimate: CallEstimate, result: LLMResult) -> LedgerEntry:
         """Persist the actual cost and free the reservation.
@@ -198,12 +232,26 @@ class BudgetGuard:
             reserved = self._pop_reservation(estimate)
             day_key = entry.ts.date().isoformat()
             project_id = estimate.context.project_id
-            self._latch_if_reached(BudgetScope.DAILY, day_key, self._daily_cap, entry)
+            scopes = [(BudgetScope.DAILY, day_key, self._daily_cap)]
             if project_id:
-                self._latch_if_reached(BudgetScope.PROJECT, project_id, self._project_cap, entry)
-            if not reserved:
-                raise BudgetError("recorded a call that was never authorized by the guard")
-            return entry
+                scopes.append((BudgetScope.PROJECT, project_id, self._project_cap))
+            new_events: list[Event] = []
+            for scope, key, cap in scopes:
+                spent = self._spent_locked(scope, key)
+                new_events += self._warnings_locked(scope, key, cap, spent, project_id, entry)
+                stop = self._latch_if_reached(scope, key, cap, spent, entry)
+                if stop is not None:
+                    new_events.append(self._stop_event_locked(stop, project_id))
+        if not reserved:
+            try:
+                self._deliver(new_events)
+            except BudgetError as sink_failure:
+                raise BudgetError(
+                    "recorded a call that was never authorized by the guard"
+                ) from sink_failure
+            raise BudgetError("recorded a call that was never authorized by the guard")
+        self._deliver(new_events)
+        return entry
 
     def release(self, estimate: CallEstimate) -> None:
         """Free the reservation of a call that failed without consuming tokens."""
@@ -232,11 +280,78 @@ class BudgetGuard:
                 return True
         return False
 
-    def _latch_if_reached(self, scope: BudgetScope, key: str, cap: int, entry: LedgerEntry) -> None:
-        if (scope, key) in self._stopped:
-            return
-        spent = self._spent_locked(scope, key)
-        if spent >= cap:
-            self._stopped[(scope, key)] = BudgetExceeded(
-                scope, limit_nusd=cap, spent_nusd=spent, requested_nusd=entry.cost_nusd, key=key
+    def _latch_if_reached(
+        self, scope: BudgetScope, key: str, cap: int, spent: int, entry: LedgerEntry
+    ) -> BudgetExceeded | None:
+        if (scope, key) in self._stopped or spent < cap:
+            return None
+        err = BudgetExceeded(
+            scope, limit_nusd=cap, spent_nusd=spent, requested_nusd=entry.cost_nusd, key=key
+        )
+        self._stopped[(scope, key)] = err
+        return err
+
+    def _warnings_locked(
+        self,
+        scope: BudgetScope,
+        key: str,
+        cap: int,
+        spent: int,
+        project_id: str | None,
+        entry: LedgerEntry,
+    ) -> list[Event]:
+        out: list[Event] = []
+        for pct in WARNING_THRESHOLDS_PCT:
+            # Integer comparison: spent / cap >= pct / 100, with no float rounding.
+            if spent * 100 < cap * pct or (scope, key, pct) in self._warned:
+                continue
+            self._warned.add((scope, key, pct))
+            event = Event(
+                ts=entry.ts,
+                type="budget.warning",
+                project_id=project_id,
+                data={
+                    "scope": scope.value,
+                    "key": key,
+                    "threshold_pct": pct,
+                    "limit_nusd": cap,
+                    "spent_nusd": spent,
+                    "limit_usd": nusd_to_usd(cap),
+                    "spent_usd": nusd_to_usd(spent),
+                },
             )
+            self._events.append(event)
+            out.append(event)
+        return out
+
+    def _stop_event_locked(self, err: BudgetExceeded, project_id: str | None) -> Event:
+        event = Event(
+            ts=self._ledger.now(),
+            type="budget.stop",
+            project_id=project_id,
+            data={
+                "scope": err.scope.value,
+                "key": err.key,
+                "limit_nusd": err.limit_nusd,
+                "spent_nusd": err.spent_nusd,
+                "requested_nusd": err.requested_nusd,
+                "limit_usd": err.limit_usd,
+                "spent_usd": err.spent_usd,
+            },
+        )
+        self._events.append(event)
+        return event
+
+    # --- event delivery (call WITHOUT the lock: sinks may do I/O) --------------
+
+    def _deliver(self, events: list[Event]) -> None:
+        if self._sink is None or not events:
+            return
+        failure: BaseException | None = None
+        for event in events:
+            try:
+                self._sink.emit(event)
+            except Exception as e:  # noqa: BLE001 - re-raised below, never swallowed
+                failure = failure or e
+        if failure is not None:
+            raise BudgetError(f"budget event sink failed: {type(failure).__name__}") from failure

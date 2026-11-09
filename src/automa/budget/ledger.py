@@ -151,6 +151,10 @@ class CostLedger:
             raise LedgerError("clock must return a timezone-aware datetime")
         return now.astimezone(UTC)
 
+    def now(self) -> datetime:
+        """Current UTC time according to the ledger clock."""
+        return self._now()
+
     def today(self) -> date:
         """Current UTC day according to the ledger clock."""
         return self._now().date()

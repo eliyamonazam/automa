@@ -1,6 +1,13 @@
 """Financial layer: cost ledger and budget guard. See docs/ARCHITECTURE.md."""
 
-from automa.budget.guard import BudgetError, BudgetExceeded, BudgetGuard, BudgetScope, cap_to_nusd
+from automa.budget.guard import (
+    WARNING_THRESHOLDS_PCT,
+    BudgetError,
+    BudgetExceeded,
+    BudgetGuard,
+    BudgetScope,
+    cap_to_nusd,
+)
 from automa.budget.ledger import (
     NANO_PER_USD,
     CostLedger,
@@ -11,6 +18,7 @@ from automa.budget.ledger import (
 )
 
 __all__ = [
+    "WARNING_THRESHOLDS_PCT",
     "NANO_PER_USD",
     "BudgetError",
     "BudgetExceeded",
