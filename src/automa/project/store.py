@@ -3,7 +3,8 @@
 Layout (see docs/ARCHITECTURE.md, "Project Store")::
 
     project.json   goal, status, timestamps, revision
-    plan.json      tasks and dependencies (written by later milestones)
+    plan.json      tasks and dependencies
+    clarifications.json  the Executive's questions and the user's answers
     tasks/         per-task inputs, outputs, verdicts, attempt history
     files/         the project's real outputs
     events.jsonl   append-only event log
@@ -36,12 +37,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from automa.events import Event, JsonlEventLog
-from automa.plan import Plan
+from automa.plan import Clarification, Clarifications, Plan
 
 SCHEMA_VERSION = 1
 PROJECTS_DIRNAME = "projects"
 PROJECT_FILE = "project.json"
 PLAN_FILE = "plan.json"
+CLARIFICATIONS_FILE = "clarifications.json"
 EVENTS_FILE = "events.jsonl"
 TASKS_DIR = "tasks"
 FILES_DIR = "files"
@@ -380,6 +382,64 @@ class ProjectStore:
             )
         )
         return plan
+
+    # -- clarifications ----------------------------------------------------
+
+    def clarifications_file(self, project_id: str) -> Path:
+        return self.project_dir(project_id) / CLARIFICATIONS_FILE
+
+    def has_clarifications(self, project_id: str) -> bool:
+        self._require(project_id)
+        return self.clarifications_file(project_id).is_file()
+
+    def save_clarifications(
+        self, project_id: str, items: list[Clarification] | tuple[Clarification, ...]
+    ) -> list[Clarification]:
+        """Write ``clarifications.json`` once (atomic) and log ``clarifications.saved``.
+
+        The record of what the user answered is never overwritten: a second save raises
+        ``ProjectConflict``. Items are re-validated before writing.
+        """
+        self._require(project_id)
+        try:
+            record = Clarifications.model_validate(
+                {"items": [Clarification.model_validate(i).model_dump() for i in items]}
+            )
+        except ValidationError as e:
+            raise ProjectStoreError(f"invalid clarifications for project {project_id!r}") from e
+        path = self.clarifications_file(project_id)
+        with self._lock:
+            if path.is_symlink():
+                raise ProjectStoreError(f"{path}: clarifications file must not be a symlink")
+            if path.exists():
+                raise ProjectConflict(f"project {project_id!r} already has clarifications")
+            _write_json_atomic(path, record.model_dump(mode="json"))
+        self.events(project_id).emit(
+            Event(
+                ts=self._now(),
+                type="clarifications.saved",
+                project_id=project_id,
+                data={"count": len(record.items)},
+            )
+        )
+        return list(record.items)
+
+    def load_clarifications(self, project_id: str) -> list[Clarification]:
+        """Read ``clarifications.json``; an absent file means no clarifications (``[]``)."""
+        self._require(project_id)
+        path = self.clarifications_file(project_id)
+        if path.is_symlink():
+            raise ProjectStoreError(f"{path}: clarifications file must not be a symlink")
+        if not path.exists():
+            return []
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise ProjectStoreError(f"{path}: unreadable clarifications file") from e
+        try:
+            return list(Clarifications.model_validate(raw).items)
+        except ValidationError as e:
+            raise ProjectStoreError(f"{path}: invalid clarifications file") from e
 
     # -- helpers -----------------------------------------------------------
 

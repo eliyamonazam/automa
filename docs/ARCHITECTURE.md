@@ -36,6 +36,9 @@
 
 ## اجزا
 
+### CLI
+`automa new "<هدف>"` تنظیمات رو می‌خونه، **قبل از ساخت پروژه** نگاشت سطح Executive و کلید API رو بررسی می‌کنه (تا پروژه یتیم نمونه)، پروژه رو می‌سازه، سؤال‌های روشن‌کننده Executive رو از کاربر می‌پرسه (`--no-ask` برای رد کردن)، پاسخ‌ها رو در `clarifications.json` ذخیره و `plan.json` رو با `plan_project` می‌نویسه. Provider فقط از `automa.llm.factory.provider_from_config` ساخته و فقط به `LLMGateway` با `BudgetGuard` روی Ledger مشترک workspace و `events.jsonl` پروژه داده می‌شه. `automa status [id] [--json]` فقط‌خوندنیه: نه کلید می‌خواد، نه فراخوانی مدل داره، نه فایلی (حتی Ledger) می‌سازه. کدهای خروج ثابت: ۰ موفق، ۱ خطای کاربر، ۲ تنظیمات، ۳ توقف بودجه (پروژه `paused`)، ۴ شکست برنامه‌ریزی، ۵ خطای Provider (جزئیات: D16).
+
 ### Orchestrator
 حلقه اصلی. وضعیت پروژه رو می‌خونه، وظیفه بعدی آماده (وابستگی‌هاش انجام‌شده) رو برمی‌داره، به Worker مناسب می‌ده، نتیجه رو به Verifier می‌ده، و بر اساس نتیجه وظیفه رو «انجام‌شده»، «برگشت برای اصلاح» یا «شکست» علامت می‌زنه. بعد از هر قدم state ذخیره می‌شه.
 
@@ -87,12 +90,13 @@
 workspace/projects/<project-id>/
   project.json      هدف، وضعیت، بودجه، تنظیمات
   plan.json         وظایف و وابستگی‌ها
+  clarifications.json  سؤال‌های Executive و پاسخ کاربر (یک بار نوشته می‌شه)
   tasks/<task-id>/  ورودی، خروجی، نتیجه ارزیابی، تاریخچه تلاش‌ها
   files/            خروجی‌های واقعی پروژه (کد، سند، …)
   events.jsonl      لاگ همه رویدادها
 ```
 لاگ رویدادها با `automa.events` نوشته می‌شه: `Event` (زمان UTC، نوع نقطه‌دار مثل `budget.warning`، `project_id`، `data`)، رابط `EventSink`، `JsonlEventLog` (یک JSON در هر خط، فقط افزودنی، خط خراب هنگام خوندن خطا می‌ده) و `MemoryEventSink`.
-پیاده‌سازی در `automa.project`: `ProjectStore` (ریشه `<workspace>/projects`) با `create`/`load`/`save`/`set_status`/`list_projects`. `project.json` مدل `Project` است (`schema_version`، `id`، `goal`، `status`، `created_at`، `updated_at`، `revision`) و اتمی نوشته می‌شه؛ `save` با `revision` همزمانی خوش‌بینانه داره (`ProjectConflict`). شناسه پروژه فقط `a-z0-9-` و پوشه پروژه نمی‌تونه symlink یا بیرون از ریشه باشه. `store.events(id)` یک `ProjectEventLog` برمی‌گردونه که `project_id` رویدادها رو اجباری می‌کنه و به‌عنوان `EventSink` به `BudgetGuard` داده می‌شه (جزئیات: D13). `save_plan`/`load_plan` فایل `plan.json` رو اتمی و فقط با `version` بزرگ‌تر می‌نویسن و رویداد `plan.saved` ثبت می‌کنن (D14).
+پیاده‌سازی در `automa.project`: `ProjectStore` (ریشه `<workspace>/projects`) با `create`/`load`/`save`/`set_status`/`list_projects`. `project.json` مدل `Project` است (`schema_version`، `id`، `goal`، `status`، `created_at`، `updated_at`، `revision`) و اتمی نوشته می‌شه؛ `save` با `revision` همزمانی خوش‌بینانه داره (`ProjectConflict`). شناسه پروژه فقط `a-z0-9-` و پوشه پروژه نمی‌تونه symlink یا بیرون از ریشه باشه. `store.events(id)` یک `ProjectEventLog` برمی‌گردونه که `project_id` رویدادها رو اجباری می‌کنه و به‌عنوان `EventSink` به `BudgetGuard` داده می‌شه (جزئیات: D13). `save_plan`/`load_plan` فایل `plan.json` رو اتمی و فقط با `version` بزرگ‌تر می‌نویسن و رویداد `plan.saved` ثبت می‌کنن (D14). `save_clarifications`/`load_clarifications` فایل `clarifications.json` (مدل `Clarifications` در `automa.plan`) رو اتمی و فقط یک بار می‌نویسن (رویداد `clarifications.saved`)؛ نبود فایل یعنی فهرست خالی.
 فایل‌محور بودن یعنی وضعیت قابل خوندن، قابل ادامه و قابل بررسی دستیه.
 
 ### حافظه (مرحله بعد)

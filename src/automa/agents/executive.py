@@ -16,30 +16,31 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Collection, Sequence
 from datetime import UTC, datetime
-from typing import Annotated, Any, TypeVar
+from typing import Any, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from automa.budget.guard import BudgetError
 from automa.config import Tier
 from automa.events import Event, EventSink
 from automa.llm.gateway import CallContext, LLMGateway
 from automa.llm.types import FinishReason, LLMResult, Message
-from automa.plan.models import Plan, PlanError, parse_plan, strip_code_fence
+from automa.plan.models import (
+    Clarification,
+    Plan,
+    PlanError,
+    QuestionText,
+    parse_plan,
+    strip_code_fence,
+)
 from automa.project.store import ProjectStatus, ProjectStore
 
 MAX_QUESTIONS = 5
-MAX_QUESTION_CHARS = 500
-MAX_ANSWER_CHARS = 2_000
 # How much of a rejected reply is echoed back to the model on retry (bounds cost).
 MAX_ECHO_CHARS = 4_000
 
 Clock = Callable[[], datetime]
 T = TypeVar("T")
-
-_Question = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_QUESTION_CHARS)
-]
 
 
 def _utc_now() -> datetime:
@@ -64,16 +65,7 @@ class Questions(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    questions: list[_Question] = Field(default_factory=list, max_length=MAX_QUESTIONS)
-
-
-class Clarification(BaseModel):
-    """A clarifying question and the user's answer."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    question: _Question
-    answer: Annotated[str, StringConstraints(strip_whitespace=True, max_length=MAX_ANSWER_CHARS)]
+    questions: list[QuestionText] = Field(default_factory=list, max_length=MAX_QUESTIONS)
 
 
 class ExecutiveSettings(BaseModel):

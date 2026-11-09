@@ -31,7 +31,8 @@ ruff check .
 ```bash
 cp .env.example .env      # کلید API و آدرس درگاه رو اینجا بذار
 docker compose up -d
-automa new "ایده من ..."
+automa new "ایده من ..."   # سؤال‌ها + ساخت plan.json
+automa status             # فهرست پروژه‌ها، هزینه و برنامه
 ```
 
 > کلید API هیچ‌وقت نباید وارد مخزن بشه. `.env` در `.gitignore` هست.

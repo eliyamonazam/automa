@@ -30,6 +30,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     ValidationError,
     field_validator,
     model_validator,
@@ -50,6 +51,9 @@ MAX_LIST_ITEMS = 50
 MAX_PATH_CHARS = 255
 MAX_COMMAND_CHARS = 2_000
 MAX_CHECK_TIMEOUT_S = 600
+MAX_QUESTION_CHARS = 500
+MAX_ANSWER_CHARS = 2_000
+MAX_CLARIFICATIONS = 20
 
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
@@ -446,3 +450,33 @@ def strip_code_fence(text: str) -> str:
     s = text.strip()
     m = _FENCE_RE.match(s)
     return m.group(1) if m else s
+
+
+QuestionText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_QUESTION_CHARS)
+]
+
+
+class Clarification(BaseModel):
+    """A clarifying question (asked by the Executive) and the user's answer."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    question: QuestionText
+    answer: Annotated[str, StringConstraints(strip_whitespace=True, max_length=MAX_ANSWER_CHARS)]
+
+
+class Clarifications(BaseModel):
+    """On-disk record of the clarification round (``clarifications.json``)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = PLAN_SCHEMA_VERSION
+    items: list[Clarification] = Field(default_factory=list, max_length=MAX_CLARIFICATIONS)
+
+    @field_validator("schema_version")
+    @classmethod
+    def _known_schema(cls, v: int) -> int:
+        if v != PLAN_SCHEMA_VERSION:
+            raise ValueError(f"unsupported clarifications schema_version {v}")
+        return v

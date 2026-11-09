@@ -21,7 +21,7 @@
 - [x] `ProjectStore`: ساخت، خوندن و ذخیره پروژه و `events.jsonl`
 - [x] مدل‌های داده (`Plan`، `Task`، `TaskResult`، `Verdict`) با pydantic
 - [x] `ExecutiveAgent`: سؤال‌های روشن‌کننده + تولید `plan.json` معتبر (با اعتبارسنجی و تلاش مجدد برای JSON نامعتبر)
-- [ ] CLI: `automa new "<هدف>"`، `automa status`
+- [x] CLI: `automa new "<هدف>"`، `automa status`
 
 ## M3 — اجرا و راستی‌آزمایی (اولین حلقه کامل)
 - [ ] Tool Layer: `read_file`، `write_file`، `list_dir`، `run_command` (محدود به پوشه پروژه، با سطح ریسک)
