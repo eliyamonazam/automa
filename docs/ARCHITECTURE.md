@@ -61,7 +61,7 @@
 - **ارتقای سطح:** اگر وظیفه‌ای با یک سطح دو بار رد شد، با سطح بالاتر تکرار می‌شه.
 - هر فراخوانی، قبل از ارسال از Budget Guard اجازه می‌گیره و بعدش در Ledger ثبت می‌شه؛ Guard اجباریه و اگه Provider خطا بده رزرو آزاد می‌شه.
 - یک **ارائه‌دهنده ساختگی (FakeProvider)** برای تست‌ها، تا توسعه و آزمون بدون هزینه انجام بشه.
-- **پیاده‌سازی (`src/automa/llm/`):** `types.py` (انواع داده)، `provider.py` (رابط `Provider` و `ProviderError`)، `openai_compat.py`، `fake.py`، `gateway.py`. هر فراخوانی `max_tokens` اجباری داره؛ Gateway قبل از ارسال یک `CallEstimate` (بدترین هزینه ممکن) به `CallGuard.authorize` می‌ده و بعد از پاسخ `CallGuard.record` رو با هزینه واقعی صدا می‌زنه. هزینه واقعی هیچ‌وقت کمتر از محاسبه با قیمت مدل درخواستی نیست (جزئیات: D8).
+- **پیاده‌سازی (`src/automa/llm/`):** `types.py` (انواع داده)، `provider.py` (رابط `Provider` و `ProviderError`)، `openai_compat.py`، `fake.py`، `gateway.py`. هر فراخوانی `max_tokens` اجباری داره؛ Gateway قبل از ارسال یک `CallEstimate` (بدترین هزینه ممکن) به `CallGuard.authorize` می‌ده و بعد از پاسخ `CallGuard.record` رو با هزینه واقعی صدا می‌زنه. هزینه واقعی هیچ‌وقت کمتر از محاسبه با قیمت مدل درخواستی نیست (جزئیات: D8). Gateway در سازنده هر Guard بدون `authorize`/`record`/`release` قابل فراخوانی رو رد می‌کنه؛ usage با توکن صفر همیشه با بدترین حالت حساب می‌شه؛ خطا بعد از پاسخ Provider با ثبت بدترین حالت همراهه. `tests/test_guard_bypass.py` با بررسی AST تضمین می‌کنه فقط `LLMGateway.complete` (بعد از `authorize`) Provider رو صدا بزنه (جزئیات: D12).
 
 ### Budget Guard و Cost Ledger (لایه مالی)
 - **Ledger:** هر فراخوانی با زمان، پروژه، وظیفه، مدل، توکن ورودی/خروجی و هزینه در SQLite ثبت می‌شه.

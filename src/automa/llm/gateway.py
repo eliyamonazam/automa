@@ -93,6 +93,9 @@ def estimate_max_cost(request: ChatRequest, price: ModelPrice) -> tuple[int, flo
     return input_tokens, compute_cost(usage, price)
 
 
+_GUARD_METHODS = ("authorize", "record", "release")
+
+
 class LLMGateway:
     """Resolves tiers, bounds and prices every call, and enforces the guard hook."""
 
@@ -105,6 +108,11 @@ class LLMGateway:
     ):
         if guard is None:
             raise TypeError("LLMGateway requires a CallGuard; calls are never unguarded")
+        missing = [name for name in _GUARD_METHODS if not callable(getattr(guard, name, None))]
+        if missing:
+            # Fail at construction, not at the first call: e.g. a CostLedger (which has
+            # ``record`` but no ``authorize``) must never be usable as a guard.
+            raise TypeError(f"guard is not a CallGuard (missing: {', '.join(missing)})")
         self._config = config
         self._provider = provider
         self._guard = guard
@@ -172,18 +180,34 @@ class LLMGateway:
         except BaseException:
             self._guard.release(estimate)
             raise
-        cost = self._actual_cost(response.usage, request.model, estimate)
-        result = LLMResult(tier=tier, response=response, cost_usd=cost)
+        try:
+            cost = self._actual_cost(response.usage, request.model, estimate)
+            result = LLMResult(tier=tier, response=response, cost_usd=cost)
+        except Exception:
+            # The provider answered, so money was (probably) spent. Never leave it
+            # unrecorded: charge the worst case, then surface the original error.
+            fallback = LLMResult(tier=tier, response=response, cost_usd=estimate.max_cost_usd)
+            self._guard.record(estimate, fallback)
+            raise
         self._guard.record(estimate, result)
         return result
 
     def _actual_cost(self, usage: Usage, model: str, estimate: CallEstimate) -> float:
         # Always price against the *requested* model: a gateway may report a
         # different model id we have no price for, and we must not under-count.
-        computed = compute_cost(usage, self._config.price_for(model))
-        if usage.input_tokens == 0 and usage.output_tokens == 0 and usage.reported_cost_usd is None:
-            # No usage reported at all: assume the worst case rather than zero.
-            return estimate.max_cost_usd
+        price = self._config.price_for(model)
+        if usage.input_tokens == 0 and usage.output_tokens == 0:
+            # No token usage reported: assume the worst case rather than zero, even if
+            # the gateway claims a (lower) cost. A real completion always has input.
+            computed = estimate.max_cost_usd
+        elif usage.input_tokens == 0:
+            # Output reported but input missing: charge the estimated maximum input.
+            computed = compute_cost(
+                Usage(input_tokens=estimate.max_input_tokens, output_tokens=usage.output_tokens),
+                price,
+            )
+        else:
+            computed = compute_cost(usage, price)
         if usage.reported_cost_usd is not None:
             return max(computed, usage.reported_cost_usd)
         return computed

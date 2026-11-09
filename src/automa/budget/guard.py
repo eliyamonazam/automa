@@ -161,7 +161,7 @@ class BudgetGuard:
     def authorize(self, estimate: CallEstimate) -> None:
         """Reserve ``estimate`` or raise ``BudgetError``. Never silently allows."""
         project_id = estimate.context.project_id
-        if not project_id:
+        if not project_id or not project_id.strip():
             # Every call must be attributable, otherwise the project cap is void.
             raise BudgetError("call has no project_id; refusing (project cap cannot apply)")
         requested = usd_to_nusd(estimate.max_cost_usd)

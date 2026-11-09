@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterable
 from automa.llm.provider import ProviderError
 from automa.llm.types import ChatRequest, ChatResponse, FinishReason, Message, Usage
 
-FakeScript = str | ChatResponse | Exception | Callable[[ChatRequest], ChatResponse | str]
+FakeScript = str | ChatResponse | BaseException | Callable[[ChatRequest], ChatResponse | str]
 
 
 def approx_tokens(text: str) -> int:
@@ -26,7 +26,7 @@ class FakeProvider:
     Script items:
     - ``str``: an assistant reply; usage is approximated from text length.
     - ``ChatResponse``: returned as-is.
-    - ``Exception``: raised (e.g. ``ProviderError`` to simulate failures).
+    - ``BaseException``: raised (e.g. ``ProviderError`` or ``KeyboardInterrupt``).
     - callable: called with the request; may return a ``str`` or ``ChatResponse``.
 
     Running past the end of the script raises ``ProviderError`` so a test never
@@ -53,7 +53,7 @@ class FakeProvider:
             item = self._default
         else:
             raise ProviderError("FakeProvider script exhausted")
-        if isinstance(item, Exception):
+        if isinstance(item, BaseException):
             raise item
         if callable(item) and not isinstance(item, ChatResponse):
             item = item(request)
