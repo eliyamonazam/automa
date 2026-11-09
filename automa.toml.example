@@ -1,0 +1,30 @@
+# Copy to automa.toml and adjust. This file must NOT contain secrets:
+# the API key goes in .env as AUTOMA_API_KEY (a key here is rejected).
+
+base_url = "https://openrouter.ai/api/v1"
+workspace = "workspace"
+
+# Roles request a tier; this maps each tier to a concrete model name.
+[tiers]
+small = "example/small-model"
+medium = "example/medium-model"
+large = "example/large-model"
+
+# USD per one million tokens. Every model used in [tiers] must have a price.
+[prices."example/small-model"]
+input_per_mtok = 0.10
+output_per_mtok = 0.40
+
+[prices."example/medium-model"]
+input_per_mtok = 1.00
+output_per_mtok = 4.00
+
+[prices."example/large-model"]
+input_per_mtok = 5.00
+output_per_mtok = 20.00
+
+# Hard caps in USD. Reaching a cap stops the run; per_call must not exceed the others.
+[limits]
+project_usd = 5.0
+daily_usd = 2.0
+per_call_usd = 0.25
