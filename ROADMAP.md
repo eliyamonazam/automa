@@ -8,7 +8,7 @@
 - [x] سند ایده، معماری، نقشه راه، دستورالعمل اجراهای خودکار
 - [x] ساختار پکیج Python (`pyproject.toml`، `src/automa/`، `tests/`)، `.gitignore`، `.env.example`
 - [x] تنظیمات (`config.py`): خوندن `.env` و `automa.toml` (base_url، کلید، نگاشت سطح به مدل، قیمت‌ها، سقف‌ها)
-- [ ] CI ساده در GitHub Actions: اجرای `pytest` و `ruff` روی هر push
+- [x] CI ساده در GitHub Actions: اجرای `pytest` و `ruff` روی هر push
 
 ## M1 — درگاه مدل و لایه مالی
 - [ ] `LLMGateway` با API سازگار OpenAI + `FakeProvider` برای تست

@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-09 — M0: CI در GitHub Actions
+- **انجام‌شده:** workflow `.github/workflows/ci.yml` روی هر push و pull request: نصب `.[dev]` و اجرای `ruff check`، `ruff format --check` و `pytest` روی Python 3.11، 3.12 و 3.13. توکن فقط‌خواندنی (`contents: read`)، بدون هیچ secret یا کلید API، سقف زمانی ۱۰ دقیقه، لغو اجراهای قدیمی همان شاخه. تست `tests/test_ci_workflow.py` تضمین می‌کنه workflow همه بررسی‌ها رو اجرا کنه و هیچ‌وقت به secret/کلید دسترسی نداشته باشه.
+- **فایل‌های اصلی:** `.github/workflows/ci.yml`، `tests/test_ci_workflow.py`.
+- **تست‌ها:** `pytest` ← ۴۰ تست سبز؛ `ruff check` و `ruff format --check` ← بدون خطا.
+- **مشکلات:** اجرای واقعی workflow فقط بعد از push روی GitHub قابل مشاهده‌ست.
+- **قدم بعدی:** `LLMGateway` با API سازگار OpenAI + `FakeProvider` برای تست (M1).
+
 ## 2026-11-09 — M0: تنظیمات (`config.py`)
 - **انجام‌شده:** ماژول `automa.config` با مدل‌های pydantic تغییرناپذیر (`AutomaConfig`، `BudgetLimits`، `ModelPrice`، `Tier`). ترتیب اولویت: پیش‌فرض‌ها ← `automa.toml` ← `.env` ← متغیرهای محیطی. کلید API فقط از `.env`/محیط خونده می‌شه و به‌صورت `SecretStr` نگهداری می‌شه؛ وجود هر کلید محرمانه (`api_key`، `token`، `secret`، …) در `automa.toml` خطا می‌ده. سقف‌های بودجه پیش‌فرض محدود و مثبت‌ان، مقادیر بی‌نهایت/NaN رد می‌شن، `per_call` نمی‌تونه از سقف روزانه/پروژه بیشتر باشه، و هر مدلی که به سطحی نگاشت شده باید قیمت داشته باشه. پیام‌های خطای اعتبارسنجی مقدار ورودی (و در نتیجه کلید) رو نشون نمی‌دن. فایل نمونه `automa.toml.example` اضافه شد.
 - **فایل‌های اصلی:** `src/automa/config.py`، `tests/test_config.py`، `automa.toml.example`.
