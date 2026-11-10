@@ -11,6 +11,7 @@ from automa.agents.executive import (
     parse_questions,
     plan_project,
 )
+from automa.agents.worker import WorkerAgent, WorkerSettings, task_message
 
 __all__ = [
     "Clarification",
@@ -19,6 +20,9 @@ __all__ = [
     "ExecutiveSettings",
     "PlanningFailed",
     "Questions",
+    "WorkerAgent",
+    "WorkerSettings",
     "parse_questions",
     "plan_project",
+    "task_message",
 ]
