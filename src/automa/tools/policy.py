@@ -4,8 +4,9 @@ Rules (enforced in code, never in a prompt):
 
 1. A tool not in ``allowed_tools`` is denied.
 2. A tool whose risk is above ``max_risk`` is denied.
-3. ``external`` tools are never allowed directly: they always need the Approval
-   Gate (``needs_approval``), regardless of ``allowed_tools``/``max_risk``.
+3. ``external`` tools are never allowed directly: a listed ``external`` tool
+   always needs the Approval Gate (``needs_approval``), whatever ``max_risk`` is;
+   an unlisted one is denied (an approval can never widen a role's tool list).
 
 The policy is immutable; there is no way to widen it after construction.
 """
@@ -64,14 +65,14 @@ class PermissionPolicy(BaseModel):
     def decide(self, tool_name: str, risk: RiskLevel) -> PolicyDecision:
         if not isinstance(risk, RiskLevel):
             return PolicyDecision(decision=Decision.DENY, reason="unknown risk level")
+        if tool_name not in self.allowed_tools:
+            return PolicyDecision(
+                decision=Decision.DENY, reason=f"tool {tool_name!r} is not allowed for this role"
+            )
         if risk is RiskLevel.EXTERNAL:
             return PolicyDecision(
                 decision=Decision.NEEDS_APPROVAL,
                 reason=f"{tool_name!r} is an external action and needs user approval",
-            )
-        if tool_name not in self.allowed_tools:
-            return PolicyDecision(
-                decision=Decision.DENY, reason=f"tool {tool_name!r} is not allowed for this role"
             )
         if risk.rank > self.max_risk.rank:
             return PolicyDecision(

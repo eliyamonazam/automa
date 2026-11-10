@@ -415,11 +415,23 @@ class _Publish(Tool):
 def test_external_tool_raises_approval_required(tmp_path: Path) -> None:
     rig = Rig(tmp_path, [calls(("publish", {})), "done"])
     dev = rig.roles.get("developer")
-    ex = rig.executor(dev, [*default_tools(), _Publish()])
+    publisher = dev.model_copy(update={"tools": (*dev.tools, "publish")})
+    ex = rig.executor(publisher, [*default_tools(), _Publish()])
     with pytest.raises(ApprovalRequired):
-        rig.run(executor=ex)
+        rig.run(role=publisher, executor=ex)
     assert _Publish.ran is False
     assert len(rig.provider.requests) == 1
+
+
+def test_unlisted_external_tool_is_denied_not_gated(tmp_path: Path) -> None:
+    rig = Rig(tmp_path, [calls(("publish", {})), "done"])
+    dev = rig.roles.get("developer")
+    ex = rig.executor(dev, [*default_tools(), _Publish()])
+    result = rig.run(executor=ex)
+    assert _Publish.ran is False
+    assert result.status is ResultStatus.COMPLETED
+    assert not rig.tool_events.of_type("tool.approval_required")
+    assert rig.tool_events.of_type("tool.denied")
 
 
 def test_tool_layer_error_propagates(tmp_path: Path) -> None:

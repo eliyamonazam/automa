@@ -4,8 +4,10 @@ For every call it (1) finds the tool, (2) asks the ``PermissionPolicy``,
 (3) validates the arguments against the tool's model, (4) runs it inside the
 ``Workspace`` and (5) logs a ``tool.*`` event. Problems the model can fix
 (unknown tool, bad arguments, denied, tool error) come back as a failed
-``ToolResult``; an external action raises ``ApprovalRequired`` so the
-orchestrator can pause the project. Event-log failures fail closed.
+``ToolResult``; an external action goes through the Approval Gate (see
+``_gate``): without a matching decision it records a request and raises
+``ApprovalRequired`` so the orchestrator can pause the project. Event-log
+failures fail closed.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from automa.events import Event, EventSink
+from automa.tools.approvals import ApprovalError, ApprovalStatus, ApprovalStore
 from automa.tools.base import MAX_TOOL_OUTPUT_CHARS, Tool, ToolError, ToolResult
 from automa.tools.policy import Decision, PermissionPolicy
 from automa.tools.workspace import MAX_WRITE_BYTES, Workspace
@@ -33,10 +36,11 @@ class ToolLayerError(Exception):
 class ApprovalRequired(Exception):  # noqa: N818 - a control-flow signal, not an error
     """The call needs the user's approval (Approval Gate); the project should pause."""
 
-    def __init__(self, tool: str, reason: str) -> None:
+    def __init__(self, tool: str, reason: str, request_id: str | None = None) -> None:
         super().__init__(reason)
         self.tool = tool
         self.reason = reason
+        self.request_id = request_id
 
 
 def _short(text: str, limit: int = MAX_ERROR_CHARS) -> str:
@@ -59,6 +63,9 @@ class ToolExecutor:
         workspace: Workspace,
         events: EventSink,
         project_id: str,
+        *,
+        approvals: ApprovalStore | None = None,
+        task_id: str | None = None,
     ) -> None:
         if not isinstance(policy, PermissionPolicy):
             raise TypeError("policy must be a PermissionPolicy")
@@ -68,6 +75,11 @@ class ToolExecutor:
             raise TypeError("events must be an EventSink")
         if not isinstance(project_id, str) or not project_id.strip():
             raise ValueError("project_id is required")
+        if approvals is not None:
+            if not isinstance(approvals, ApprovalStore):
+                raise TypeError("approvals must be an ApprovalStore")
+            if approvals.project_id != project_id:
+                raise ValueError("approvals belong to another project")
         registry: dict[str, Tool] = {}
         for tool in tools:
             if not isinstance(tool, Tool):
@@ -80,6 +92,8 @@ class ToolExecutor:
         self._workspace = workspace
         self._events = events
         self._project_id = project_id
+        self._approvals = approvals
+        self._task_id = task_id
 
     @property
     def policy(self) -> PermissionPolicy:
@@ -116,10 +130,12 @@ class ToolExecutor:
             return self._fail(_short(label, 100), f"unknown tool; available: {known}", denied=True)
 
         decision = self._policy.decide(tool.name, tool.risk)
-        if decision.decision is Decision.NEEDS_APPROVAL:
+        needs_approval = decision.decision is Decision.NEEDS_APPROVAL
+        if needs_approval and self._approvals is None:
+            # No Approval Gate store: nothing can ever be approved here.
             self._emit("tool.approval_required", {"tool": tool.name, "risk": tool.risk.value})
             raise ApprovalRequired(tool.name, decision.reason)
-        if decision.decision is not Decision.ALLOW:
+        if not needs_approval and decision.decision is not Decision.ALLOW:
             self._emit(
                 "tool.denied",
                 {"tool": tool.name, "risk": tool.risk.value, "reason": decision.reason},
@@ -145,6 +161,11 @@ class ToolExecutor:
         except ToolError as e:
             return self._finish(tool, None, self._fail(tool.name, str(e)))
 
+        if needs_approval:
+            rejected = self._gate(tool, args, decision.reason)
+            if rejected is not None:
+                return self._finish(tool, args, rejected)
+
         try:
             content = tool.run(args, self._workspace)
         except ToolError as e:
@@ -158,6 +179,47 @@ class ToolExecutor:
                 content = content[:MAX_TOOL_OUTPUT_CHARS] + "\n[... truncated]"
             result = ToolResult(tool=tool.name, ok=True, content=content)
         return self._finish(tool, args, result)
+
+    def _gate(self, tool: Tool, args: Any, reason: str) -> ToolResult | None:
+        """Approval Gate for one validated call.
+
+        Returns ``None`` if an approval for exactly this call was consumed (the
+        tool may run once), a failed result if the user rejected it, and otherwise
+        records a pending request and raises ``ApprovalRequired``.
+        """
+        if self._approvals is None:  # pragma: no cover - guarded by the caller
+            raise ToolLayerError("approval gate has no store")
+        arguments = args.model_dump(mode="json")
+        try:
+            found = self._approvals.find_decision(
+                tool=tool.name, arguments=arguments, task_id=self._task_id
+            )
+            if found is not None and self._approvals.consume(found.id):
+                data = {"tool": tool.name, "risk": tool.risk.value, "request": found.id}
+                if found.status is ApprovalStatus.APPROVED:
+                    self._emit("tool.approved", data)
+                    return None
+                self._emit("tool.rejected", data)
+                note = f" (user note: {found.note})" if found.note else ""
+                return self._fail(
+                    tool.name,
+                    "the user rejected this action; do not repeat it" + note,
+                    denied=True,
+                )
+            req = self._approvals.request(
+                tool=tool.name,
+                risk=tool.risk,
+                arguments=arguments,
+                reason=reason,
+                task_id=self._task_id,
+            )
+        except (ApprovalError, OSError) as e:
+            raise ToolLayerError(f"approval gate failed: {e}") from e
+        self._emit(
+            "tool.approval_required",
+            {"tool": tool.name, "risk": tool.risk.value, "request": req.id},
+        )
+        raise ApprovalRequired(tool.name, reason, request_id=req.id)
 
     def _finish(self, tool: Tool, args: Any, result: ToolResult) -> ToolResult:
         data: dict[str, Any] = {"tool": tool.name, "risk": tool.risk.value, "ok": result.ok}

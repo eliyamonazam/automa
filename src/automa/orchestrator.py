@@ -21,7 +21,9 @@ What the orchestrator never does:
 - mark a task passed by itself: only a stored ``pass`` verdict can (enforced by the
   ``ProjectStore``, D22);
 - retry or work around a budget stop: ``BudgetError`` pauses the project at once;
-- run a tool that needs approval: ``ApprovalRequired`` pauses the project;
+- run a tool that needs approval without it: ``ApprovalRequired`` records a request
+  in ``approvals/`` and pauses the project; only a user decision for exactly that
+  call (same task, tool and arguments) lets it run once on a later run;
 - hand an agent wider permissions: executors are built only from ``role.policy()``
   and ``verifier_policy()`` (and the agents re-check that).
 """
@@ -111,6 +113,7 @@ class RunReport(BaseModel):
     reason: StopReason
     detail: str = ""
     task_id: str | None = None  # the task being worked on when the run stopped
+    approval_id: str | None = None  # pending Approval Gate request (reason ``approval``)
     attempts_run: int = 0  # worker attempts started in this run
     passed: list[str] = Field(default_factory=list)
     failed: list[str] = Field(default_factory=list)
@@ -120,11 +123,14 @@ class RunReport(BaseModel):
 class _Stop(Exception):
     """Internal: stop the run and pause the project with ``reason``."""
 
-    def __init__(self, reason: StopReason, detail: str, task_id: str) -> None:
+    def __init__(
+        self, reason: StopReason, detail: str, task_id: str, approval_id: str | None = None
+    ) -> None:
         super().__init__(detail)
         self.reason = reason
         self.detail = detail
         self.task_id = task_id
+        self.approval_id = approval_id
 
 
 _UNFINISHED = frozenset({TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.VERIFYING})
@@ -220,11 +226,13 @@ class Orchestrator:
                 detail=stop.detail,
                 task_id=stop.task_id,
                 attempts_run=attempts_run,
+                approval_id=stop.approval_id,
             )
             self._emit(
                 project_id,
                 "orchestrator.paused",
-                {"reason": stop.reason.value, "task": stop.task_id},
+                {"reason": stop.reason.value, "task": stop.task_id}
+                | ({"approval": stop.approval_id} if stop.approval_id else {}),
             )
             return report
         except BaseException:
@@ -267,7 +275,7 @@ class Orchestrator:
             "orchestrator.attempt",
             {"task": task.id, "attempt": attempt, "tier": tier.value},
         )
-        executor = self._executor(project_id, role.policy())
+        executor = self._executor(project_id, role.policy(), task_id=task.id)
         try:
             result = self._worker.run(
                 task,
@@ -404,6 +412,7 @@ class Orchestrator:
         detail: str = "",
         task_id: str | None = None,
         attempts_run: int = 0,
+        approval_id: str | None = None,
     ) -> RunReport:
         states = self._store.task_states(project_id)
 
@@ -416,6 +425,7 @@ class Orchestrator:
             reason=reason,
             detail=_short(detail),
             task_id=task_id,
+            approval_id=approval_id,
             attempts_run=attempts_run,
             passed=ids(TaskStatus.PASSED),
             failed=ids(TaskStatus.FAILED),
@@ -428,7 +438,9 @@ class Orchestrator:
         if isinstance(e, BudgetError):
             return _Stop(StopReason.BUDGET, str(e), task_id)
         if isinstance(e, ApprovalRequired):
-            return _Stop(StopReason.APPROVAL, f"{e.tool}: {e.reason}", task_id)
+            return _Stop(
+                StopReason.APPROVAL, f"{e.tool}: {e.reason}", task_id, approval_id=e.request_id
+            )
         if isinstance(e, ProviderError):
             return _Stop(StopReason.PROVIDER, str(e), task_id)
         if isinstance(e, VerificationFailed):
@@ -439,10 +451,18 @@ class Orchestrator:
             return _Stop(StopReason.CONFIG, str(e), task_id)
         return None
 
-    def _executor(self, project_id: str, policy: PermissionPolicy) -> ToolExecutor:
+    def _executor(
+        self, project_id: str, policy: PermissionPolicy, *, task_id: str | None = None
+    ) -> ToolExecutor:
         workspace = Workspace(self._store.files_dir(project_id))
         return ToolExecutor(
-            self._tools(), policy, workspace, self._store.events(project_id), project_id
+            self._tools(),
+            policy,
+            workspace,
+            self._store.events(project_id),
+            project_id,
+            approvals=self._store.approvals(project_id) if task_id is not None else None,
+            task_id=task_id,
         )
 
     def _save_state(

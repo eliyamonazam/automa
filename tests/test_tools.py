@@ -352,8 +352,9 @@ class TestPolicy:
     def test_external_always_needs_approval(self, max_risk: RiskLevel) -> None:
         p = PermissionPolicy(allowed_tools={"publish"}, max_risk=max_risk)
         assert p.decide("publish", RiskLevel.EXTERNAL).decision is Decision.NEEDS_APPROVAL
+        # Unlisted external tools are denied: an approval can never widen the tool list.
         q = PermissionPolicy(allowed_tools=set(), max_risk=max_risk)
-        assert q.decide("publish", RiskLevel.EXTERNAL).decision is Decision.NEEDS_APPROVAL
+        assert q.decide("publish", RiskLevel.EXTERNAL).decision is Decision.DENY
 
     def test_max_risk_external_rejected(self) -> None:
         with pytest.raises(ValidationError):

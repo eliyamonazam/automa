@@ -94,7 +94,8 @@ def test_developer_can_run_commands_but_not_external() -> None:
     p = RoleRegistry.builtin().get("developer").policy()
     assert p.decide("run_command", RiskLevel.EXECUTE).allowed
     assert p.decide("write_file", RiskLevel.WRITE).allowed
-    assert p.decide("http_get", RiskLevel.EXTERNAL).decision is Decision.NEEDS_APPROVAL
+    # Not listed for the role: denied outright, never offered for approval.
+    assert p.decide("http_get", RiskLevel.EXTERNAL).decision is Decision.DENY
 
 
 def test_builtin_roles_are_sane() -> None:

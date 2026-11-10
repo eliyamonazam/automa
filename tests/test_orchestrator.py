@@ -40,8 +40,9 @@ from automa.orchestrator import (
 )
 from automa.plan import Plan, TaskStatus
 from automa.project import ProjectNotFound, ProjectStatus, ProjectStore
-from automa.roles import RoleRegistry
+from automa.roles import Role, RoleRegistry
 from automa.tools import RiskLevel, Tool, ToolArgs, Workspace, default_tools
+from automa.tools.approvals import ApprovalStatus
 
 T0 = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
 PID = "proj-1"
@@ -429,32 +430,139 @@ def test_escalated_tier_survives_restart(tmp_path: Path) -> None:
     assert set(rig.models()[n:]) == {"fake-large"}
 
 
+class _PubArgs(ToolArgs):
+    text: str = ""
+
+
 class _Publish(Tool):
     name: ClassVar[str] = "publish"
     description: ClassVar[str] = "Publish to the internet."
     risk: ClassVar[RiskLevel] = RiskLevel.EXTERNAL
-    args_model: ClassVar[type[ToolArgs]] = ToolArgs
-    ran: ClassVar[bool] = False
+    args_model: ClassVar[type[ToolArgs]] = _PubArgs
+    runs: ClassVar[list[str]] = []
 
     def run(self, args: ToolArgs, workspace: Workspace) -> str:
-        _Publish.ran = True
+        assert isinstance(args, _PubArgs)
+        _Publish.runs.append(args.text)
         return "published"
 
 
-def test_external_tool_pauses_for_approval(tmp_path: Path) -> None:
-    _Publish.ran = False
-    rig = Rig(
-        tmp_path,
-        [calls(("publish", {}))],
-        make_plan(task_dict("a")),
-        tools=lambda: [*default_tools(), _Publish()],
+def _pub_tools() -> list[Tool]:
+    return [*default_tools(), _Publish()]
+
+
+def _pub_roles() -> RoleRegistry:
+    publisher = Role(
+        name="publisher",
+        description="Writes and publishes.",
+        tools=("write_file", "publish"),
+        max_risk=RiskLevel.WRITE,
+        instructions="Publish the text, then write the file.",
     )
+    return RoleRegistry([publisher], tools=_pub_tools())
+
+
+def pub_rig(tmp_path: Path, script: list[Any]) -> Rig:
+    _Publish.runs = []
+    return Rig(
+        tmp_path,
+        script,
+        make_plan(task_dict("a", role="publisher")),
+        roles=_pub_roles(),
+        tools=_pub_tools,
+    )
+
+
+def publish(text: str = "hi") -> ChatResponse:
+    return calls(("publish", {"text": text}))
+
+
+def test_external_tool_pauses_for_approval(tmp_path: Path) -> None:
+    rig = pub_rig(tmp_path, [publish()])
     report = rig.run()
     assert report.reason is StopReason.APPROVAL and report.status is ProjectStatus.PAUSED
     assert "publish" in report.detail
-    assert _Publish.ran is False
+    assert _Publish.runs == []
     assert rig.store.attempt_count(PID, "a") == 0
     assert rig.state("a").status is TaskStatus.PENDING
+    # The request is recorded with exactly what would run.
+    pending = rig.store.approvals(PID).list(ApprovalStatus.PENDING)
+    assert [r.id for r in pending] == [report.approval_id]
+    req = pending[0]
+    assert (req.task_id, req.tool, req.arguments) == ("a", "publish", {"text": "hi"})
+    paused = [e for e in rig.store.events(PID).read() if e.type == "orchestrator.paused"]
+    assert paused[-1].data["approval"] == req.id
+
+
+def test_unlisted_external_tool_is_denied_not_gated(tmp_path: Path) -> None:
+    _Publish.runs = []
+    rig = Rig(
+        tmp_path,
+        [publish(), *write("a")],
+        make_plan(task_dict("a")),  # writer: publish is not in its tools
+        tools=_pub_tools,
+    )
+    assert rig.run().status is ProjectStatus.DONE
+    assert _Publish.runs == []
+    assert rig.store.approvals(PID).list() == []
+
+
+def test_resume_without_decision_reuses_the_pending_request(tmp_path: Path) -> None:
+    rig = pub_rig(tmp_path, [publish(), publish()])
+    first = rig.run()
+    second = rig.run()
+    assert second.reason is StopReason.APPROVAL
+    assert second.approval_id == first.approval_id
+    assert len(rig.store.approvals(PID).list()) == 1
+    assert _Publish.runs == []
+
+
+def test_approved_call_runs_once_on_resume(tmp_path: Path) -> None:
+    rig = pub_rig(tmp_path, [publish(), publish(), *write("a")])
+    report = rig.run()
+    approvals = rig.store.approvals(PID)
+    assert report.approval_id is not None
+    approvals.decide(report.approval_id, approve=True)
+    assert rig.run().status is ProjectStatus.DONE
+    assert _Publish.runs == ["hi"]
+    assert approvals.is_used(report.approval_id)
+    assert "tool.approved" in rig.event_types()
+
+
+def test_approval_is_consumed_so_a_repeat_needs_a_new_one(tmp_path: Path) -> None:
+    rig = pub_rig(tmp_path, [publish(), publish(), publish()])
+    first = rig.run()
+    assert first.approval_id is not None
+    rig.store.approvals(PID).decide(first.approval_id, approve=True)
+    second = rig.run()  # runs once, then the same call again needs a new approval
+    assert _Publish.runs == ["hi"]
+    assert second.reason is StopReason.APPROVAL
+    assert second.approval_id not in (None, first.approval_id)
+
+
+def test_approval_does_not_cover_other_arguments(tmp_path: Path) -> None:
+    rig = pub_rig(tmp_path, [publish("hi"), publish("something else")])
+    first = rig.run()
+    assert first.approval_id is not None
+    rig.store.approvals(PID).decide(first.approval_id, approve=True)
+    second = rig.run()
+    assert _Publish.runs == []
+    assert second.reason is StopReason.APPROVAL
+    assert second.approval_id != first.approval_id
+    assert not rig.store.approvals(PID).is_used(first.approval_id)
+
+
+def test_rejected_call_never_runs_and_the_model_is_told(tmp_path: Path) -> None:
+    rig = pub_rig(tmp_path, [publish(), publish(), *write("a")])
+    report = rig.run()
+    assert report.approval_id is not None
+    rig.store.approvals(PID).decide(report.approval_id, approve=False, note="not public yet")
+    n = len(rig.provider.requests)
+    assert rig.run().status is ProjectStatus.DONE
+    assert _Publish.runs == []
+    told = rig.provider.requests[n + 1].messages[-1].content or ""
+    assert "rejected" in told and "not public yet" in told
+    assert "tool.rejected" in rig.event_types()
 
 
 def eval_reply(passed: bool, reason: str = "") -> str:

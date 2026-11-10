@@ -6,6 +6,7 @@ Layout (see docs/ARCHITECTURE.md, "Project Store")::
     plan.json      tasks and dependencies
     clarifications.json  the Executive's questions and the user's answers
     tasks/<id>/    state.json, result-<n>.json, verdict-<n>.json (attempt history)
+    approvals/     Approval Gate requests and decisions (see automa.approvals)
     files/         the project's real outputs
     events.jsonl   append-only event log
 
@@ -51,6 +52,7 @@ from automa.plan import (
     TaskStatus,
     Verdict,
 )
+from automa.tools.approvals import ApprovalStore
 
 SCHEMA_VERSION = 1
 PROJECTS_DIRNAME = "projects"
@@ -64,6 +66,7 @@ RESULT_FILE_FMT = "result-{attempt}.json"
 VERDICT_FILE_FMT = "verdict-{attempt}.json"
 _TASK_ID_RE = re.compile(TASK_ID_PATTERN)
 FILES_DIR = "files"
+APPROVALS_DIR = "approvals"
 
 PROJECT_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$|^[a-z0-9]$"
 _PROJECT_ID_RE = re.compile(PROJECT_ID_PATTERN)
@@ -263,6 +266,13 @@ class ProjectStore:
 
     def files_dir(self, project_id: str) -> Path:
         return self.project_dir(project_id) / FILES_DIR
+
+    def approvals(self, project_id: str) -> ApprovalStore:
+        """The project's Approval Gate store (the project must exist)."""
+        self._require(project_id)
+        return ApprovalStore(
+            self.project_dir(project_id) / APPROVALS_DIR, project_id, clock=self._clock
+        )
 
     def events(self, project_id: str) -> ProjectEventLog:
         """The project's ``events.jsonl`` (the project must exist)."""

@@ -42,7 +42,9 @@
 - [!] تحلیل شکست‌های اجرای واقعی با `automa bench report` و ثبت در `docs/DECISIONS.md` (بعد از اجرای واقعی benchmark)
 
 ## M5 — Approval Gate و ایزوله‌سازی
-- [ ] Approval Gate: توقف روی اقدامات `external` و برگشت‌ناپذیر؛ `automa approve <id>` / `automa reject <id>`
+- [x] Approval Gate (هسته): ثبت درخواست تأیید در `approvals/` پروژه هنگام توقف روی ابزار `external`، تصمیم یک‌باره (تأیید/رد)، و اجرای فقط همون فراخوانی (همون وظیفه، ابزار و آرگومان‌ها) حداکثر یک بار بعد از تأیید؛ رد ← خبر به مدل بدون اجرا
+- [ ] Approval Gate (CLI): `automa approvals [<project>]` (فهرست درخواست‌ها با آرگومان‌ها)، `automa approve <project> <id> [--note]` / `automa reject <project> <id> [--note]`، نمایش درخواست در انتظار در `automa status` و خروجی `automa run`
+- [ ] Approval Gate (اقدامات برگشت‌ناپذیر): علامت `irreversible` روی ابزار (مثلاً حذف/بازنویسی فایل موجود) که حتی در سطح `write`/`execute` از Approval Gate رد بشه
 - [ ] اجرای `run_command` داخل کانتینر Docker
 - [ ] `Dockerfile` و `docker-compose.yml` برای خود Automa
 
