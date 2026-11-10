@@ -1,4 +1,4 @@
-"""Command-line interface: ``automa new``, ``run``, ``status``, ``bench list|run``.
+"""Command-line interface: ``automa new``, ``run``, ``status``, ``bench list|run|report``.
 
 Every model call goes through ``LLMGateway`` + ``BudgetGuard`` (never a bare provider).
 ``status`` is read-only: it needs no API key, makes no model call and creates no files.
@@ -42,9 +42,12 @@ from automa.agents import (
 from automa.bench import run_benchmark
 from automa.benchmarks import (
     BenchmarkError,
+    BenchmarkReport,
     BenchmarkResultError,
     BenchmarkSuite,
+    build_report,
     prepare_results_dir,
+    scan_results,
     write_result,
 )
 from automa.budget.guard import BudgetError, BudgetExceeded, BudgetGuard
@@ -546,6 +549,84 @@ def bench_run(
     )
     typer.echo(f"recorded: {path}")
     raise typer.Exit(EXIT_OK if record.passed else EXIT_BENCH_FAILED)
+
+
+def _bench_report_lines(report: BenchmarkReport) -> list[str]:
+    lines: list[str] = []
+    for s in report.benchmarks:
+        note = "" if s.in_suite else "  [not in suite]"
+        lines.append(f"{s.benchmark_id} — {s.title}{note}")
+        lines.append(
+            f"  runs: {s.runs}, passed: {s.passed_runs} ({s.pass_rate:.0%}), "
+            f"mean score {s.mean_score:.2f}, mean attempts {s.mean_attempts:.1f}"
+        )
+        lines.append(
+            f"  cost: total {_usd(s.total_cost_nusd)}, mean {_usd(s.mean_cost_nusd)} per run"
+        )
+        lines.append("  stops: " + ", ".join(f"{k} {v}" for k, v in s.stops.items()))
+        if s.failure_causes:
+            lines.append(
+                "  failure causes: " + ", ".join(f"{k} {v}" for k, v in s.failure_causes.items())
+            )
+        for c in s.criteria_failures:
+            lines.append(
+                f"  criterion {c.criterion} failed in {c.failed_runs}/{s.runs} run(s) "
+                f"({c.failed_in_completed_runs} completed): {_preview(c.description, 70)}"
+            )
+        last = "PASSED" if s.last_passed else "FAILED"
+        lines.append(
+            f"  last: {s.last_project_id} {last} at {s.last_run_at.isoformat(timespec='seconds')}"
+        )
+        lines.append(f"  versions: {', '.join(s.versions)}")
+    for p in report.problems:
+        lines.append(f"problem: {p.path}: {p.reason}")
+    lines.append(
+        f"total: {report.total_runs} run(s), {report.total_passed} passed, "
+        f"cost {_usd(report.total_cost_nusd)}"
+    )
+    return lines
+
+
+@bench_app.command("report")
+def bench_report(
+    benchmark_id: Annotated[
+        str | None, typer.Option("--benchmark", help="Only this benchmark id.")
+    ] = None,
+    suite_dir: Annotated[
+        Path, typer.Option("--suite", help="Directory of <id>.toml benchmark files.")
+    ] = DEFAULT_SUITE_DIR,
+    results_dir: Annotated[
+        Path | None,
+        typer.Option("--results", help="Recorded results (default: <suite>/results)."),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+) -> None:
+    """Analyse recorded benchmark runs: pass rate, cost, stops, most-failed criteria.
+
+    Read-only: needs no config or API key, makes no model call, writes nothing.
+    Exits 1 if any result file could not be used (listed as a problem).
+    """
+    suite: BenchmarkSuite | None
+    try:
+        suite = BenchmarkSuite.from_dir(suite_dir)
+    except BenchmarkError as e:
+        if results_dir is None:
+            raise _fail(f"benchmark suite: {e}", EXIT_USER) from None
+        suite = None  # descriptions are optional when the results are given explicitly
+    results = results_dir if results_dir is not None else suite_dir / RESULTS_DIRNAME
+    try:
+        scan = scan_results(results, benchmark_id=benchmark_id)
+    except BenchmarkResultError as e:
+        raise _fail(str(e), EXIT_USER) from None
+    report = build_report(scan.records, suite=suite, problems=scan.problems)
+    if as_json:
+        typer.echo(json.dumps(report.model_dump(mode="json"), ensure_ascii=False, indent=2))
+    elif report.total_runs == 0 and not report.problems:
+        typer.echo("no benchmark results recorded yet (run: automa bench run <id>)")
+    else:
+        for line in _bench_report_lines(report):
+            typer.echo(line)
+    raise typer.Exit(EXIT_USER if report.problems else EXIT_OK)
 
 
 def main() -> None:

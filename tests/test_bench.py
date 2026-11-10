@@ -363,6 +363,28 @@ def test_plan_passes_but_benchmark_criteria_fail(env: Env) -> None:
     assert rec.score == pytest.approx(5 / 6)
 
 
+def test_report_over_real_runs(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``bench run`` twice (pass, then criteria missed), then ``bench report``."""
+    times = iter(datetime(2026, 11, 10, 10, 0, s, tzinfo=UTC) for s in range(0, 60))
+    monkeypatch.setattr(bench, "_utc_now", lambda: next(times))
+    env.provider.push(json.dumps({"questions": []}), json.dumps(PLAN), *build_attempt())
+    assert env.bench(BID).exit_code == cli.EXIT_OK
+    env.provider.push(json.dumps({"questions": []}), json.dumps(PLAN), *build_attempt(WC_BYTES_PY))
+    assert env.bench(BID).exit_code == cli.EXIT_BENCH_FAILED
+    calls_before = len(env.provider.requests)
+
+    r = CliRunner().invoke(cli.app, ["bench", "report", "--suite", str(env.suite), "--json"])
+    assert r.exit_code == cli.EXIT_OK, r.output
+    assert len(env.provider.requests) == calls_before  # no model call
+    data = json.loads(r.output)
+    s = data["benchmarks"][0]
+    assert (s["runs"], s["passed_runs"]) == (2, 1)
+    assert s["failure_causes"] == {"criteria_missed": 1}
+    assert [c["criterion"] for c in s["criteria_failures"]] == [3]
+    spent = sum(env.spent(pid) for pid in env.projects())
+    assert data["total_cost_nusd"] == spent > 0
+
+
 # --- bench run: stops are recorded ------------------------------------------------------
 
 

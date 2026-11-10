@@ -38,7 +38,8 @@
 - [x] `benchmarks/` (پایه): قالب `<id>.toml`، بارگذاری بسته، ۳ هدف نمونه (ابزار CLI، صفحه وب ایستا، گزارش تحقیقی کوتاه) با معیار موفقیت فقط قطعی، و ارزیابی معیارها روی `files/` از Tool Layer
 - [x] اجراکننده benchmark: `automa bench run <id>` (ساخت پروژه با `answer` و سقف `budget_usd` benchmark، اجرا با Orchestrator، ارزیابی) و ثبت نتیجه (موفقیت، امتیاز، هزینه، تلاش‌ها) در `benchmarks/results/`؛ تست با FakeProvider
 - [!] اجرای واقعی benchmark با کلید API کاربر (نیاز به کلید و بودجه)
-- [ ] تحلیل شکست‌ها و ثبت در `docs/DECISIONS.md`
+- [x] ابزار تحلیل شکست‌ها: `automa bench report` (فقط‌خوندنی) — نرخ قبولی، امتیاز، هزینه، دلایل توقف، دسته علت شکست و معیارهایی که بیشتر رد می‌شن، از روی `benchmarks/results/`
+- [!] تحلیل شکست‌های اجرای واقعی با `automa bench report` و ثبت در `docs/DECISIONS.md` (بعد از اجرای واقعی benchmark)
 
 ## M5 — Approval Gate و ایزوله‌سازی
 - [ ] Approval Gate: توقف روی اقدامات `external` و برگشت‌ناپذیر؛ `automa approve <id>` / `automa reject <id>`

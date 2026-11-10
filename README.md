@@ -36,6 +36,7 @@ automa run <project-id>    # اجرا/ادامه: Worker ← Verifier ← اصل
 automa status             # فهرست پروژه‌ها، هزینه و برنامه
 automa bench list         # فهرست benchmarkها
 automa bench run <id>     # اجرای یک benchmark و ثبت نتیجه در benchmarks/results/
+automa bench report       # تحلیل نتیجه‌های ثبت‌شده (فقط‌خوندنی؛ --json، --benchmark <id>)
 ```
 
 > کلید API هیچ‌وقت نباید وارد مخزن بشه. `.env` در `.gitignore` هست.
