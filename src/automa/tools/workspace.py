@@ -110,6 +110,18 @@ class Workspace:
 
     # -- operations --------------------------------------------------------------
 
+    def dir_path(self, path: str = "") -> Path:
+        """Absolute path of an existing directory inside the root (no symlinks on the way).
+
+        Used to give a subprocess its working directory. ``""`` means the root.
+        """
+        if path in ("", "."):
+            with self._dir([]):
+                return self._root
+        norm = normalize(path)
+        with self._dir(norm.split("/")):
+            return self._root.joinpath(*norm.split("/"))
+
     def read_text(self, path: str, *, max_bytes: int = MAX_READ_BYTES) -> tuple[str, bool]:
         """Return ``(text, truncated)``. Only regular UTF-8 files are readable."""
         norm = normalize(path)

@@ -430,6 +430,7 @@ class TestToolDefinition:
             "read_file": RiskLevel.READ,
             "write_file": RiskLevel.WRITE,
             "list_dir": RiskLevel.READ,
+            "run_command": RiskLevel.EXECUTE,
         }
 
     def test_specs_are_openai_functions(self) -> None:

@@ -8,6 +8,7 @@ from automa.tools.base import (
     ToolError,
     ToolResult,
 )
+from automa.tools.command import RunCommand, RunCommandArgs, clean_env
 from automa.tools.executor import ApprovalRequired, ToolExecutor, ToolLayerError
 from automa.tools.files import FILE_TOOLS, ListDir, ReadFile, WriteFile
 from automa.tools.policy import Decision, PermissionPolicy, PolicyDecision
@@ -16,7 +17,7 @@ from automa.tools.workspace import DirEntry, Workspace, WorkspaceError
 
 def default_tools() -> list[Tool]:
     """Fresh instances of the built-in tools."""
-    return [cls() for cls in FILE_TOOLS]
+    return [*(cls() for cls in FILE_TOOLS), RunCommand()]
 
 
 __all__ = [
@@ -29,6 +30,8 @@ __all__ = [
     "PermissionPolicy",
     "PolicyDecision",
     "ReadFile",
+    "RunCommand",
+    "RunCommandArgs",
     "RiskLevel",
     "Tool",
     "ToolArgs",
@@ -39,5 +42,6 @@ __all__ = [
     "Workspace",
     "WorkspaceError",
     "WriteFile",
+    "clean_env",
     "default_tools",
 ]

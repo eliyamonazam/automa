@@ -89,6 +89,11 @@ class Tool(ABC):
     def run(self, args: ToolArgs, workspace: Workspace) -> str:
         """Do the work and return text for the model; raise ``ToolError`` on failure."""
 
+    def audit(self, args: ToolArgs) -> dict[str, str]:
+        """Non-sensitive fields to record in the ``tool.call`` event (default: ``path``)."""
+        path = getattr(args, "path", None)
+        return {"path": path} if isinstance(path, str) else {}
+
     def spec(self) -> dict[str, Any]:
         """OpenAI-compatible function schema for this tool."""
         return {

@@ -161,9 +161,10 @@ class ToolExecutor:
 
     def _finish(self, tool: Tool, args: Any, result: ToolResult) -> ToolResult:
         data: dict[str, Any] = {"tool": tool.name, "risk": tool.risk.value, "ok": result.ok}
-        path = getattr(args, "path", None)
-        if isinstance(path, str):
-            data["path"] = _short(path, 300)
+        if args is not None:
+            for key, value in tool.audit(args).items():
+                if key not in data and isinstance(value, str):
+                    data[key] = _short(value, 300)
         if result.error:
             data["error"] = _short(result.error, 300)
         self._emit("tool.call", data)
