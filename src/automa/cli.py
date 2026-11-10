@@ -1,4 +1,4 @@
-"""Command-line interface: ``automa new "<goal>"``, ``automa status [project-id]``.
+"""Command-line interface: ``automa new "<goal>"``, ``automa run <id>``, ``automa status``.
 
 Every model call goes through ``LLMGateway`` + ``BudgetGuard`` (never a bare provider).
 ``status`` is read-only: it needs no API key, makes no model call and creates no files.
@@ -11,6 +11,10 @@ Exit codes (stable, for scripts):
 * 3 — budget stop: the project is ``paused`` until the user decides
 * 4 — planning failed: the model gave no valid plan within the retry limit
 * 5 — provider error (network, HTTP status from the gateway)
+* 6 — run finished but some task failed for good (dependents blocked)
+* 7 — run paused for another reason (approval needed, no valid verification,
+  tool layer failure); fix the cause, then ``automa run`` again
+* 130 — interrupted (Ctrl+C); the project is ``paused`` and can be resumed
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from pydantic import ValidationError
 
 from automa import __version__
 from automa.agents import (
@@ -28,6 +33,8 @@ from automa.agents import (
     ExecutiveAgent,
     ExecutiveSettings,
     PlanningFailed,
+    VerifierAgent,
+    WorkerAgent,
     plan_project,
 )
 from automa.budget.guard import BudgetError, BudgetExceeded, BudgetGuard
@@ -36,6 +43,13 @@ from automa.config import AutomaConfig, ConfigError, load_config
 from automa.llm.factory import provider_from_config
 from automa.llm.gateway import LLMGateway
 from automa.llm.provider import Provider, ProviderError
+from automa.orchestrator import (
+    Orchestrator,
+    OrchestratorError,
+    OrchestratorSettings,
+    RunReport,
+    StopReason,
+)
 from automa.plan import Plan
 from automa.project import Project, ProjectStatus, ProjectStore, ProjectStoreError
 from automa.roles import RoleError, RoleRegistry
@@ -47,6 +61,21 @@ EXIT_CONFIG = 2
 EXIT_BUDGET = 3
 EXIT_PLANNING = 4
 EXIT_PROVIDER = 5
+EXIT_TASKS_FAILED = 6
+EXIT_PAUSED = 7
+EXIT_INTERRUPTED = 130
+
+# Exit code of each way a run can end (see the module docstring).
+RUN_EXIT_CODES: dict[StopReason, int] = {
+    StopReason.COMPLETED: EXIT_OK,
+    StopReason.TASKS_FAILED: EXIT_TASKS_FAILED,
+    StopReason.BUDGET: EXIT_BUDGET,
+    StopReason.PROVIDER: EXIT_PROVIDER,
+    StopReason.CONFIG: EXIT_CONFIG,
+    StopReason.APPROVAL: EXIT_PAUSED,
+    StopReason.VERIFICATION: EXIT_PAUSED,
+    StopReason.TOOL_LAYER: EXIT_PAUSED,
+}
 
 LEDGER_FILENAME = "ledger.sqlite3"
 GOAL_PREVIEW_CHARS = 60
@@ -202,6 +231,121 @@ def _clarify(agent: ExecutiveAgent, store: ProjectStore, project: Project) -> li
     if items:
         store.save_clarifications(project.id, items)
     return items
+
+
+@app.command()
+def run(
+    project_id: Annotated[str, typer.Argument(help="Project to run (or resume).")],
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Run even if the project is marked running (only after a crash/kill; "
+            "never while another run is active).",
+        ),
+    ] = False,
+    max_attempts: Annotated[
+        int | None,
+        typer.Option("--max-attempts", help="Attempts per task before it fails (1-50)."),
+    ] = None,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Run a planned project (worker → verifier → retry) or resume it after a stop.
+
+    All progress is saved after every step, so running the same command again after
+    any stop (budget, provider error, Ctrl+C, crash) continues where it left off.
+    """
+    config = _load(config_path)
+    store = ProjectStore.for_workspace(config.workspace)
+    try:
+        project = store.load(project_id)
+    except ProjectStoreError as e:
+        raise _fail(str(e), EXIT_USER) from None
+    pid = project.id
+    if not store.has_plan(pid):
+        raise _fail(
+            f'project {pid} has no plan yet; create one with: automa new "<goal>"', EXIT_USER
+        )
+    if project.status is ProjectStatus.RUNNING and not force:
+        raise _fail(
+            f"project {pid} is marked running: another run may be active. If it crashed "
+            "or was killed, run again with --force.",
+            EXIT_USER,
+        )
+    try:
+        settings = (
+            OrchestratorSettings()
+            if max_attempts is None
+            else OrchestratorSettings(max_attempts=max_attempts)
+        )
+    except ValidationError as e:
+        raise _fail(f"invalid --max-attempts: {e.errors()[0]['msg']}", EXIT_USER) from None
+    try:
+        # Validate what every model call needs before touching the project.
+        provider = make_provider(config)
+        roles = RoleRegistry.builtin(tools=default_tools())
+    except (ConfigError, RoleError) as e:
+        raise _fail(str(e), EXIT_CONFIG) from None
+
+    typer.echo(f"project: {pid} ({project.status.value})")
+    events = store.events(pid)
+    with CostLedger.for_workspace(config.workspace) as ledger:
+        spent_before = ledger.spent_nusd(project_id=pid)
+        guard = BudgetGuard(config.limits, ledger, events=events)
+        gateway = LLMGateway(config, provider, guard=guard)
+        orchestrator = Orchestrator(
+            store,
+            WorkerAgent(gateway, events=events),
+            VerifierAgent(gateway, events=events),
+            roles,
+            config,
+            settings=settings,
+        )
+        try:
+            report = orchestrator.run(pid)
+        except KeyboardInterrupt:
+            # The orchestrator has already marked the project paused.
+            typer.echo(f"interrupted: project {pid} is paused; resume with: automa run {pid}")
+            raise typer.Exit(EXIT_INTERRUPTED) from None
+        except OrchestratorError as e:
+            raise _fail(str(e), EXIT_USER) from None
+        finally:
+            spent = ledger.spent_nusd(project_id=pid)
+            typer.echo(f"cost: {_usd(spent - spent_before)} this run, {_usd(spent)} total")
+    for line in _report_lines(report):
+        typer.echo(line)
+    raise typer.Exit(RUN_EXIT_CODES[report.reason])
+
+
+_REASON_HINTS: dict[StopReason, str] = {
+    StopReason.BUDGET: "raise the cap in automa.toml or wait for the daily reset",
+    StopReason.PROVIDER: "check the provider/network",
+    StopReason.CONFIG: "fix automa.toml (e.g. map the task's tier to a model)",
+    StopReason.APPROVAL: "this action needs approval (approval gate: not available yet)",
+    StopReason.VERIFICATION: "the verifier gave no valid evaluation; the result is kept",
+    StopReason.TOOL_LAYER: "the tool layer failed; see the events log",
+}
+
+
+def _report_lines(report: RunReport) -> list[str]:
+    lines = [
+        f"status: {report.status.value} ({report.reason.value})",
+        f"attempts this run: {report.attempts_run}",
+        f"passed: {', '.join(report.passed) or '-'}",
+    ]
+    if report.failed:
+        lines.append(f"failed: {', '.join(report.failed)}")
+    if report.blocked:
+        lines.append(f"blocked: {', '.join(report.blocked)}")
+    if report.status is ProjectStatus.PAUSED:
+        where = f" at task {report.task_id}" if report.task_id else ""
+        lines.append(f"paused{where}: {_preview(report.detail, 200) or report.reason.value}")
+        hint = _REASON_HINTS.get(report.reason)
+        if hint:
+            lines.append(f"next: {hint}, then: automa run {report.project_id}")
+    return lines
 
 
 @app.command()

@@ -32,6 +32,7 @@ ruff check .
 cp .env.example .env      # کلید API و آدرس درگاه رو اینجا بذار
 docker compose up -d
 automa new "ایده من ..."   # سؤال‌ها + ساخت plan.json
+automa run <project-id>    # اجرا/ادامه: Worker ← Verifier ← اصلاح
 automa status             # فهرست پروژه‌ها، هزینه و برنامه
 ```
 

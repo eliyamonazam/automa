@@ -413,7 +413,6 @@ def test_cli_provider_only_reaches_a_gateway() -> None:
         for node in ast.walk(tree)
         if isinstance(node, ast.Name) and node.id == "provider" and isinstance(node.ctx, ast.Load)
     ]
-    assert len(uses) == 1
     gateway_calls = [
         node
         for node in ast.walk(tree)
@@ -423,7 +422,12 @@ def test_cli_provider_only_reaches_a_gateway() -> None:
         and any(isinstance(a, ast.Name) and a.id == "provider" for a in node.args)
         and any(k.arg == "guard" for k in node.keywords)
     ]
-    assert len(gateway_calls) == 1
+    # one guarded gateway per command that calls a model (``new`` and ``run``) …
+    assert len(gateway_calls) == 2
+    # … and every read of ``provider`` is exactly the argument of such a call
+    gateway_args = {id(a) for c in gateway_calls for a in c.args}
+    assert len(uses) == len(gateway_calls)
+    assert all(id(u) in gateway_args for u in uses)
     assert ".complete(" not in inspect.getsource(cli)
 
 
