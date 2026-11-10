@@ -44,6 +44,8 @@
 
 وظایف بی‌وابستگی به هم می‌تونن موازی اجرا بشن (از مرحله M4 به بعد).
 
+**پیاده‌سازی (`src/automa/orchestrator.py`):** `Orchestrator(store, worker, verifier, roles, config, settings=…)` و `run(project_id) -> RunReport`. هر دور: وظایف `failed`/`blocked` همه وابسته‌های ناتموم‌شون رو `blocked` می‌کنن؛ اولین وظیفه ناتموم (به ترتیب topological) که همه وابستگی‌هاش `passed`ن انتخاب می‌شه. اگه آخرین تلاش ذخیره‌شده Verdict نداره (کرش یا `VerificationFailed`)، همون نتیجه دوباره ارزیابی می‌شه و Worker دوباره اجرا نمی‌شه؛ وگرنه تلاش جدید با ایرادهای Verdict قبلی به‌عنوان feedback، ذخیره `TaskResult`، ارزیابی، ذخیره `Verdict`. `pass` ← `passed`؛ `fail` ← `pending` برای تلاش بعدی، و بعد از `escalate_after` (پیش‌فرض ۲) رد پشت‌سرهم در یک سطح، سطح بالاتر **پیکربندی‌شده** (`small` < `medium` < `large`) در `TaskState.tier` ذخیره می‌شه؛ بعد از `max_attempts` (پیش‌فرض ۴، همه سطح‌ها با هم) ← `failed`. وقتی وظیفه‌ای نمونده، پروژه `done` (همه `passed`) یا `failed`. توقف‌ها پروژه رو `paused` می‌کنن و `RunReport.reason` می‌دن: `budget` (هر `BudgetError`، بدون تکرار)، `approval` (`ApprovalRequired`، ابزار اجرا نمی‌شه)، `provider`، `verification`، `tool_layer`، `config`؛ خطای Worker هیچ تلاشی مصرف نمی‌کنه (وظیفه ← `pending`). خطای غیرمنتظره پروژه رو `paused` می‌کنه و بالا می‌ره. Executorها فقط از `role.policy()` و `verifier_policy()` ساخته می‌شن. رویدادها: `orchestrator.started`/`attempt`/`escalated`/`paused`/`finished`. نقش ناشناخته ← وظیفه `failed` بدون فراخوانی مدل (جزئیات: D23).
+
 ### Executive Agent
 - ورودی: هدف کاربر.
 - ابتدا سؤال‌های روشن‌کننده (در صورت لزوم) تولید می‌کنه.
