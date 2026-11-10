@@ -10,4 +10,4 @@
 
 فیلدها: `id` (برابر نام فایل)، `title`، `kind`، `goal`، `answer` (جواب همه سؤال‌های روشن‌کننده، چون اجرا بدون حضور کاربره)، `budget_usd` (سقف بودجه پروژه، حداکثر ۵)، `max_attempts`، و `success_criteria` که **همه** باید `check` داشته باشن (`file_exists`، `file_contains`، `command`). موفقیت هیچ‌وقت با قضاوت مدل تعیین نمی‌شه.
 
-ارزیابی: `automa.benchmarks.evaluate_benchmark(benchmark, <project>/files, events)` بررسی‌ها رو از Tool Layer با `verifier_policy()` اجرا می‌کنه. نتیجه اجراها در `results/` ثبت می‌شه (اجراکننده و CLI در مورد بعدی نقشه راه).
+ارزیابی: `automa.benchmarks.evaluate_benchmark(benchmark, <project>/files, events)` بررسی‌ها رو از Tool Layer با `verifier_policy()` اجرا می‌کنه. اجرا: `automa bench list` و `automa bench run <id>` (با کلید API واقعی هزینه داره؛ سقف پروژه = کمترِ `budget_usd` و سقف `automa.toml`). هر اجرا یک پروژه جدید `bench-<زمان>-<id>` در workspace می‌سازه و نتیجه‌اش رو یک‌بار در `results/<id>/<project-id>.json` می‌نویسه (`passed`، `score`، بررسی‌ها، دلیل توقف، هزینه، تعداد فراخوانی و تلاش‌ها). کد خروج ۰ یعنی همه معیارها قبول شدن، ۸ یعنی ثبت شد ولی قبول نشد (تصمیم D27).

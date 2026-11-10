@@ -422,12 +422,28 @@ def test_cli_provider_only_reaches_a_gateway() -> None:
         and any(isinstance(a, ast.Name) and a.id == "provider" for a in node.args)
         and any(k.arg == "guard" for k in node.keywords)
     ]
+    # ``bench run`` hands the provider to ``run_benchmark`` (keyword only), which wraps
+    # it in its own guarded gateway (checked structurally in test_bench.py)
+    bench_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "run_benchmark"
+    ]
+    assert len(bench_calls) == 1
+    bench_args = {
+        id(k.value)
+        for k in bench_calls[0].keywords
+        if k.arg == "provider" and isinstance(k.value, ast.Name)
+    }
+    assert len(bench_args) == 1
     # one guarded gateway per command that calls a model (``new`` and ``run``) …
     assert len(gateway_calls) == 2
     # … and every read of ``provider`` is exactly the argument of such a call
     gateway_args = {id(a) for c in gateway_calls for a in c.args}
-    assert len(uses) == len(gateway_calls)
-    assert all(id(u) in gateway_args for u in uses)
+    assert len(uses) == len(gateway_calls) + len(bench_args)
+    assert all(id(u) in gateway_args | bench_args for u in uses)
     assert ".complete(" not in inspect.getsource(cli)
 
 

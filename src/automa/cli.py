@@ -1,4 +1,4 @@
-"""Command-line interface: ``automa new "<goal>"``, ``automa run <id>``, ``automa status``.
+"""Command-line interface: ``automa new``, ``run``, ``status``, ``bench list|run``.
 
 Every model call goes through ``LLMGateway`` + ``BudgetGuard`` (never a bare provider).
 ``status`` is read-only: it needs no API key, makes no model call and creates no files.
@@ -14,6 +14,8 @@ Exit codes (stable, for scripts):
 * 6 — run finished but some task failed for good (dependents blocked)
 * 7 — run paused for another reason (approval needed, no valid verification,
   tool layer failure); fix the cause, then ``automa run`` again
+* 8 — ``automa bench run``: the benchmark ran and was recorded, but its success
+  criteria were not all met
 * 130 — interrupted (Ctrl+C); the project is ``paused`` and can be resumed
 """
 
@@ -36,6 +38,14 @@ from automa.agents import (
     VerifierAgent,
     WorkerAgent,
     plan_project,
+)
+from automa.bench import run_benchmark
+from automa.benchmarks import (
+    BenchmarkError,
+    BenchmarkResultError,
+    BenchmarkSuite,
+    prepare_results_dir,
+    write_result,
 )
 from automa.budget.guard import BudgetError, BudgetExceeded, BudgetGuard
 from automa.budget.ledger import CostLedger, nusd_to_usd
@@ -63,6 +73,7 @@ EXIT_PLANNING = 4
 EXIT_PROVIDER = 5
 EXIT_TASKS_FAILED = 6
 EXIT_PAUSED = 7
+EXIT_BENCH_FAILED = 8
 EXIT_INTERRUPTED = 130
 
 # Exit code of each way a run can end (see the module docstring).
@@ -81,6 +92,11 @@ LEDGER_FILENAME = "ledger.sqlite3"
 GOAL_PREVIEW_CHARS = 60
 
 app = typer.Typer(help="Automa command-line interface.", no_args_is_help=True)
+bench_app = typer.Typer(help="Benchmark suite: list and run sample goals.", no_args_is_help=True)
+app.add_typer(bench_app, name="bench")
+
+DEFAULT_SUITE_DIR = Path("benchmarks")
+RESULTS_DIRNAME = "results"
 
 
 # Indirection point: tests replace this with a FakeProvider factory. The provider is
@@ -427,6 +443,109 @@ def _status_one(store: ProjectStore, workspace: Path, project_id: str, as_json: 
     else:
         for line in _plan_lines(plan):
             typer.echo(line)
+
+
+def _suite(suite_dir: Path) -> BenchmarkSuite:
+    try:
+        return BenchmarkSuite.from_dir(suite_dir)
+    except BenchmarkError as e:
+        raise _fail(f"benchmark suite: {e}", EXIT_USER) from None
+
+
+@bench_app.command("list")
+def bench_list(
+    suite_dir: Annotated[
+        Path, typer.Option("--suite", help="Directory of <id>.toml benchmark files.")
+    ] = DEFAULT_SUITE_DIR,
+) -> None:
+    """List the benchmarks in the suite. Read-only; no config or API key needed."""
+    suite = _suite(suite_dir)
+    for b in suite:
+        typer.echo(
+            f"{b.id}  {b.kind.value:<8}  ${b.budget_usd:.2f}  "
+            f"{len(b.success_criteria)} criteria  {b.title}"
+        )
+
+
+@bench_app.command("run")
+def bench_run(
+    benchmark_id: Annotated[str, typer.Argument(help="Benchmark id (see: automa bench list).")],
+    suite_dir: Annotated[
+        Path, typer.Option("--suite", help="Directory of <id>.toml benchmark files.")
+    ] = DEFAULT_SUITE_DIR,
+    results_dir: Annotated[
+        Path | None,
+        typer.Option("--results", help="Where to record the result (default: <suite>/results)."),
+    ] = None,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Run one benchmark as a new project (plan, run, judge) and record the result.
+
+    The project's budget is the smaller of the benchmark's budget_usd and the
+    configured project cap. Success is decided only by the benchmark's
+    deterministic checks.
+    """
+    suite = _suite(suite_dir)
+    try:
+        benchmark = suite.get(benchmark_id)
+    except BenchmarkError as e:
+        raise _fail(f"{e} (known: {', '.join(suite.ids())})", EXIT_USER) from None
+    results = results_dir if results_dir is not None else suite_dir / RESULTS_DIRNAME
+    config = _load(config_path)
+    try:
+        # Everything a run needs is checked before a project is created or a cent spent.
+        config.model_for(ExecutiveSettings().tier)
+        provider = make_provider(config)
+        roles = RoleRegistry.builtin(tools=default_tools())
+    except (ConfigError, RoleError) as e:
+        raise _fail(str(e), EXIT_CONFIG) from None
+    try:
+        prepare_results_dir(results, benchmark.id)
+    except BenchmarkResultError as e:
+        raise _fail(str(e), EXIT_USER) from None
+
+    store = ProjectStore.for_workspace(config.workspace)
+    typer.echo(f"benchmark: {benchmark.id} ({benchmark.kind.value}) — {benchmark.title}")
+    with CostLedger.for_workspace(config.workspace) as ledger:
+        try:
+            record = run_benchmark(
+                benchmark,
+                config=config,
+                provider=provider,
+                store=store,
+                ledger=ledger,
+                roles=roles,
+            )
+        except KeyboardInterrupt:
+            typer.echo("interrupted: no result recorded (the project is kept and paused)")
+            raise typer.Exit(EXIT_INTERRUPTED) from None
+        except ProjectStoreError as e:
+            raise _fail(str(e), EXIT_USER) from None
+        except OrchestratorError as e:
+            raise _fail(str(e), EXIT_USER) from None
+    try:
+        path = write_result(results, record)
+    except BenchmarkResultError as e:
+        raise _fail(f"could not record the result: {e}", EXIT_USER) from None
+    typer.echo(f"project: {record.project_id} ({record.project_status.value})")
+    typer.echo(f"stop: {record.stop.value}")
+    for c in record.checks:
+        mark = "PASS" if c.passed else "FAIL"
+        desc = benchmark.success_criteria[c.criterion].description
+        typer.echo(f"  [{mark}] {c.criterion}. {_preview(desc, 80)}")
+    passed = sum(1 for c in record.checks if c.passed)
+    typer.echo(
+        f"result: {'PASSED' if record.passed else 'FAILED'} "
+        f"(score {record.score:.2f}, {passed}/{len(record.checks)} criteria)"
+    )
+    typer.echo(
+        f"cost: {_usd(record.cost_nusd)} of ${record.budget_usd:.2f}, "
+        f"{record.model_calls} model call(s), {record.attempts} attempt(s)"
+    )
+    typer.echo(f"recorded: {path}")
+    raise typer.Exit(EXIT_OK if record.passed else EXIT_BENCH_FAILED)
 
 
 def main() -> None:

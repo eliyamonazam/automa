@@ -34,6 +34,8 @@ docker compose up -d
 automa new "ایده من ..."   # سؤال‌ها + ساخت plan.json
 automa run <project-id>    # اجرا/ادامه: Worker ← Verifier ← اصلاح
 automa status             # فهرست پروژه‌ها، هزینه و برنامه
+automa bench list         # فهرست benchmarkها
+automa bench run <id>     # اجرای یک benchmark و ثبت نتیجه در benchmarks/results/
 ```
 
 > کلید API هیچ‌وقت نباید وارد مخزن بشه. `.env` در `.gitignore` هست.

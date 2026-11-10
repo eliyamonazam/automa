@@ -36,7 +36,7 @@
 
 ## M4 — اولین آزمون واقعی
 - [x] `benchmarks/` (پایه): قالب `<id>.toml`، بارگذاری بسته، ۳ هدف نمونه (ابزار CLI، صفحه وب ایستا، گزارش تحقیقی کوتاه) با معیار موفقیت فقط قطعی، و ارزیابی معیارها روی `files/` از Tool Layer
-- [ ] اجراکننده benchmark: `automa bench run <id>` (ساخت پروژه با `answer` و سقف `budget_usd` benchmark، اجرا با Orchestrator، ارزیابی) و ثبت نتیجه (موفقیت، امتیاز، هزینه، تلاش‌ها) در `benchmarks/results/`؛ تست با FakeProvider
+- [x] اجراکننده benchmark: `automa bench run <id>` (ساخت پروژه با `answer` و سقف `budget_usd` benchmark، اجرا با Orchestrator، ارزیابی) و ثبت نتیجه (موفقیت، امتیاز، هزینه، تلاش‌ها) در `benchmarks/results/`؛ تست با FakeProvider
 - [!] اجرای واقعی benchmark با کلید API کاربر (نیاز به کلید و بودجه)
 - [ ] تحلیل شکست‌ها و ثبت در `docs/DECISIONS.md`
 

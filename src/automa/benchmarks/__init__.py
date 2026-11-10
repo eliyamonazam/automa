@@ -17,6 +17,15 @@ from automa.benchmarks.models import (
     BenchmarkKind,
     BenchmarkOutcome,
 )
+from automa.benchmarks.results import (
+    RESULT_SCHEMA_VERSION,
+    BenchmarkResultError,
+    BenchmarkRunRecord,
+    BenchmarkStop,
+    load_result,
+    prepare_results_dir,
+    write_result,
+)
 
 __all__ = [
     "BENCHMARK_SCHEMA_VERSION",
@@ -24,12 +33,19 @@ __all__ = [
     "MAX_BENCHMARK_ATTEMPTS",
     "MAX_BENCHMARK_BUDGET_USD",
     "MAX_BENCHMARK_FILE_BYTES",
+    "RESULT_SCHEMA_VERSION",
     "Benchmark",
     "BenchmarkError",
     "BenchmarkKind",
     "BenchmarkOutcome",
+    "BenchmarkResultError",
+    "BenchmarkRunRecord",
+    "BenchmarkStop",
     "BenchmarkSuite",
     "evaluate_benchmark",
     "load_benchmark",
+    "load_result",
     "parse_benchmark",
+    "prepare_results_dir",
+    "write_result",
 ]
