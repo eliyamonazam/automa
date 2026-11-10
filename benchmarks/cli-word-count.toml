@@ -1,0 +1,41 @@
+# Benchmark: a small command-line tool (kind = "cli").
+# Success is decided only by the deterministic checks below (see docs/DECISIONS.md D26).
+id = "cli-word-count"
+title = "Python word-count command-line tool"
+kind = "cli"
+goal = """
+Write a Python 3 command-line tool `wc.py` (standard library only) that takes exactly one
+argument, the path of a UTF-8 text file, and prints one line: the number of lines, words
+and characters of that file separated by single spaces (for example `2 5 10`). Lines are
+counted as newline characters, words are whitespace-separated tokens, characters are
+Unicode characters. Use argparse: without an argument it must exit with code 2 and a usage
+message. If the file does not exist it must print an error to stderr and exit with code 1.
+Also write `README.md` explaining how to run it.
+"""
+answer = "No preference: use reasonable defaults and keep it simple, standard library only."
+budget_usd = 0.5
+max_attempts = 4
+
+[[success_criteria]]
+description = "wc.py exists"
+check = { type = "file_exists", path = "wc.py" }
+
+[[success_criteria]]
+description = "README.md exists"
+check = { type = "file_exists", path = "README.md" }
+
+[[success_criteria]]
+description = "Counts lines, words and characters correctly"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "import pathlib,subprocess,sys; p=pathlib.Path('_bench_input.txt'); p.write_text('a b c\nd e\n', encoding='utf-8'); r=subprocess.run([sys.executable, 'wc.py', str(p)], capture_output=True, text=True); p.unlink(); sys.exit(0 if r.returncode == 0 and r.stdout.split() == ['2', '5', '10'] else 1)"''' }
+
+[[success_criteria]]
+description = "Counts Unicode characters, not bytes"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "import pathlib,subprocess,sys; p=pathlib.Path('_bench_input2.txt'); p.write_text('سلام دنیا\n', encoding='utf-8'); r=subprocess.run([sys.executable, 'wc.py', str(p)], capture_output=True, text=True); p.unlink(); sys.exit(0 if r.returncode == 0 and r.stdout.split() == ['1', '2', '10'] else 1)"''' }
+
+[[success_criteria]]
+description = "Exits with code 2 and a usage message when no argument is given"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "import subprocess,sys; r=subprocess.run([sys.executable, 'wc.py'], capture_output=True, text=True); sys.exit(0 if r.returncode == 2 and 'usage' in r.stderr.lower() else 1)"''' }
+
+[[success_criteria]]
+description = "Prints an error (not a traceback) and exits with code 1 for a missing file"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "import subprocess,sys; r=subprocess.run([sys.executable, 'wc.py', '_bench_no_such_file.txt'], capture_output=True, text=True); sys.exit(0 if r.returncode == 1 and r.stderr.strip() and 'Traceback' not in r.stderr else 1)"''' }

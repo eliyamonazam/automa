@@ -1,0 +1,49 @@
+# Benchmark: a static web page (kind = "web").
+# Success is decided only by the deterministic checks below (see docs/DECISIONS.md D26).
+id = "static-landing-page"
+title = "Static landing page for a fictional coffee shop"
+kind = "web"
+goal = """
+Create a static single-page website for a fictional coffee shop called "Bean There".
+Files: `index.html` and `style.css` (linked from the page with a relative link).
+The page must have: an `<h1>` with the shop name; a section with `id="menu"` listing at
+least three drinks, each in an element with `class="drink"` that shows a name and a price;
+and a section with `id="contact"` with an address and opening hours. No JavaScript and no
+external resources (no `http://` or `https://` URLs). Valid HTML5 with `<!DOCTYPE html>` and
+`lang="en"`.
+"""
+answer = "No preference: use reasonable defaults. Keep the design simple and readable."
+budget_usd = 0.5
+max_attempts = 4
+
+[[success_criteria]]
+description = "index.html exists"
+check = { type = "file_exists", path = "index.html" }
+
+[[success_criteria]]
+description = "style.css exists"
+check = { type = "file_exists", path = "style.css" }
+
+[[success_criteria]]
+description = "index.html links style.css"
+check = { type = "file_contains", path = "index.html", text = "style.css" }
+
+[[success_criteria]]
+description = "Has the HTML5 doctype"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "import pathlib,sys; t=pathlib.Path('index.html').read_text(encoding='utf-8'); sys.exit(0 if t.lstrip().lower().startswith('<!doctype html>') else 1)"''' }
+
+[[success_criteria]]
+description = "Has the shop name in an h1"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "import pathlib,re,sys; t=pathlib.Path('index.html').read_text(encoding='utf-8'); sys.exit(0 if re.search(r'<h1[^>]*>[^<]*Bean There', t, re.I) else 1)"''' }
+
+[[success_criteria]]
+description = "Has a menu section and a contact section"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "import pathlib,sys; t=pathlib.Path('index.html').read_text(encoding='utf-8'); sys.exit(0 if 'id=\"menu\"' in t and 'id=\"contact\"' in t else 1)"''' }
+
+[[success_criteria]]
+description = "Menu lists at least three drinks"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "import pathlib,sys; t=pathlib.Path('index.html').read_text(encoding='utf-8'); sys.exit(0 if t.count('class=\"drink\"') >= 3 else 1)"''' }
+
+[[success_criteria]]
+description = "No JavaScript and no external resources"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "import pathlib,sys; t=(pathlib.Path('index.html').read_text(encoding='utf-8') + pathlib.Path('style.css').read_text(encoding='utf-8')).lower(); sys.exit(1 if '<script' in t or 'http://' in t or 'https://' in t else 0)"''' }

@@ -1,0 +1,37 @@
+# Benchmark: a short research report (kind = "research").
+# Success is decided only by the deterministic checks below (see docs/DECISIONS.md D26).
+# Note: until web tools exist (M9), sources come from the model's own knowledge.
+id = "research-brief"
+title = "Short research brief: SQLite vs PostgreSQL"
+kind = "research"
+goal = """
+Write a short research brief `report.md` (Markdown, English) comparing SQLite and
+PostgreSQL as the database of a small single-user desktop application. Use exactly these
+second-level headings, in this order: `## Summary`, `## Comparison`, `## Recommendation`,
+`## Sources`. The comparison must cover at least setup, concurrency, and backups. The
+Sources section must list at least two sources as Markdown links to https URLs.
+Length: 300 to 1000 words in total.
+"""
+answer = "No preference: the reader is a developer choosing a database for a small desktop app."
+budget_usd = 0.5
+max_attempts = 4
+
+[[success_criteria]]
+description = "report.md exists"
+check = { type = "file_exists", path = "report.md" }
+
+[[success_criteria]]
+description = "Has the four required headings in order"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "import pathlib,sys; h=[l.strip() for l in pathlib.Path('report.md').read_text(encoding='utf-8').splitlines() if l.startswith('## ')]; sys.exit(0 if h == ['## Summary', '## Comparison', '## Recommendation', '## Sources'] else 1)"''' }
+
+[[success_criteria]]
+description = "Comparison covers setup, concurrency and backups"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "import pathlib,sys; t=pathlib.Path('report.md').read_text(encoding='utf-8').lower(); sys.exit(0 if all(w in t for w in ('setup', 'concurren', 'backup')) else 1)"''' }
+
+[[success_criteria]]
+description = "Between 300 and 1000 words"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "import pathlib,sys; n=len(pathlib.Path('report.md').read_text(encoding='utf-8').split()); sys.exit(0 if 300 <= n <= 1000 else 1)"''' }
+
+[[success_criteria]]
+description = "Sources section has at least two https Markdown links"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "import pathlib,re,sys; t=pathlib.Path('report.md').read_text(encoding='utf-8'); s=t.split('## Sources', 1)[-1] if '## Sources' in t else ''; sys.exit(0 if len(re.findall(r'\[[^\]]+\]\(https://[^)\s]+\)', s)) >= 2 else 1)"''' }

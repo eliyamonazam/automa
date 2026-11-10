@@ -42,6 +42,7 @@ from automa.llm.gateway import CallContext, LLMGateway
 from automa.llm.types import FinishReason, Message
 from automa.plan.models import (
     MAX_LIST_ITEMS,
+    AcceptanceCriterion,
     CheckResult,
     CommandCheck,
     FileContainsCheck,
@@ -181,8 +182,18 @@ def _check_command(executor: ToolExecutor, check: CommandCheck) -> tuple[bool, s
 
 def run_checks(task: Task, executor: ToolExecutor) -> list[CheckResult]:
     """Run every deterministic check of ``task`` (in criterion order)."""
+    return run_criteria_checks(task.acceptance_criteria, executor)
+
+
+def run_criteria_checks(
+    criteria: Sequence[AcceptanceCriterion], executor: ToolExecutor
+) -> list[CheckResult]:
+    """Run the deterministic check of every criterion that has one, in order.
+
+    ``CheckResult.criterion`` indexes ``criteria``. Criteria without a check are skipped.
+    """
     out: list[CheckResult] = []
-    for i, criterion in enumerate(task.acceptance_criteria):
+    for i, criterion in enumerate(criteria):
         check = criterion.check
         if check is None:
             continue
