@@ -38,6 +38,8 @@ from automa.llm.gateway import LLMGateway
 from automa.llm.provider import Provider, ProviderError
 from automa.plan import Plan
 from automa.project import Project, ProjectStatus, ProjectStore, ProjectStoreError
+from automa.roles import RoleError, RoleRegistry
+from automa.tools import default_tools
 
 EXIT_OK = 0
 EXIT_USER = 1
@@ -142,7 +144,8 @@ def new(
         # missing key or tier never leaves an orphan project behind.
         config.model_for(settings.tier)
         provider = make_provider(config)
-    except ConfigError as e:
+        roles = RoleRegistry.builtin(tools=default_tools())
+    except (ConfigError, RoleError) as e:
         raise _fail(str(e), EXIT_CONFIG) from None
 
     store = ProjectStore.for_workspace(config.workspace)
@@ -157,7 +160,7 @@ def new(
     with CostLedger.for_workspace(config.workspace) as ledger:
         guard = BudgetGuard(config.limits, ledger, events=events)
         gateway = LLMGateway(config, provider, guard=guard)
-        agent = ExecutiveAgent(gateway, settings=settings, events=events)
+        agent = ExecutiveAgent(gateway, settings=settings, known_roles=roles.names(), events=events)
         try:
             clarifications = _clarify(agent, store, project) if ask else []
             plan = plan_project(agent, store, pid, clarifications=clarifications)

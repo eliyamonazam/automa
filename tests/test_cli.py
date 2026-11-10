@@ -425,3 +425,49 @@ def test_cli_provider_only_reaches_a_gateway() -> None:
     ]
     assert len(gateway_calls) == 1
     assert ".complete(" not in inspect.getsource(cli)
+
+
+# -- roles: plans may only use the built-in roles --------------------------------
+
+
+def _role_task(tid: str, role: str) -> dict[str, Any]:
+    return {**task(tid), "role": role}
+
+
+def test_new_retries_plan_with_unknown_role(env: Env) -> None:
+    bad = plan_json(_role_task("a", "hacker"))
+    good = plan_json(_role_task("a", "writer"))
+    env.provider.push(bad, good)
+    r = env.run("new", "goal", "--id", "roles-ok", "--no-ask")
+    assert r.exit_code == 0, r.output
+    assert env.store.load_plan("roles-ok").tasks[0].role == "writer"
+    assert len(env.provider.requests) == 2
+    # the retry tells the model which roles exist
+    system = env.provider.requests[0].messages[0].content
+    for name in ("architect", "developer", "researcher", "writer"):
+        assert name in system
+
+
+def test_new_fails_when_plan_keeps_unknown_role(env: Env) -> None:
+    bad = plan_json(_role_task("a", "admin"))
+    env.provider.push(bad, bad, bad)
+    r = env.run("new", "goal", "--id", "roles-bad", "--no-ask")
+    assert r.exit_code == cli.EXIT_PLANNING
+    assert "unknown role" in r.output
+    assert not env.store.has_plan("roles-bad")
+
+
+def test_new_broken_roles_is_config_error_before_creating(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from automa.roles import RoleError
+
+    def broken(**_: Any) -> Any:
+        raise RoleError("developer.toml: invalid role")
+
+    monkeypatch.setattr(cli.RoleRegistry, "builtin", broken)
+    r = env.run("new", "goal", "--id", "nope", "--no-ask")
+    assert r.exit_code == cli.EXIT_CONFIG
+    assert "invalid role" in r.output
+    assert env.store.list_ids() == []
+    assert env.provider.requests == []
