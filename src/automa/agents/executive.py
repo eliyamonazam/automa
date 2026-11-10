@@ -105,7 +105,7 @@ small, independently verifiable tasks. Reply with ONLY one JSON object, no prose
         {"description": "README.md exists",
          "check": {"type": "file_exists", "path": "README.md"}},
         {"description": "tests pass",
-         "check": {"type": "command", "command": "pytest -q", "expect_exit_code": 0}},
+         "check": {"type": "command", "command": "pytest -q", "exit_code": 0}},
         {"description": "explains installation"}
       ]
     }
@@ -113,7 +113,7 @@ small, independently verifiable tasks. Reply with ONLY one JSON object, no prose
 }
 
 Check types: file_exists {path}, file_contains {path, text}, command {command,
-expect_exit_code, timeout_s}. Paths are relative to the project's files directory and
+exit_code, timeout_s}. Paths are relative to the project's files directory and
 must not contain "..". Prefer deterministic checks wherever possible.
 (The // comments above are explanations; JSON must not contain comments.)"""
 

@@ -28,7 +28,7 @@
 - [x] Tool Layer: `run_command` (سطح `execute`، بدون shell، cwd داخل `files/`، timeout، محدودیت خروجی، محیط پاک بدون کلیدها)
 - [x] نقش‌ها به‌صورت فایل در `roles/`: `researcher`، `architect`، `developer`، `writer`
 - [x] `WorkerAgent`: حلقه tool-use تا اتمام وظیفه یا رسیدن به سقف قدم
-- [ ] `VerifierAgent`: بررسی‌های قطعی + ارزیابی مدلی جدا از Worker
+- [x] `VerifierAgent`: بررسی‌های قطعی + ارزیابی مدلی جدا از Worker
 - [ ] `Orchestrator`: حلقه کامل با اصلاح (حداکثر N تلاش) و ارتقای سطح مدل
 - [ ] CLI: `automa run <project>` با قابلیت ادامه بعد از توقف
 - [ ] تست انتها‌به‌انتها با FakeProvider
