@@ -1,6 +1,7 @@
 """Plan, Task, TaskResult and Verdict: the contract between agents. See docs/ARCHITECTURE.md."""
 
 from automa.plan.models import (
+    MAX_TASK_ATTEMPTS,
     PLAN_SCHEMA_VERSION,
     TASK_ID_PATTERN,
     AcceptanceCriterion,
@@ -17,6 +18,7 @@ from automa.plan.models import (
     ResultStatus,
     Task,
     TaskResult,
+    TaskState,
     TaskStatus,
     Verdict,
     VerdictOutcome,
@@ -25,6 +27,7 @@ from automa.plan.models import (
 )
 
 __all__ = [
+    "MAX_TASK_ATTEMPTS",
     "PLAN_SCHEMA_VERSION",
     "TASK_ID_PATTERN",
     "AcceptanceCriterion",
@@ -41,6 +44,7 @@ __all__ = [
     "ResultStatus",
     "Task",
     "TaskResult",
+    "TaskState",
     "TaskStatus",
     "Verdict",
     "VerdictOutcome",

@@ -411,6 +411,47 @@ class Verdict(_Strict):
         )
 
 
+MAX_TASK_ATTEMPTS = 50
+
+
+class TaskState(_Strict):
+    """Orchestrator bookkeeping of one task (``tasks/<id>/state.json``).
+
+    ``attempts`` is the number of ``TaskResult`` files stored for the task; the store
+    only saves a state whose ``attempts`` matches the files on disk, and only marks a
+    task ``passed`` if the verdict of its last attempt is a stored ``pass``. ``tier``
+    is the tier of the next attempt (``None`` = task/role default), so model escalation
+    survives a restart. ``revision`` gives optimistic concurrency like ``Project``.
+    """
+
+    schema_version: int = PLAN_SCHEMA_VERSION
+    task_id: TaskId
+    status: TaskStatus = TaskStatus.PENDING
+    attempts: int = Field(default=0, ge=0, le=MAX_TASK_ATTEMPTS)
+    tier: Tier | None = None
+    plan_version: int = Field(default=1, ge=1)
+    error: Text | None = None
+    updated_at: UtcDatetime
+    revision: int = Field(default=0, ge=0)
+
+    @field_validator("schema_version")
+    @classmethod
+    def _known_schema(cls, v: int) -> int:
+        if v != PLAN_SCHEMA_VERSION:
+            raise ValueError(f"unsupported task state schema_version {v}")
+        return v
+
+    @model_validator(mode="after")
+    def _consistent(self) -> TaskState:
+        if self.status is TaskStatus.PASSED and self.attempts < 1:
+            raise ValueError("a passed task needs at least one attempt")
+        if self.status in (TaskStatus.FAILED, TaskStatus.BLOCKED) and not (
+            self.error and self.error.strip()
+        ):
+            raise ValueError(f"a {self.status.value} task needs an error")
+        return self
+
+
 # --- parsing model output ----------------------------------------------------
 
 

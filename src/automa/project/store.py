@@ -5,7 +5,7 @@ Layout (see docs/ARCHITECTURE.md, "Project Store")::
     project.json   goal, status, timestamps, revision
     plan.json      tasks and dependencies
     clarifications.json  the Executive's questions and the user's answers
-    tasks/         per-task inputs, outputs, verdicts, attempt history
+    tasks/<id>/    state.json, result-<n>.json, verdict-<n>.json (attempt history)
     files/         the project's real outputs
     events.jsonl   append-only event log
 
@@ -18,6 +18,9 @@ Guarantees:
 * Saves use optimistic concurrency: ``save`` only succeeds if the on-disk
   ``revision`` equals the revision the caller loaded; otherwise ``ProjectConflict``.
 * Corrupt or unknown files raise ``ProjectStoreError``; nothing is silently repaired.
+* Attempt history (``result-<n>.json``/``verdict-<n>.json``) is write-once and
+  sequential; a task state is only saved if it agrees with that history (a task is
+  only ``passed`` with a stored passing verdict for its last attempt).
 """
 
 from __future__ import annotations
@@ -37,7 +40,17 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from automa.events import Event, JsonlEventLog
-from automa.plan import Clarification, Clarifications, Plan
+from automa.plan import (
+    TASK_ID_PATTERN,
+    Clarification,
+    Clarifications,
+    Plan,
+    Task,
+    TaskResult,
+    TaskState,
+    TaskStatus,
+    Verdict,
+)
 
 SCHEMA_VERSION = 1
 PROJECTS_DIRNAME = "projects"
@@ -46,6 +59,10 @@ PLAN_FILE = "plan.json"
 CLARIFICATIONS_FILE = "clarifications.json"
 EVENTS_FILE = "events.jsonl"
 TASKS_DIR = "tasks"
+TASK_STATE_FILE = "state.json"
+RESULT_FILE_FMT = "result-{attempt}.json"
+VERDICT_FILE_FMT = "verdict-{attempt}.json"
+_TASK_ID_RE = re.compile(TASK_ID_PATTERN)
 FILES_DIR = "files"
 
 PROJECT_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$|^[a-z0-9]$"
@@ -170,6 +187,41 @@ def _write_json_atomic(path: Path, data: Any) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def _write_json_exclusive(path: Path, data: Any) -> None:
+    """Write ``path`` once: complete temp file, then ``os.link`` (fails if it exists).
+
+    Never overwrites, even across processes, and never leaves a partial file.
+    """
+    text = json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            raise ProjectConflict(f"{path.name} already exists") from None
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
+def _read_json(path: Path, what: str) -> Any:
+    """Read a regular (non-symlink) JSON file or raise ``ProjectStoreError``."""
+    if path.is_symlink():
+        raise ProjectStoreError(f"{path}: {what} file must not be a symlink")
+    if not path.is_file():
+        raise ProjectStoreError(f"{path}: {what} file is missing")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise ProjectStoreError(f"{path}: unreadable {what} file") from e
 
 
 class ProjectStore:
@@ -440,6 +492,274 @@ class ProjectStore:
             return list(Clarifications.model_validate(raw).items)
         except ValidationError as e:
             raise ProjectStoreError(f"{path}: invalid clarifications file") from e
+
+    # -- tasks (attempt history and state) ---------------------------------
+
+    def task_dir(self, project_id: str, task_id: str) -> Path:
+        """``tasks/<task-id>/`` (validated; never a symlink, always inside ``tasks/``)."""
+        if not isinstance(task_id, str) or not _TASK_ID_RE.fullmatch(task_id):
+            raise ProjectStoreError(f"invalid task id: {task_id!r}")
+        tasks = self.tasks_dir(project_id)
+        if tasks.is_symlink():
+            raise ProjectStoreError(f"{tasks}: tasks directory must not be a symlink")
+        path = tasks / task_id
+        if path.is_symlink() or (path.exists() and not path.is_dir()):
+            raise ProjectStoreError(f"task directory escapes the store: {task_id!r}")
+        if path.resolve().parent != tasks.resolve():
+            raise ProjectStoreError(f"task directory escapes the store: {task_id!r}")
+        return path
+
+    def _plan_task(self, project_id: str, task_id: str) -> tuple[Plan, Task]:
+        plan = self.load_plan(project_id)
+        try:
+            return plan, plan.task(task_id)
+        except KeyError:
+            raise ProjectStoreError(
+                f"task {task_id!r} is not in the plan of project {project_id!r}"
+            ) from None
+
+    def _ensure_task_dir(self, project_id: str, task_id: str) -> Path:
+        path = self.task_dir(project_id, task_id)
+        tasks = self.tasks_dir(project_id)
+        tasks.mkdir(exist_ok=True)
+        path.mkdir(exist_ok=True)
+        return self.task_dir(project_id, task_id)  # re-check after creating
+
+    def attempt_count(self, project_id: str, task_id: str) -> int:
+        """Number of stored ``TaskResult``s (attempts are numbered 1..n without gaps)."""
+        self._require(project_id)
+        path = self.task_dir(project_id, task_id)
+        if not path.exists():
+            return 0
+        n = 0
+        while (path / RESULT_FILE_FMT.format(attempt=n + 1)).exists() or (
+            path / RESULT_FILE_FMT.format(attempt=n + 1)
+        ).is_symlink():
+            n += 1
+        return n
+
+    def save_task_result(self, project_id: str, result: TaskResult) -> TaskResult:
+        """Store ``result`` as ``result-<attempt>.json`` (write-once) + ``task.result_saved``.
+
+        The task must be in the plan and ``attempt`` must be exactly the next attempt
+        number, so history has no gaps and is never rewritten (``ProjectConflict``).
+        """
+        self._require(project_id)
+        try:
+            result = TaskResult.model_validate(result.model_dump())
+        except ValidationError as e:
+            raise ProjectStoreError(f"invalid task result for project {project_id!r}") from e
+        self._plan_task(project_id, result.task_id)
+        with self._lock:
+            path = self._ensure_task_dir(project_id, result.task_id)
+            expected = self.attempt_count(project_id, result.task_id) + 1
+            if result.attempt != expected:
+                raise ProjectConflict(
+                    f"task {result.task_id!r}: attempt {result.attempt} is not the next "
+                    f"attempt ({expected})"
+                )
+            if expected > 1 and not self._verdict_path(path, expected - 1).exists():
+                raise ProjectConflict(
+                    f"task {result.task_id!r}: attempt {expected - 1} has no verdict yet"
+                )
+            _write_json_exclusive(
+                path / RESULT_FILE_FMT.format(attempt=result.attempt),
+                result.model_dump(mode="json"),
+            )
+        self.events(project_id).emit(
+            Event(
+                ts=self._now(),
+                type="task.result_saved",
+                project_id=project_id,
+                data={
+                    "task_id": result.task_id,
+                    "attempt": result.attempt,
+                    "status": result.status.value,
+                },
+            )
+        )
+        return result
+
+    def load_task_result(self, project_id: str, task_id: str, attempt: int) -> TaskResult:
+        self._require(project_id)
+        path = self.task_dir(project_id, task_id) / RESULT_FILE_FMT.format(attempt=int(attempt))
+        try:
+            result = TaskResult.model_validate(_read_json(path, "task result"))
+        except ValidationError as e:
+            raise ProjectStoreError(f"{path}: invalid task result file") from e
+        if result.task_id != task_id or result.attempt != attempt:
+            raise ProjectStoreError(f"{path}: task id/attempt do not match the file name")
+        return result
+
+    @staticmethod
+    def _verdict_path(task_dir: Path, attempt: int) -> Path:
+        return task_dir / VERDICT_FILE_FMT.format(attempt=attempt)
+
+    def save_verdict(self, project_id: str, verdict: Verdict) -> Verdict:
+        """Store ``verdict`` as ``verdict-<attempt>.json`` (write-once) + ``task.verdict_saved``.
+
+        The result of that attempt must already be stored and the verdict must match
+        it and the planned task (``Verdict.matches``).
+        """
+        self._require(project_id)
+        try:
+            verdict = Verdict.model_validate(verdict.model_dump())
+        except ValidationError as e:
+            raise ProjectStoreError(f"invalid verdict for project {project_id!r}") from e
+        _, task = self._plan_task(project_id, verdict.task_id)
+        with self._lock:
+            path = self.task_dir(project_id, verdict.task_id)
+            if verdict.attempt > self.attempt_count(project_id, verdict.task_id):
+                raise ProjectConflict(
+                    f"task {verdict.task_id!r}: no stored result for attempt {verdict.attempt}"
+                )
+            result = self.load_task_result(project_id, verdict.task_id, verdict.attempt)
+            if not verdict.matches(task, result):
+                raise ProjectStoreError(
+                    f"verdict does not match task {verdict.task_id!r} attempt {verdict.attempt}"
+                )
+            _write_json_exclusive(
+                self._verdict_path(path, verdict.attempt), verdict.model_dump(mode="json")
+            )
+        self.events(project_id).emit(
+            Event(
+                ts=self._now(),
+                type="task.verdict_saved",
+                project_id=project_id,
+                data={
+                    "task_id": verdict.task_id,
+                    "attempt": verdict.attempt,
+                    "outcome": verdict.outcome.value,
+                },
+            )
+        )
+        return verdict
+
+    def load_verdict(self, project_id: str, task_id: str, attempt: int) -> Verdict | None:
+        """The verdict of ``attempt``, or ``None`` if it was not judged (yet)."""
+        self._require(project_id)
+        path = self._verdict_path(self.task_dir(project_id, task_id), int(attempt))
+        if not path.exists() and not path.is_symlink():
+            return None
+        try:
+            verdict = Verdict.model_validate(_read_json(path, "verdict"))
+        except ValidationError as e:
+            raise ProjectStoreError(f"{path}: invalid verdict file") from e
+        if verdict.task_id != task_id or verdict.attempt != attempt:
+            raise ProjectStoreError(f"{path}: task id/attempt do not match the file name")
+        return verdict
+
+    def task_history(
+        self, project_id: str, task_id: str
+    ) -> list[tuple[TaskResult, Verdict | None]]:
+        """All attempts of a task, oldest first, each with its verdict (if any)."""
+        return [
+            (
+                self.load_task_result(project_id, task_id, n),
+                self.load_verdict(project_id, task_id, n),
+            )
+            for n in range(1, self.attempt_count(project_id, task_id) + 1)
+        ]
+
+    def load_task_state(self, project_id: str, task_id: str) -> TaskState | None:
+        """``tasks/<id>/state.json``, or ``None`` if the task was never started."""
+        self._require(project_id)
+        path = self.task_dir(project_id, task_id) / TASK_STATE_FILE
+        if not path.exists() and not path.is_symlink():
+            return None
+        try:
+            state = TaskState.model_validate(_read_json(path, "task state"))
+        except ValidationError as e:
+            raise ProjectStoreError(f"{path}: invalid task state file") from e
+        if state.task_id != task_id:
+            raise ProjectStoreError(f"{path}: task id does not match the directory")
+        return state
+
+    def save_task_state(self, project_id: str, state: TaskState) -> TaskState:
+        """Persist ``state`` (``revision`` + 1) and log ``task.status`` on a status change.
+
+        Optimistic concurrency as in ``save``: a new state needs ``revision`` 0, an
+        existing one the stored revision (``ProjectConflict``). The state must agree
+        with the stored history: ``attempts`` equals the number of stored results, and
+        ``passed`` requires a stored ``pass`` verdict for the last attempt.
+        """
+        self._require(project_id)
+        try:
+            state = TaskState.model_validate(state.model_dump())
+        except ValidationError as e:
+            raise ProjectStoreError(f"invalid task state for project {project_id!r}") from e
+        plan, _ = self._plan_task(project_id, state.task_id)
+        if state.plan_version != plan.version:
+            raise ProjectStoreError(
+                f"task state is for plan version {state.plan_version}, "
+                f"stored plan is version {plan.version}"
+            )
+        with self._lock:
+            tdir = self._ensure_task_dir(project_id, state.task_id)
+            path = tdir / TASK_STATE_FILE
+            current = self.load_task_state(project_id, state.task_id)
+            stored_rev = current.revision if current is not None else 0
+            if state.revision != stored_rev:
+                raise ProjectConflict(
+                    f"task {state.task_id!r} state changed on disk "
+                    f"(revision {stored_rev}, yours {state.revision})"
+                )
+            attempts = self.attempt_count(project_id, state.task_id)
+            if state.attempts != attempts:
+                raise ProjectStoreError(
+                    f"task {state.task_id!r}: state says {state.attempts} attempt(s), "
+                    f"{attempts} stored"
+                )
+            if state.status is TaskStatus.PASSED:
+                verdict = self.load_verdict(project_id, state.task_id, attempts)
+                if verdict is None or not verdict.passed:
+                    raise ProjectStoreError(
+                        f"task {state.task_id!r} cannot be passed without a stored "
+                        "passing verdict for its last attempt"
+                    )
+            now = self._now()
+            if current is not None:
+                now = max(now, current.updated_at)
+            stored = TaskState.model_validate(
+                state.model_copy(
+                    update={"revision": stored_rev + 1, "updated_at": now}
+                ).model_dump()
+            )
+            _write_json_atomic(path, stored.model_dump(mode="json"))
+        old = current.status.value if current is not None else None
+        if old != stored.status.value:
+            self.events(project_id).emit(
+                Event(
+                    ts=stored.updated_at,
+                    type="task.status",
+                    project_id=project_id,
+                    data={"task_id": stored.task_id, "from": old, "to": stored.status.value},
+                )
+            )
+        return stored
+
+    def task_states(self, project_id: str) -> dict[str, TaskState]:
+        """States of the current plan's tasks (``pending`` defaults for unstarted ones)."""
+        plan = self.load_plan(project_id)
+        states: dict[str, TaskState] = {}
+        for task in plan.tasks:
+            state = self.load_task_state(project_id, task.id)
+            if state is None or state.plan_version != plan.version:
+                state = TaskState(
+                    task_id=task.id,
+                    plan_version=plan.version,
+                    attempts=self.attempt_count(project_id, task.id),
+                    updated_at=self._now(),
+                    revision=state.revision if state is not None else 0,
+                )
+            states[task.id] = state
+        return states
+
+    def passed_tasks(self, project_id: str) -> set[str]:
+        """Ids of the current plan's tasks whose state is ``passed``."""
+        return {
+            tid for tid, s in self.task_states(project_id).items() if s.status is TaskStatus.PASSED
+        }
 
     # -- helpers -----------------------------------------------------------
 

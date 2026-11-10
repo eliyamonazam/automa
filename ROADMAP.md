@@ -29,6 +29,7 @@
 - [x] نقش‌ها به‌صورت فایل در `roles/`: `researcher`، `architect`، `developer`، `writer`
 - [x] `WorkerAgent`: حلقه tool-use تا اتمام وظیفه یا رسیدن به سقف قدم
 - [x] `VerifierAgent`: بررسی‌های قطعی + ارزیابی مدلی جدا از Worker
+- [x] Orchestrator (پایه): ذخیره تاریخچه تلاش‌ها و وضعیت وظایف در `tasks/<id>/` (`TaskResult`، `Verdict`، `TaskState`) در `ProjectStore`
 - [ ] `Orchestrator`: حلقه کامل با اصلاح (حداکثر N تلاش) و ارتقای سطح مدل
 - [ ] CLI: `automa run <project>` با قابلیت ادامه بعد از توقف
 - [ ] تست انتها‌به‌انتها با FakeProvider
