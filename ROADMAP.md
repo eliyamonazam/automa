@@ -32,7 +32,7 @@
 - [x] Orchestrator (پایه): ذخیره تاریخچه تلاش‌ها و وضعیت وظایف در `tasks/<id>/` (`TaskResult`، `Verdict`، `TaskState`) در `ProjectStore`
 - [x] `Orchestrator`: حلقه کامل با اصلاح (حداکثر N تلاش) و ارتقای سطح مدل
 - [x] CLI: `automa run <project>` با قابلیت ادامه بعد از توقف
-- [ ] تست انتها‌به‌انتها با FakeProvider
+- [x] تست انتها‌به‌انتها با FakeProvider
 
 ## M4 — اولین آزمون واقعی
 - [ ] `benchmarks/`: ۳ هدف نمونه کوچک با معیار موفقیت (مثلاً یک ابزار CLI ساده، یک صفحه وب ایستا، یک گزارش تحقیقی کوتاه)

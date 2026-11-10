@@ -122,7 +122,7 @@ Skillها با قالب استاندارد `SKILL.md` (frontmatter + دستور�
 | ذخیره‌سازی | فایل JSON + SQLite | بدون سرور جدا، قابل خوندن |
 | مدل داده | `pydantic` | اعتبارسنجی خروجی‌های JSON مدل‌ها |
 | رابط | CLI با `typer` | ساده؛ رابط وب در مراحل بعد |
-| تست | `pytest` + FakeProvider | توسعه بدون هزینه API |
+| تست | `pytest` + FakeProvider | توسعه بدون هزینه API؛ `tests/test_e2e.py` چرخه کامل `new` ← `status` ← `run` ← `status` رو فقط از راه CLI با پشته واقعی اجرا می‌کنه (D25) |
 | استقرار | Docker / docker compose | انتقال آسان به سرور |
 
 ## مجموعه آزمون (Benchmark)
