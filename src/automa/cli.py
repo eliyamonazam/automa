@@ -7,7 +7,8 @@ and create no files. ``approve``/``reject`` only record a decision on one pendin
 Approval Gate request; the action itself runs (at most once) on the next ``automa run``.
 ``workflow save`` copies the plan of a finished project into a workflow template and
 ``workflows`` lists them; neither needs an API key or makes a model call. ``automa new``
-prints similar templates as a suggestion only (D39).
+prints similar templates as a suggestion only (D39); ``automa new --workflow <id>``
+uses a template's plan instead of the Executive (no API key, no model call, D40).
 
 Exit codes (stable, for scripts):
 
@@ -87,7 +88,15 @@ from automa.tools.approvals import (
     ApprovalStatus,
     ApprovalStore,
 )
-from automa.workflows import WorkflowError, WorkflowMatch, WorkflowStore, WorkflowTemplate
+from automa.workflows import (
+    WorkflowError,
+    WorkflowIncompatible,
+    WorkflowMatch,
+    WorkflowStore,
+    WorkflowTemplate,
+    plan_from_template,
+    similarity,
+)
 
 EXIT_OK = 0
 EXIT_USER = 1
@@ -225,6 +234,14 @@ def new(
         bool,
         typer.Option("--ask/--no-ask", help="Ask the Executive's clarifying questions first."),
     ] = True,
+    workflow_id: Annotated[
+        str | None,
+        typer.Option(
+            "--workflow",
+            help="Use the plan of this saved workflow template instead of the Executive "
+            "(no questions, no API key, no model call).",
+        ),
+    ] = None,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Path to automa.toml.")
     ] = None,
@@ -234,6 +251,9 @@ def new(
     if not goal:
         raise _fail("goal must not be empty", EXIT_USER)
     config = _load(config_path)
+    if workflow_id is not None:
+        _new_from_workflow(config, goal, project_id, workflow_id)
+        return
     settings = ExecutiveSettings()
     try:
         # Validate everything a model call needs *before* creating the project, so a
@@ -277,6 +297,60 @@ def new(
             typer.echo(f"cost: {_usd(spent)}")
     for line in _plan_lines(plan):
         typer.echo(line)
+    typer.echo(f"status: {store.load(pid).status.value}")
+
+
+def _new_from_workflow(
+    config: AutomaConfig, goal: str, project_id: str | None, workflow_id: str
+) -> None:
+    """``automa new --workflow``: the plan comes from a stored template (D40).
+
+    Everything is checked before the project is created (template readable, roles
+    known, starting tiers configured), so a bad template never leaves an orphan
+    project. No provider is built and no model is called.
+    """
+    try:
+        roles = RoleRegistry.builtin(tools=default_tools())
+    except RoleError as e:
+        raise _fail(str(e), EXIT_CONFIG) from None
+    role_tiers = {role.name: role.tier for role in roles}
+    configured = frozenset(config.tiers)
+    flows = WorkflowStore.for_workspace(config.workspace)
+    try:
+        template = flows.load(workflow_id)
+        plan_from_template(template, goal, role_tiers=role_tiers, configured_tiers=configured)
+    except WorkflowIncompatible as e:
+        raise _fail(f"{_safe(str(e))}; nothing was created", EXIT_CONFIG) from None
+    except WorkflowError as e:
+        raise _fail(f"{_safe(str(e))}; nothing was created", EXIT_USER) from None
+
+    store = ProjectStore.for_workspace(config.workspace)
+    try:
+        project = store.create(goal, project_id=project_id)
+    except ProjectStoreError as e:
+        raise _fail(str(e), EXIT_USER) from None
+    pid = project.id
+    typer.echo(f"project: {pid}")
+    try:
+        plan = flows.use(
+            store, pid, template.id, role_tiers=role_tiers, configured_tiers=configured
+        )
+    except WorkflowIncompatible as e:
+        raise _fail(f"{_safe(str(e))}; project {pid} has no plan", EXIT_CONFIG) from None
+    except (WorkflowError, ProjectStoreError) as e:
+        raise _fail(f"{_safe(str(e))}; project {pid} has no plan", EXIT_USER) from None
+    score, _ = similarity(goal, template.goal)
+    typer.echo(
+        f"workflow: {template.id} (from {template.source_project}, "
+        f"{round(score * 100)}% similar goal: {_safe(_preview(template.goal))})"
+    )
+    typer.echo(
+        "note: task titles, descriptions, inputs and checks are copied from the template "
+        "unchanged; the Executive was not asked"
+    )
+    typer.echo(f"cost: {_usd(0)} (no model call)")
+    for line in _plan_lines(plan):
+        typer.echo(_safe(line))
     typer.echo(f"status: {store.load(pid).status.value}")
 
 

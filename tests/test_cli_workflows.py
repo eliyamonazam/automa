@@ -347,3 +347,131 @@ def test_run_then_save_then_suggest(env: Env) -> None:
     assert r.exit_code == cli.EXIT_OK, r.output
     assert wid in r.output
     assert _tree(env.ws / "workflows") == before  # suggesting writes nothing
+
+
+# -- automa new --workflow (D40) ------------------------------------------------------
+
+
+def _saved(env: Env, goal: str = "Build a static website for a bakery") -> str:
+    done_project(env.store, "old", goal)
+    return env.flows.save_from_project(env.store, "old").id
+
+
+def test_new_from_workflow_uses_template_plan_without_model(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wid = _saved(env)
+    template_bytes = env.flows.path(wid).read_bytes()
+    monkeypatch.setattr(cli, "make_provider", provider_from_config)  # no key: never built
+    r = env.cli("new", "Build a static website for a flower shop", "--id", "fresh",
+                "--workflow", wid)  # fmt: skip
+    assert r.exit_code == cli.EXIT_OK, r.output
+    assert f"workflow: {wid} (from old" in r.output
+    assert "note:" in r.output and "cost: $0.0000 (no model call)" in r.output
+    assert "plan v1: 2 task(s)" in r.output and "status: planning" in r.output
+    assert "similar workflows" not in r.output  # no suggestions when one is chosen
+    plan = env.store.load_plan("fresh")
+    assert plan.goal == "Build a static website for a flower shop" and plan.version == 1
+    assert [t.id for t in plan.tasks] == ["a", "b"]
+    assert env.store.load("fresh").status is ProjectStatus.PLANNING
+    assert env.provider.requests == []
+    assert env.flows.path(wid).read_bytes() == template_bytes
+    assert "workflow.used" in [e.type for e in env.store.events("fresh").read()]
+    assert not (env.ws / cli.LEDGER_FILENAME).exists()  # no ledger: nothing was spent
+
+
+def test_new_from_unknown_workflow_creates_nothing(env: Env) -> None:
+    _saved(env)
+    before = env.store.list_ids()
+    for wid in ("wf-nope-000000", "../evil", "WF-UPPER"):
+        r = env.cli("new", "Build a site", "--id", "fresh", "--workflow", wid)
+        assert r.exit_code == cli.EXIT_USER, r.output
+        assert "nothing was created" in r.stderr
+    assert env.store.list_ids() == before
+    assert env.factory_calls == 0 and env.provider.requests == []
+
+
+def test_new_from_corrupt_workflow_creates_nothing(env: Env) -> None:
+    wid = _saved(env)
+    path = env.flows.path(wid)
+    os.chmod(path, 0o644)
+    path.write_text(json.dumps({"id": wid}), encoding="utf-8")
+    r = env.cli("new", "Build a site", "--id", "fresh", "--workflow", wid)
+    assert r.exit_code == cli.EXIT_USER, r.output
+    assert "fresh" not in env.store.list_ids()
+
+
+def test_new_from_workflow_with_unconfigured_tier(env: Env, tmp_path: Path) -> None:
+    wid = _saved(env)
+    no_medium = TOML.replace('medium = "fake-medium"\n', "")
+    env.config.write_text(no_medium.format(ws=env.ws.as_posix()), encoding="utf-8")
+    r = env.cli("new", "Build a site", "--id", "fresh", "--workflow", wid)
+    assert r.exit_code == cli.EXIT_CONFIG, r.output
+    assert "medium" in r.stderr and "nothing was created" in r.stderr
+    assert "fresh" not in env.store.list_ids()
+
+
+def test_new_from_workflow_with_unknown_role(env: Env) -> None:
+    wid = _saved(env)
+    path = env.flows.path(wid)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for task in data["plan"]["tasks"]:
+        task["role"] = "ghost"
+    os.chmod(path, 0o644)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    r = env.cli("new", "Build a site", "--id", "fresh", "--workflow", wid)
+    assert r.exit_code == cli.EXIT_CONFIG, r.output
+    assert "unknown role(s): ghost" in r.stderr
+    assert "fresh" not in env.store.list_ids()
+
+
+def test_new_from_workflow_existing_project_id(env: Env) -> None:
+    wid = _saved(env)
+    r = env.cli("new", "Build a site", "--id", "old", "--workflow", wid)
+    assert r.exit_code == cli.EXIT_USER, r.output
+    assert env.store.load_plan("old").goal == "Build a static website for a bakery"
+
+
+def test_new_from_workflow_escapes_template_goal(env: Env) -> None:
+    wid = _saved(env, "Build a site \x1b[31mred")
+    r = env.cli("new", "Build a site", "--id", "fresh", "--workflow", wid)
+    assert r.exit_code == cli.EXIT_OK, r.output
+    assert "\x1b" not in r.output and "\\x1b[31mred" in r.output
+
+
+def test_new_from_workflow_persian_goal(env: Env) -> None:
+    wid = _saved(env, "ساخت وب‌سایت فروشگاهی برای نانوایی")
+    r = env.cli("new", "يك وب‌سایت فروشگاهی برای گل‌فروشی بساز", "--id", "fresh", "--workflow", wid)
+    assert r.exit_code == cli.EXIT_OK, r.output
+    assert env.store.load_plan("fresh").goal == "يك وب‌سایت فروشگاهی برای گل‌فروشی بساز"
+
+
+def test_new_from_workflow_then_run_to_done(env: Env) -> None:
+    """End to end: run → save → new --workflow → run again with the copied plan."""
+    from automa.plan import Plan
+
+    env.store.create("Write a short note about rivers", project_id=PID)
+    env.store.save_plan(
+        PID,
+        Plan.model_validate(
+            {
+                "goal": "Write a short note about rivers",
+                "tasks": [task_dict("a"), task_dict("b", "a")],
+            }
+        ),
+    )
+    env.provider.push(*write("a"), *write("b"))
+    assert env.cli("run", PID).exit_code == cli.EXIT_OK
+    assert env.cli("workflow", "save", PID).exit_code == cli.EXIT_OK
+    wid = env.flows.list_ids()[0]
+    calls = len(env.provider.requests)
+
+    r = env.cli("new", "Write a short note about mountains", "--id", "next", "--workflow", wid)
+    assert r.exit_code == cli.EXIT_OK, r.output
+    assert len(env.provider.requests) == calls  # no Executive call
+
+    env.provider.push(*write("a"), *write("b"))
+    r = env.cli("run", "next")
+    assert r.exit_code == cli.EXIT_OK, r.output
+    assert env.store.load("next").status is ProjectStatus.DONE
+    assert (env.store.project_dir("next") / "files" / "b.txt").read_text() == "ok"

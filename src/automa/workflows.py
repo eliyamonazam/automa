@@ -6,8 +6,10 @@ plus the source goal and a few statistics. Templates live in
 ``<workspace>/workflows/<id>.json`` and are written once (never overwritten).
 
 ``WorkflowStore.suggest(goal)`` ranks stored templates by a deterministic word
-overlap with a new goal (no model call, no cost). Nothing here runs a template or
-changes a project; using a suggestion is a later, explicit step.
+overlap with a new goal (no model call, no cost). ``WorkflowStore.use`` writes a
+template's plan as the plan of a new project (D40): roles and starting tiers are
+checked against the current configuration first, and the Executive is not called.
+Nothing here runs a task.
 """
 
 from __future__ import annotations
@@ -16,12 +18,13 @@ import json
 import re
 import secrets
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from automa.config import Tier
 from automa.events import Event
 from automa.plan import Plan, TaskStatus
 from automa.project import ProjectStatus, ProjectStore, ProjectStoreError, validate_project_id
@@ -47,6 +50,10 @@ class WorkflowError(Exception):
 
 class WorkflowNotFound(WorkflowError):
     pass
+
+
+class WorkflowIncompatible(WorkflowError):
+    """A template's plan does not fit the current roles or configured tiers."""
 
 
 def validate_workflow_id(workflow_id: str) -> str:
@@ -143,6 +150,48 @@ def similarity(a: str, b: str) -> tuple[float, frozenset[str]]:
         return 0.0, frozenset()
     shared = ta & tb
     return len(shared) / len(ta | tb), shared
+
+
+# --- using a template -------------------------------------------------------------
+
+
+def plan_from_template(
+    template: WorkflowTemplate,
+    goal: str,
+    *,
+    role_tiers: Mapping[str, Tier],
+    configured_tiers: Collection[Tier],
+) -> Plan:
+    """The template's plan for a new project with ``goal`` (version 1, re-validated).
+
+    ``role_tiers`` maps every currently known role to its default tier. Every task's
+    role must be known, and the tier each task would start at (its own tier, else its
+    role's) must be configured; otherwise ``WorkflowIncompatible`` is raised and
+    nothing is written. Task texts, inputs and checks are copied unchanged.
+    """
+    unknown = sorted({t.role for t in template.plan.tasks} - set(role_tiers))
+    if unknown:
+        raise WorkflowIncompatible(
+            f"workflow {template.id!r} uses unknown role(s): {', '.join(unknown)}; "
+            f"known roles: {', '.join(sorted(role_tiers)) or '-'}"
+        )
+    missing = sorted(
+        {
+            (t.tier or role_tiers[t.role]).value
+            for t in template.plan.tasks
+            if (t.tier or role_tiers[t.role]) not in configured_tiers
+        }
+    )
+    if missing:
+        raise WorkflowIncompatible(
+            f"workflow {template.id!r} needs tier(s) with no configured model: {', '.join(missing)}"
+        )
+    try:
+        return Plan.model_validate(
+            {**template.plan.model_dump(mode="json"), "goal": goal, "version": 1}
+        )
+    except ValidationError as e:
+        raise WorkflowError(f"workflow {template.id!r} does not fit goal {goal!r}") from e
 
 
 # --- store -----------------------------------------------------------------------
@@ -274,6 +323,49 @@ class WorkflowStore:
             )
         )
         return template
+
+    # -- using ---------------------------------------------------------------
+
+    def use(
+        self,
+        projects: ProjectStore,
+        project_id: str,
+        workflow_id: str,
+        *,
+        role_tiers: Mapping[str, Tier],
+        configured_tiers: Collection[Tier],
+    ) -> Plan:
+        """Write the plan of template ``workflow_id`` as the plan of ``project_id``.
+
+        The project must exist and have no plan yet. The template is (re)loaded and
+        checked with ``plan_from_template`` before anything changes. On success the
+        project's status is ``planning`` (as after ``plan_project``; the Orchestrator
+        moves it on) and ``workflow.used`` is logged; on any error the previous status
+        is restored. No model is called and the template file is not changed.
+        """
+        project = projects.load(project_id)
+        if projects.has_plan(project_id):
+            raise WorkflowError(f"project {project_id!r} already has a plan")
+        template = self.load(workflow_id)
+        plan = plan_from_template(
+            template, project.goal, role_tiers=role_tiers, configured_tiers=configured_tiers
+        )
+        previous = project.status
+        projects.set_status(project_id, ProjectStatus.PLANNING)
+        try:
+            saved = projects.save_plan(project_id, plan)
+        except BaseException:
+            projects.set_status(project_id, previous)
+            raise
+        projects.events(project_id).emit(
+            Event(
+                ts=self._now(),
+                type="workflow.used",
+                project_id=project_id,
+                data={"workflow_id": template.id, "tasks": len(saved.tasks)},
+            )
+        )
+        return saved
 
     # -- suggesting ----------------------------------------------------------
 

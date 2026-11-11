@@ -27,11 +27,13 @@ from automa.project import ProjectStatus, ProjectStore
 from automa.workflows import (
     MAX_SUGGESTIONS,
     WorkflowError,
+    WorkflowIncompatible,
     WorkflowNotFound,
     WorkflowStats,
     WorkflowStore,
     WorkflowTemplate,
     goal_terms,
+    plan_from_template,
     similarity,
     validate_workflow_id,
 )
@@ -447,3 +449,135 @@ def test_failed_orchestrated_project_cannot_be_saved(tmp_path: Path) -> None:
     with pytest.raises(WorkflowError):
         flows.save_from_project(rig.store, PID)
     assert flows.list_ids() == []
+
+
+# --- using a template (D40) ------------------------------------------------------
+
+ROLE_TIERS = {"writer": Tier.MEDIUM, "architect": Tier.LARGE}
+ALL_TIERS = frozenset(Tier)
+
+
+def _saved(projects: ProjectStore, flows: WorkflowStore, goal: str = "Build a site") -> str:
+    done_project(projects, "old", goal)
+    return flows.save_from_project(projects, "old").id
+
+
+def test_plan_from_template_sets_new_goal_and_version_1(
+    projects: ProjectStore, flows: WorkflowStore
+) -> None:
+    t = flows.load(_saved(projects, flows))
+    plan = plan_from_template(t, "Build a shop", role_tiers=ROLE_TIERS, configured_tiers=ALL_TIERS)
+    assert plan.goal == "Build a shop" and plan.version == 1
+    assert [task.model_dump() for task in plan.tasks] == [
+        task.model_dump() for task in t.plan.tasks
+    ]
+
+
+def test_plan_from_template_rejects_unknown_role(
+    projects: ProjectStore, flows: WorkflowStore
+) -> None:
+    t = flows.load(_saved(projects, flows))
+    with pytest.raises(WorkflowIncompatible, match="unknown role.*writer"):
+        plan_from_template(t, "g", role_tiers={"architect": Tier.LARGE}, configured_tiers=ALL_TIERS)
+
+
+def test_plan_from_template_checks_starting_tiers(
+    projects: ProjectStore, flows: WorkflowStore
+) -> None:
+    t = flows.load(_saved(projects, flows))
+    # role default tier (writer -> medium) is not configured
+    with pytest.raises(WorkflowIncompatible, match="medium"):
+        plan_from_template(t, "g", role_tiers=ROLE_TIERS, configured_tiers={Tier.SMALL, Tier.LARGE})
+    # an explicit task tier overrides the role's default
+    tasks = [task.model_copy(update={"tier": Tier.SMALL}) for task in t.plan.tasks]
+    t2 = WorkflowTemplate.model_validate(
+        {
+            **t.model_dump(),
+            "plan": {**t.plan.model_dump(), "tasks": [x.model_dump() for x in tasks]},
+        }
+    )
+    plan = plan_from_template(t2, "g", role_tiers=ROLE_TIERS, configured_tiers={Tier.SMALL})
+    assert {task.tier for task in plan.tasks} == {Tier.SMALL}
+    with pytest.raises(WorkflowIncompatible, match="small"):
+        plan_from_template(t2, "g", role_tiers=ROLE_TIERS, configured_tiers={Tier.MEDIUM})
+
+
+def test_use_writes_plan_without_model(projects: ProjectStore, flows: WorkflowStore) -> None:
+    wid = _saved(projects, flows)
+    template_bytes = flows.path(wid).read_bytes()
+    projects.create("Build a shop", project_id="fresh")
+    plan = flows.use(projects, "fresh", wid, role_tiers=ROLE_TIERS, configured_tiers=ALL_TIERS)
+    assert projects.load_plan("fresh") == plan
+    assert plan.goal == "Build a shop" and plan.version == 1
+    assert projects.load("fresh").status is ProjectStatus.PLANNING
+    events = [e for e in projects.events("fresh").read() if e.type == "workflow.used"]
+    assert len(events) == 1 and events[0].data == {"workflow_id": wid, "tasks": 2}
+    assert flows.path(wid).read_bytes() == template_bytes  # template untouched
+    # the copied plan has fresh task state: nothing is marked passed
+    assert all(s.status is not TaskStatus.PASSED for s in projects.task_states("fresh").values())
+
+
+def test_use_refuses_project_with_plan(projects: ProjectStore, flows: WorkflowStore) -> None:
+    wid = _saved(projects, flows)
+    projects.create("x", project_id="fresh")
+    projects.save_plan("fresh", _plan("x"))
+    with pytest.raises(WorkflowError, match="already has a plan"):
+        flows.use(projects, "fresh", wid, role_tiers=ROLE_TIERS, configured_tiers=ALL_TIERS)
+    assert projects.load_plan("fresh").goal == "x"
+
+
+def test_use_incompatible_changes_nothing(projects: ProjectStore, flows: WorkflowStore) -> None:
+    wid = _saved(projects, flows)
+    projects.create("x", project_id="fresh")
+    with pytest.raises(WorkflowIncompatible):
+        flows.use(projects, "fresh", wid, role_tiers=ROLE_TIERS, configured_tiers=frozenset())
+    assert not projects.has_plan("fresh")
+    assert projects.load("fresh").status is ProjectStatus.NEW
+    assert "workflow.used" not in [e.type for e in projects.events("fresh").read()]
+
+
+def test_use_unknown_or_corrupt_template(projects: ProjectStore, flows: WorkflowStore) -> None:
+    wid = _saved(projects, flows)
+    projects.create("x", project_id="fresh")
+    kw = {"role_tiers": ROLE_TIERS, "configured_tiers": ALL_TIERS}
+    with pytest.raises(WorkflowNotFound):
+        flows.use(projects, "fresh", "wf-nope-000000", **kw)
+    with pytest.raises(WorkflowError):
+        flows.use(projects, "fresh", "../evil", **kw)
+    path = flows.path(wid)
+    os.chmod(path, 0o644)
+    path.write_text("{}", encoding="utf-8")
+    with pytest.raises(WorkflowError):
+        flows.use(projects, "fresh", wid, **kw)
+    assert not projects.has_plan("fresh")
+    assert projects.load("fresh").status is ProjectStatus.NEW
+
+
+def test_use_restores_status_when_save_fails(
+    projects: ProjectStore, flows: WorkflowStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wid = _saved(projects, flows)
+    projects.create("x", project_id="fresh")
+
+    def boom(*args: object, **kwargs: object) -> Plan:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(projects, "save_plan", boom)
+    with pytest.raises(OSError):
+        flows.use(projects, "fresh", wid, role_tiers=ROLE_TIERS, configured_tiers=ALL_TIERS)
+    assert projects.load("fresh").status is ProjectStatus.NEW
+
+
+def test_project_from_template_runs_to_done(tmp_path: Path) -> None:
+    rig = Rig(
+        tmp_path, [*write("a"), *write("b")], make_plan(task_dict("b", deps=["a"]), task_dict("a"))
+    )
+    assert rig.run().status is ProjectStatus.DONE
+    flows = WorkflowStore.for_workspace(tmp_path / "ws", clock=Clock())
+    t = flows.save_from_project(rig.store, PID)
+    rig.store.create("test goal again", project_id="again")
+    flows.use(
+        rig.store, "again", t.id,
+        role_tiers={"writer": Tier.MEDIUM}, configured_tiers=ALL_TIERS,
+    )  # fmt: skip
+    assert [task.id for task in rig.store.load_plan("again").tasks] == ["b", "a"]
