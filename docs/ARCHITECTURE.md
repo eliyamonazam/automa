@@ -129,7 +129,7 @@ Skillها با قالب استاندارد `SKILL.md` (frontmatter + دستور�
 | مدل داده | `pydantic` | اعتبارسنجی خروجی‌های JSON مدل‌ها |
 | رابط | CLI با `typer` | ساده؛ رابط وب در مراحل بعد |
 | تست | `pytest` + FakeProvider | توسعه بدون هزینه API؛ `tests/test_e2e.py` چرخه کامل `new` ← `status` ← `run` ← `status` رو فقط از راه CLI با پشته واقعی اجرا می‌کنه (D25) |
-| استقرار | Docker / docker compose | انتقال آسان به سرور |
+| استقرار | Docker / docker compose | انتقال آسان به سرور؛ `Dockerfile` (چندمرحله‌ای، ساخت wheel ← نصب در `python:3.12-slim`، کاربر `1000:1000`، `WORKDIR /data`، `AUTOMA_WORKSPACE=/data/workspace`، `ENTRYPOINT ["automa"]`، بدون کلاینت docker) و `docker-compose.yml` (سرویس `automa`: `env_file: .env` اجباری، `read_only`، tmpfs `/tmp`، `cap_drop: ALL`، `no-new-privileges`، سقف pids/حافظه، bind mount صریح `workspace/`، `automa.toml` فقط‌خوندنی و `benchmarks/`، بدون socket داکر و بدون پورت). داخل کانتینر sandbox حالت `local` می‌مونه و خود کانتینر مرز ایزوله‌سازیه؛ `tests/test_container.py` این ویژگی‌ها رو ثابت نگه می‌داره (D34) |
 
 ## مجموعه آزمون (Benchmark)
 

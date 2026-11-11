@@ -26,11 +26,12 @@ pytest
 ruff check .
 ```
 
-## راه‌اندازی (بعد از ساخته شدن هسته)
+## راه‌اندازی
 
 ```bash
 cp .env.example .env      # کلید API و آدرس درگاه رو اینجا بذار
-docker compose up -d
+cp automa.toml.example automa.toml
+pip install -e .          # یا با Docker (پایین‌تر)
 automa new "ایده من ..."   # سؤال‌ها + ساخت plan.json
 automa run <project-id>    # اجرا/ادامه: Worker ← Verifier ← اصلاح
 automa status             # فهرست پروژه‌ها، هزینه و برنامه
@@ -41,5 +42,17 @@ automa bench list         # فهرست benchmarkها
 automa bench run <id>     # اجرای یک benchmark و ثبت نتیجه در benchmarks/results/
 automa bench report       # تحلیل نتیجه‌های ثبت‌شده (فقط‌خوندنی؛ --json، --benchmark <id>)
 ```
+
+### با Docker
+
+```bash
+cp .env.example .env && cp automa.toml.example automa.toml && mkdir -p workspace
+docker compose build
+docker compose run --rm automa new "ایده من ..."
+docker compose run --rm automa run <project-id>
+docker compose run --rm automa status
+```
+
+کانتینر با کاربر غیر root (پیش‌فرض `1000:1000`؛ با `AUTOMA_UID`/`AUTOMA_GID` عوضش کن تا فایل‌های `workspace/` مال خودت باشن)، فایل‌سیستم فقط‌خوندنی، بدون capability و بدون socket داکر اجرا می‌شه. کلید فقط از `.env` (با `env_file`) میاد و داخل ایمیج نیست. داخل کانتینر `[sandbox] mode` رو `local` نگه دار: `run_command` داخل همین کانتینر ایزوله اجرا می‌شه؛ حالت `docker` اونجا عمداً شکست می‌خوره (D34).
 
 > کلید API هیچ‌وقت نباید وارد مخزن بشه. `.env` در `.gitignore` هست.

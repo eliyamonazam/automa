@@ -47,7 +47,7 @@
 - [x] Approval Gate (اقدامات برگشت‌ناپذیر): علامت `irreversible` روی ابزار که حتی در سطح `write`/`execute` از Approval Gate رد بشه، و ابزار برگشت‌ناپذیر `delete_file` (بازنویسی با `write_file` عمداً gate نشد؛ D31)
 - [x] اجرای `run_command` داخل کانتینر Docker (هسته): `DockerSandbox` (ایمیج، سقف حافظه/CPU/پروسه) و `RunCommand(sandbox=…)` با کانتینر یک‌بارمصرف بدون شبکه، فایل‌سیستم فقط‌خوندنی، بدون capability، کاربر غیر root، تنها mount پوشه `files/`؛ حذف کانتینر در timeout؛ بدون Docker ← خطا و هیچ اجرایی روی میزبان (D32)
 - [x] اجرای `run_command` داخل کانتینر Docker (پیکربندی): بخش `[sandbox]` در `automa.toml` (`mode = "local"|"docker"`، ایمیج، سقف‌ها)، اتصال به `default_tools`/CLI/Orchestrator/Verifier/benchmark، نمایش حالت در `automa status`، و شکست بسته وقتی `docker` خواسته شده ولی در دسترس نیست (D33)
-- [ ] `Dockerfile` و `docker-compose.yml` برای خود Automa
+- [x] `Dockerfile` و `docker-compose.yml` برای خود Automa: ایمیج چندمرحله‌ای با کاربر غیر root و بدون هیچ رازی، `.dockerignore`، سرویس compose سخت‌شده (فقط‌خوندنی، بدون capability، بدون socket داکر، کلید فقط از `.env`)؛ تست‌های ایستا (D34)
 
 ## M6 — اجرای موازی و Workflowهای ذخیره‌شده
 - [ ] اجرای موازی وظایف مستقل

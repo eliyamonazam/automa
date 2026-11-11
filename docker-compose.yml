@@ -1,0 +1,47 @@
+# Run the Automa CLI in a container. See docs/DECISIONS.md D34.
+#
+# One-time setup (in the repository root):
+#   cp .env.example .env               # put AUTOMA_API_KEY here (never commit it)
+#   cp automa.toml.example automa.toml
+#   mkdir -p workspace
+#
+# Then:  docker compose run --rm automa new "my goal"
+#        docker compose run --rm automa run <project-id>
+#        docker compose run --rm automa status
+#
+# The Docker socket is deliberately NOT mounted (it would give the container root on
+# the host), so keep [sandbox] mode = "local" here: run_command then runs inside this
+# hardened container. mode = "docker" fails closed in the container (no docker client).
+services:
+  automa:
+    build: .
+    image: automa:local
+    init: true
+    # Match your host user so files in ./workspace stay yours (id -u / id -g).
+    user: "${AUTOMA_UID:-1000}:${AUTOMA_GID:-1000}"
+    env_file:
+      - path: .env
+        required: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    stdin_open: true
+    tty: true
+    volumes:
+      # Long syntax: a missing source is an error instead of a root-owned directory.
+      - type: bind
+        source: ./workspace
+        target: /data/workspace
+      - type: bind
+        source: ./automa.toml
+        target: /data/automa.toml
+        read_only: true
+      - type: bind
+        source: ./benchmarks
+        target: /data/benchmarks
