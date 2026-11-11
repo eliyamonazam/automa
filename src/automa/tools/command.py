@@ -14,24 +14,38 @@ Risk level ``execute``. Safety properties (see docs/DECISIONS.md D18):
   group is killed on timeout;
 - stdout/stderr are read with a hard byte cap; the rest is discarded.
 
-This is *not* a sandbox: the program runs with the user's privileges and can
-reach the filesystem and network. Container isolation is roadmap item M5.
+Without a sandbox the program runs with the user's privileges and can reach the
+filesystem and network. With ``RunCommand(sandbox=DockerSandbox(...))`` every call
+runs in a fresh, isolated container instead (``tools/sandbox.py``, D32); if Docker is
+unavailable the call fails and nothing runs on the host (no silent fallback).
 """
 
 from __future__ import annotations
 
 import os
+import secrets
 import signal
 import subprocess
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from pathlib import Path
 from typing import IO, ClassVar
 
 from pydantic import Field, field_validator
 
 from automa.plan.models import MAX_PATH_CHARS, _safe_relpath
 from automa.tools.base import MAX_TOOL_OUTPUT_CHARS, RiskLevel, Tool, ToolArgs, ToolError
+from automa.tools.sandbox import (
+    DOCKER_RUN_ERROR,
+    DockerSandbox,
+    SandboxError,
+    client_env,
+    container_env,
+    container_name,
+    kill_argv,
+    run_argv,
+)
 from automa.tools.workspace import Workspace
 
 MAX_ARGV_ITEMS = 64
@@ -42,6 +56,7 @@ MAX_STREAM_BYTES = 64 * 1024
 DEFAULT_PATH = "/usr/local/bin:/usr/bin:/bin"
 ENV_PASSTHROUGH = ("PATH", "LANG", "LC_ALL", "TZ")
 _DRAIN_JOIN_S = 2.0
+_DOCKER_RM_TIMEOUT_S = 30.0
 
 
 class RunCommandArgs(ToolArgs):
@@ -155,12 +170,24 @@ class RunCommand(Tool):
     risk: ClassVar[RiskLevel] = RiskLevel.EXECUTE
     args_model: ClassVar[type[ToolArgs]] = RunCommandArgs
 
-    def __init__(self, allowed_programs: Iterable[str] | None = None) -> None:
+    def __init__(
+        self,
+        allowed_programs: Iterable[str] | None = None,
+        *,
+        sandbox: DockerSandbox | None = None,
+    ) -> None:
         if not hasattr(os, "waitid") or not hasattr(os, "killpg"):  # pragma: no cover
             raise ToolError("run_command needs a POSIX platform (process groups)")
         if isinstance(allowed_programs, str):
             raise TypeError("allowed_programs must be a collection of names, not a string")
+        if sandbox is not None and not isinstance(sandbox, DockerSandbox):
+            raise TypeError("sandbox must be a DockerSandbox or None")
         self._allowed = None if allowed_programs is None else frozenset(allowed_programs)
+        self._sandbox = sandbox
+
+    @property
+    def sandbox(self) -> DockerSandbox | None:
+        return self._sandbox
 
     @property
     def allowed_programs(self) -> frozenset[str] | None:
@@ -170,7 +197,11 @@ class RunCommand(Tool):
         if not isinstance(args, RunCommandArgs):
             return {}
         # Only the program name: arguments may contain data the model chose to pass.
-        return {"program": args.argv[0], "cwd": args.cwd}
+        out = {"program": args.argv[0], "cwd": args.cwd}
+        if self._sandbox is not None:
+            out["sandbox"] = "docker"
+            out["image"] = self._sandbox.image
+        return out
 
     def run(self, args: ToolArgs, workspace: Workspace) -> str:
         if not isinstance(args, RunCommandArgs):
@@ -180,56 +211,135 @@ class RunCommand(Tool):
             allowed = ", ".join(sorted(self._allowed)) or "(none)"
             raise ToolError(f"program {program!r} is not allowed; allowed: {allowed}")
         cwd = workspace.dir_path(args.cwd)
-        env = clean_env(str(workspace.root))
+        if self._sandbox is None:
+            env = clean_env(str(workspace.root))
+            code, out, err = _execute(args.argv, cwd, env, args.timeout_s, program)
+            return _format(code, out, err)
+        return self._run_in_docker(self._sandbox, args, workspace, cwd)
+
+    def _run_in_docker(
+        self, sandbox: DockerSandbox, args: RunCommandArgs, workspace: Workspace, cwd: Path
+    ) -> str:
+        rel = cwd.relative_to(workspace.root).as_posix()
+        name = container_name(secrets.token_hex(8))
         try:
-            proc = subprocess.Popen(  # noqa: S603 - argv list, no shell
+            popen_argv = run_argv(
+                sandbox,
                 args.argv,
-                cwd=cwd,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=False,
-                close_fds=True,
-                start_new_session=True,
+                workspace_root=workspace.root,
+                cwd="" if rel == "." else rel,
+                name=name,
+                environment=container_env(),
             )
-        except FileNotFoundError:
-            raise ToolError(f"program not found: {program!r}") from None
-        except PermissionError:
-            raise ToolError(f"program is not executable: {program!r}") from None
-        except OSError as e:
-            raise ToolError(f"cannot start {program!r}: {e.strerror or e}") from None
-
-        if proc.stdout is None or proc.stderr is None:  # pragma: no cover - PIPE requested
-            _kill_group(proc)
-            raise ToolError("could not capture output")
-        readers = [
-            _CappedReader(proc.stdout, MAX_STREAM_BYTES),
-            _CappedReader(proc.stderr, MAX_STREAM_BYTES),
-        ]
-        for r in readers:
-            r.start()
-        try:
-            timed_out = not _wait_unreaped(proc.pid, args.timeout_s)
-        finally:
-            # The child is not reaped yet, so its pid (= process group id) cannot be
-            # reused: killing the group here is safe and also stops background
-            # children a finished command left behind.
-            _kill_group(proc)
-            proc.wait()
-            for r in readers:
-                r.join(_DRAIN_JOIN_S)
-            proc.stdout.close()
-            proc.stderr.close()
-
-        out, err = readers[0].text(), readers[1].text()
-        if timed_out:
-            tail = (err or out)[-500:]
+        except SandboxError as e:
+            raise ToolError(f"sandbox: {e}; command not run") from None
+        env = client_env()
+        code, out, err = _execute(
+            popen_argv,
+            workspace.root,
+            env,
+            args.timeout_s,
+            args.argv[0],
+            on_kill=lambda: _remove_container(sandbox, name),
+            missing=f"docker client not found: {sandbox.docker!r}; command not run",
+        )
+        if code == DOCKER_RUN_ERROR:
+            tail = err.strip()[-500:]
             raise ToolError(
-                f"timed out after {args.timeout_s:g}s; process killed"
-                + (f"; last output: {tail}" if tail else "")
+                f"sandbox: docker could not start the container (image {sandbox.image!r})"
+                + (f": {tail}" if tail else "")
             )
-        return _format(proc.returncode, out, err)
+        return _format(code, out, err)
+
+
+def _remove_container(sandbox: DockerSandbox, name: str) -> None:
+    """Best effort ``docker rm -f``: the container must not outlive a killed client."""
+    env = client_env()
+    try:
+        subprocess.run(  # noqa: S603 - argv list, no shell
+            kill_argv(sandbox, name),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+            close_fds=True,
+            timeout=_DOCKER_RM_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _execute(
+    popen_argv: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    timeout_s: float,
+    program: str,
+    *,
+    on_kill: Callable[[], None] | None = None,
+    missing: str | None = None,
+) -> tuple[int, str, str]:
+    """Run ``popen_argv`` to completion or timeout; return ``(exit_code, stdout, stderr)``.
+
+    ``on_kill`` runs when the process did not finish on its own (timeout or interrupt),
+    before the process group is killed.
+    """
+    try:
+        proc = subprocess.Popen(  # noqa: S603 - argv list, no shell
+            popen_argv,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+            close_fds=True,
+            start_new_session=True,
+        )
+    except FileNotFoundError:
+        raise ToolError(missing or f"program not found: {program!r}") from None
+    except PermissionError:
+        raise ToolError(missing or f"program is not executable: {program!r}") from None
+    except OSError as e:
+        raise ToolError(f"cannot start {program!r}: {e.strerror or e}") from None
+
+    if proc.stdout is None or proc.stderr is None:  # pragma: no cover - PIPE requested
+        _kill_group(proc)
+        raise ToolError("could not capture output")
+    readers = [
+        _CappedReader(proc.stdout, MAX_STREAM_BYTES),
+        _CappedReader(proc.stderr, MAX_STREAM_BYTES),
+    ]
+    for r in readers:
+        r.start()
+    finished = False
+    timed_out = False
+    try:
+        timed_out = not _wait_unreaped(proc.pid, timeout_s)
+        finished = not timed_out
+    finally:
+        if not finished and on_kill is not None:
+            on_kill()
+        # The child is not reaped yet, so its pid (= process group id) cannot be
+        # reused: killing the group here is safe and also stops background
+        # children a finished command left behind.
+        _kill_group(proc)
+        proc.wait()
+        for r in readers:
+            r.join(_DRAIN_JOIN_S)
+        proc.stdout.close()
+        proc.stderr.close()
+
+    out, err = readers[0].text(), readers[1].text()
+    if timed_out:
+        tail = (err or out)[-500:]
+        raise ToolError(
+            f"timed out after {timeout_s:g}s; process killed"
+            + (f"; last output: {tail}" if tail else "")
+        )
+    return proc.returncode, out, err
 
 
 def _format(code: int, out: str, err: str) -> str:
