@@ -475,3 +475,51 @@ def test_new_from_workflow_then_run_to_done(env: Env) -> None:
     assert r.exit_code == cli.EXIT_OK, r.output
     assert env.store.load("next").status is ProjectStatus.DONE
     assert (env.store.project_dir("next") / "files" / "b.txt").read_text() == "ok"
+
+
+# -- user-defined and edited templates in existing commands (D41) ---------------------
+
+USER_PLAN = {
+    "tasks": [
+        {
+            "id": "t1",
+            "title": "Do it",
+            "role": "writer",
+            "acceptance_criteria": [{"description": "ok"}],
+        }
+    ]
+}
+
+
+def _user_flows(env: Env) -> tuple[str, str]:
+    from automa.config import Tier
+
+    kw: dict[str, Any] = {"role_tiers": {"writer": Tier.MEDIUM}, "configured_tiers": set(Tier)}
+    flows = env.flows
+    parent = flows.create("Build a static website for a bakery", USER_PLAN, **kw)
+    child = flows.revise(parent.id, goal="Build a static website for a florist", **kw)
+    return parent.id, child.id
+
+
+def test_list_shows_user_and_edited_templates(env: Env) -> None:
+    parent, child = _user_flows(env)
+    r = env.cli("workflows")
+    assert r.exit_code == cli.EXIT_OK, r.output
+    lines = r.output.strip().splitlines()
+    assert lines[0].startswith(child) and f"user, edited from {parent}" in lines[0]
+    assert lines[1].startswith(parent) and "user-defined" in lines[1]
+    assert "not run yet" in lines[0] and "1 task(s)" in lines[0]
+    rows = json.loads(env.cli("workflows", "--json").stdout)
+    assert rows[0]["origin"] == "user" and rows[0]["stats"] is None
+    assert rows[0]["parent"] == parent and rows[1]["parent"] is None
+    assert env.factory_calls == 0
+
+
+def test_new_from_user_template_and_suggestion(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, child = _user_flows(env)
+    monkeypatch.setattr(cli, "make_provider", provider_from_config)  # no key: never built
+    r = env.cli("new", "Build a website for a florist", "--id", "fresh", "--workflow", child)
+    assert r.exit_code == cli.EXIT_OK, r.output
+    assert f"workflow: {child} (user, edited from" in r.output
+    assert [t.id for t in env.store.load_plan("fresh").tasks] == ["t1"]
+    assert env.provider.requests == []

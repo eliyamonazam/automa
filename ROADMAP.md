@@ -56,7 +56,8 @@
 - [x] قالب Workflow (هسته): `WorkflowStore` در `<workspace>/workflows/` — ذخیره یک‌باره برنامه پروژه `done` که همه وظایفش `passed`ن (با آمار تلاش و هزینه)، و پیشنهاد قالب‌های مشابه برای هدف جدید با شباهت قطعی واژه‌ها (بدون مدل و هزینه، فارسی و انگلیسی)؛ شکست بسته روی فایل خراب/symlink (D38)
 - [x] قالب Workflow (CLI): `automa workflow save <project> [--json]`، `automa workflows [--json]`، و نمایش قالب‌های مشابه در `automa new` (فقط پیشنهاد؛ بدون کلید و بدون فراخوانی مدل، D39)
 - [x] قالب Workflow (استفاده): `automa new --workflow <id>` برنامه قالب رو (بعد از اعتبارسنجی با نقش‌های فعلی و سطح‌های پیکربندی‌شده) بدون فراخوانی Executive برای پروژه جدید ذخیره می‌کنه (D40)
-- [ ] امکان تعریف/ویرایش Workflow توسط کاربر
+- [x] تعریف/ویرایش Workflow توسط کاربر (هسته): `WorkflowStore.create` (قالب `user` از برنامه نوشته‌شده توسط کاربر، با همه قوانین `Plan` و بررسی نقش‌ها/سطح‌ها) و `WorkflowStore.revise` (ویرایش = قالب جدید با `parent`؛ فایل والد دست نمی‌خوره)، `history` زنجیره ویرایش‌ها؛ آمار اثبات‌شده فقط برای قالب‌های `project` (D41)
+- [ ] تعریف/ویرایش Workflow توسط کاربر (CLI): `automa workflow create --goal … --plan <file.json>`، `automa workflow edit <id> [--goal …] [--plan <file>]`، `automa workflow show <id> [--json]` (خروجی قابل ویرایش)
 
 ## M7 — Skillها و حافظه
 - [ ] بارگذاری Skillها با قالب `SKILL.md` و اتصال به نقش‌ها

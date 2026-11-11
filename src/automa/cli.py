@@ -341,7 +341,7 @@ def _new_from_workflow(
         raise _fail(f"{_safe(str(e))}; project {pid} has no plan", EXIT_USER) from None
     score, _ = similarity(goal, template.goal)
     typer.echo(
-        f"workflow: {template.id} (from {template.source_project}, "
+        f"workflow: {template.id} ({_workflow_source(template)}, "
         f"{round(score * 100)}% similar goal: {_safe(_preview(template.goal))})"
     )
     typer.echo(
@@ -377,7 +377,7 @@ def _match_line(m: WorkflowMatch) -> str:
     t = m.template
     shared = _safe(", ".join(m.shared))
     return (
-        f"{t.id}  {round(m.score * 100)}%  {t.stats.tasks} task(s)  "
+        f"{t.id}  {round(m.score * 100)}%  {t.task_count} task(s)  "
         f"{_safe(_preview(t.goal))}  [shared: {shared}]"
     )
 
@@ -670,15 +670,23 @@ def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_j
 
 def _workflow_json(t: WorkflowTemplate) -> dict[str, Any]:
     data: dict[str, Any] = t.model_dump(mode="json")
-    data["stats"]["cost_usd"] = nusd_to_usd(t.stats.cost_nusd)
+    if t.stats is not None:
+        data["stats"]["cost_usd"] = nusd_to_usd(t.stats.cost_nusd)
     return data
+
+
+def _workflow_source(t: WorkflowTemplate) -> str:
+    if t.source_project is not None:
+        return f"from {t.source_project}"
+    return f"user, edited from {t.parent}" if t.parent else "user-defined"
 
 
 def _workflow_line(t: WorkflowTemplate) -> str:
     s = t.stats
+    proven = f"{s.attempts} attempt(s)  {_usd(s.cost_nusd)}" if s is not None else "not run yet"
     return (
-        f"{t.id}  {s.tasks} task(s)  {s.attempts} attempt(s)  {_usd(s.cost_nusd)}  "
-        f"from {t.source_project}  {_safe(_preview(t.goal))}"
+        f"{t.id}  {t.task_count} task(s)  {proven}  "
+        f"{_workflow_source(t)}  {_safe(_preview(t.goal))}"
     )
 
 
