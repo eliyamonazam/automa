@@ -167,8 +167,9 @@ def describe_parallel(max_parallel: int) -> str:
     if max_parallel == 1:
         return "1 (sequential)"
     return (
-        f"up to {max_parallel} tasks at a time (they share files/; "
-        "concurrent writes to the same path are not prevented yet)"
+        f"up to {max_parallel} tasks at a time (they share files/; a file being "
+        "written by one running task cannot be written by another; "
+        "run_command writes are not checked)"
     )
 
 

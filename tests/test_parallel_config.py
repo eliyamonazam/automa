@@ -121,7 +121,8 @@ def test_bounds_match_orchestrator_settings() -> None:
 def test_describe_parallel_warns_about_shared_files() -> None:
     assert describe_parallel(1) == "1 (sequential)"
     text = describe_parallel(3)
-    assert "up to 3 tasks" in text and "files/" in text and "not prevented" in text
+    assert "up to 3 tasks" in text and "files/" in text and "cannot be written by another" in text
+    assert "run_command" in text  # the unchecked path is named
 
 
 def test_example_config_documents_the_section() -> None:

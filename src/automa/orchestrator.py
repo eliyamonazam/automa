@@ -23,6 +23,9 @@ thread. The first stop (budget, approval, …) or unexpected error stops schedul
 tasks already running finish their current step (never interrupted mid-call), then
 the project is paused with the first stop. Spending stays bounded by the shared
 ``BudgetGuard``: every concurrent call reserves its worst case before it runs.
+Shared ``files/`` (D37): tasks whose acceptance checks name overlapping paths are
+never scheduled at the same time, and a worker write to a path another running
+task has written fails (``PathClaims``), so two parallel tasks never write one file.
 
 What the orchestrator never does:
 
@@ -67,6 +70,7 @@ from automa.project.store import ProjectStatus, ProjectStore
 from automa.roles.registry import RoleError, RoleRegistry
 from automa.tools import RunCommand, tools_factory
 from automa.tools.base import Tool
+from automa.tools.claims import PathClaims, paths_overlap
 from automa.tools.executor import ApprovalRequired, ToolExecutor, ToolLayerError
 from automa.tools.policy import PermissionPolicy
 from automa.tools.workspace import Workspace
@@ -164,6 +168,28 @@ def rejections_at_tier(history: Sequence[tuple[TaskResult, Verdict | None]], tie
     return n
 
 
+def declared_paths(task: Task) -> frozenset[str]:
+    """Paths in ``files/`` a task's deterministic checks name (its declared outputs)."""
+    paths = set()
+    for criterion in task.acceptance_criteria:
+        path = getattr(criterion.check, "path", None)
+        if isinstance(path, str):
+            paths.add(path)
+    return frozenset(paths)
+
+
+def _path_conflict(
+    paths: frozenset[str], taken: dict[str, frozenset[str]]
+) -> tuple[str, str] | None:
+    """``(task_id, path)`` of the first running task whose declared paths overlap."""
+    for tid, theirs in sorted(taken.items()):
+        for mine in sorted(paths):
+            for other in sorted(theirs):
+                if paths_overlap(mine, other):
+                    return tid, mine
+    return None
+
+
 class Orchestrator:
     """Runs a planned project: worker → verifier → retry/escalate, state saved each step."""
 
@@ -258,6 +284,8 @@ class Orchestrator:
         first_stop: _Stop | None = None
         error: BaseException | None = None
         running: dict[Future[int], str] = {}
+        claims = PathClaims()  # paths written by the tasks running right now
+        deferred: set[str] = set()  # tasks already reported as waiting for a path
         pool = ThreadPoolExecutor(
             max_workers=self._settings.max_parallel, thread_name_prefix="automa-task"
         )
@@ -268,9 +296,23 @@ class Orchestrator:
                     self._block_dependents_of_failed(project_id, plan, states)
                     states = store.task_states(project_id)
                     busy = set(running.values())
-                    free = self._settings.max_parallel - len(running)
-                    for task in self._ready_tasks(plan, states, busy)[: max(free, 0)]:
-                        running[pool.submit(self._drive, project_id, plan, task, halt)] = task.id
+                    taken = {tid: declared_paths(plan.task(tid)) for tid in busy}
+                    for task in self._ready_tasks(plan, states, busy):
+                        if len(running) >= self._settings.max_parallel:
+                            break
+                        other = _path_conflict(declared_paths(task), taken)
+                        if other is not None:
+                            if task.id not in deferred:
+                                deferred.add(task.id)
+                                self._emit(
+                                    project_id,
+                                    "orchestrator.deferred",
+                                    {"task": task.id, "waits_for": other[0], "path": other[1]},
+                                )
+                            continue
+                        fut = pool.submit(self._drive, project_id, plan, task, halt, claims)
+                        running[fut] = task.id
+                        taken[task.id] = declared_paths(task)
                         self._emit(project_id, "orchestrator.scheduled", {"task": task.id})
                     if not running:
                         return self._finish(project_id, plan, states, attempts_run)
@@ -305,18 +347,33 @@ class Orchestrator:
             raise OrchestratorError("parallel run ended without a stop or an error")
         return self._pause(project_id, plan, first_stop, attempts_run)
 
-    def _drive(self, project_id: str, plan: Plan, task: Task, halt: threading.Event) -> int:
-        """Advance one task (in a pool thread) until it is finished or the run halts."""
+    def _drive(
+        self,
+        project_id: str,
+        plan: Plan,
+        task: Task,
+        halt: threading.Event,
+        claims: PathClaims | None = None,
+    ) -> int:
+        """Advance one task (in a pool thread) until it is finished or the run halts.
+
+        Paths the task claimed are released when it stops being driven, whatever
+        the reason, so a later task may write them (as in a sequential run).
+        """
         attempts = 0
-        # Each step stores a result, a verdict or a terminal state (as in ``run``).
-        for _ in range(2 * self._settings.max_attempts + 2):
-            if halt.is_set():
-                return attempts
-            state = self._store.task_states(project_id)[task.id]
-            if state.status not in _UNFINISHED:
-                return attempts
-            attempts += self._step(project_id, plan, task, state)
-        raise OrchestratorError(f"task {task.id!r} made no progress (step cap reached)")
+        try:
+            # Each step stores a result, a verdict or a terminal state (as in ``run``).
+            for _ in range(2 * self._settings.max_attempts + 2):
+                if halt.is_set():
+                    return attempts
+                state = self._store.task_states(project_id)[task.id]
+                if state.status not in _UNFINISHED:
+                    return attempts
+                attempts += self._step(project_id, plan, task, state, claims=claims)
+            raise OrchestratorError(f"task {task.id!r} made no progress (step cap reached)")
+        finally:
+            if claims is not None:
+                claims.release(task.id)
 
     @staticmethod
     def _ready_tasks(plan: Plan, states: dict[str, TaskState], busy: set[str]) -> list[Task]:
@@ -362,7 +419,15 @@ class Orchestrator:
 
     # -- one step ----------------------------------------------------------
 
-    def _step(self, project_id: str, plan: Plan, task: Task, state: TaskState) -> int:
+    def _step(
+        self,
+        project_id: str,
+        plan: Plan,
+        task: Task,
+        state: TaskState,
+        *,
+        claims: PathClaims | None = None,
+    ) -> int:
         """Advance ``task`` by one attempt (or one re-verification). Returns attempts started."""
         store = self._store
         s = self._settings
@@ -392,7 +457,7 @@ class Orchestrator:
             "orchestrator.attempt",
             {"task": task.id, "attempt": attempt, "tier": tier.value},
         )
-        executor = self._executor(project_id, role.policy(), task_id=task.id)
+        executor = self._executor(project_id, role.policy(), task_id=task.id, claims=claims)
         try:
             result = self._worker.run(
                 task,
@@ -581,7 +646,12 @@ class Orchestrator:
         return tools
 
     def _executor(
-        self, project_id: str, policy: PermissionPolicy, *, task_id: str | None = None
+        self,
+        project_id: str,
+        policy: PermissionPolicy,
+        *,
+        task_id: str | None = None,
+        claims: PathClaims | None = None,
     ) -> ToolExecutor:
         workspace = Workspace(self._store.files_dir(project_id))
         return ToolExecutor(
@@ -592,6 +662,7 @@ class Orchestrator:
             project_id,
             approvals=self._store.approvals(project_id) if task_id is not None else None,
             task_id=task_id,
+            claims=claims,
         )
 
     def _save_state(

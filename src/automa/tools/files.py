@@ -60,6 +60,9 @@ class WriteFile(Tool):
         n = workspace.write_text(args.path, args.content)
         return f"wrote {n} bytes to {args.path}"
 
+    def writes(self, args: ToolArgs) -> tuple[str, ...]:
+        return _written(args)
+
 
 class ListDirArgs(ToolArgs):
     path: str = Field(
@@ -122,6 +125,19 @@ class DeleteFile(Tool):
             raise TypeError("arguments were not validated by the executor")
         n = workspace.delete_file(args.path)
         return f"deleted {args.path} ({n} bytes)"
+
+    def writes(self, args: ToolArgs) -> tuple[str, ...]:
+        return _written(args)
+
+
+def _written(args: ToolArgs) -> tuple[str, ...]:
+    path = getattr(args, "path", None)
+    if not isinstance(path, str):
+        return ()
+    try:
+        return (normalize(path),)
+    except WorkspaceError:
+        return ()  # the tool itself rejects the path
 
 
 FILE_TOOLS: tuple[type[Tool], ...] = (ReadFile, WriteFile, ListDir, DeleteFile)

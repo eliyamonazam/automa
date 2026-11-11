@@ -94,6 +94,14 @@ class Tool(ABC):
     def run(self, args: ToolArgs, workspace: Workspace) -> str:
         """Do the work and return text for the model; raise ``ToolError`` on failure."""
 
+    def writes(self, args: ToolArgs) -> tuple[str, ...]:
+        """Workspace paths this call creates, replaces or deletes (default: none).
+
+        Used to keep parallel tasks from writing the same file (``PathClaims``, D37).
+        A path that is not valid may be left out: the call then fails on its own.
+        """
+        return ()
+
     def audit(self, args: ToolArgs) -> dict[str, str]:
         """Non-sensitive fields to record in the ``tool.call`` event (default: ``path``)."""
         path = getattr(args, "path", None)

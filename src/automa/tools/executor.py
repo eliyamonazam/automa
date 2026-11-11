@@ -6,8 +6,9 @@ For every call it (1) finds the tool, (2) asks the ``PermissionPolicy``,
 (unknown tool, bad arguments, denied, tool error) come back as a failed
 ``ToolResult``; an external or irreversible action goes through the Approval Gate (see
 ``_gate``): without a matching decision it records a request and raises
-``ApprovalRequired`` so the orchestrator can pause the project. Event-log
-failures fail closed.
+``ApprovalRequired`` so the orchestrator can pause the project. With
+``PathClaims`` (parallel runs, D37) a call that writes a path another running task
+has claimed fails before the gate and before it runs. Event-log failures fail closed.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from pydantic import ValidationError
 from automa.events import Event, EventSink
 from automa.tools.approvals import ApprovalError, ApprovalStatus, ApprovalStore
 from automa.tools.base import MAX_TOOL_OUTPUT_CHARS, Tool, ToolError, ToolResult
+from automa.tools.claims import PathClaims
 from automa.tools.policy import Decision, PermissionPolicy, PolicyDecision
 from automa.tools.workspace import MAX_WRITE_BYTES, Workspace
 
@@ -66,6 +68,7 @@ class ToolExecutor:
         *,
         approvals: ApprovalStore | None = None,
         task_id: str | None = None,
+        claims: PathClaims | None = None,
     ) -> None:
         if not isinstance(policy, PermissionPolicy):
             raise TypeError("policy must be a PermissionPolicy")
@@ -80,6 +83,11 @@ class ToolExecutor:
                 raise TypeError("approvals must be an ApprovalStore")
             if approvals.project_id != project_id:
                 raise ValueError("approvals belong to another project")
+        if claims is not None:
+            if not isinstance(claims, PathClaims):
+                raise TypeError("claims must be PathClaims")
+            if not task_id:
+                raise ValueError("claims need a task_id (the owner of written paths)")
         registry: dict[str, Tool] = {}
         for tool in tools:
             if not isinstance(tool, Tool):
@@ -94,6 +102,7 @@ class ToolExecutor:
         self._project_id = project_id
         self._approvals = approvals
         self._task_id = task_id
+        self._claims = claims
 
     @property
     def policy(self) -> PermissionPolicy:
@@ -170,6 +179,10 @@ class ToolExecutor:
         except ToolError as e:
             return self._finish(tool, None, self._fail(tool.name, str(e)))
 
+        conflict = self._claim(tool, args)
+        if conflict is not None:
+            return self._finish(tool, args, conflict)
+
         if needs_approval:
             rejected = self._gate(tool, args, decision.reason)
             if rejected is not None:
@@ -188,6 +201,30 @@ class ToolExecutor:
                 content = content[:MAX_TOOL_OUTPUT_CHARS] + "\n[... truncated]"
             result = ToolResult(tool=tool.name, ok=True, content=content)
         return self._finish(tool, args, result)
+
+    def _claim(self, tool: Tool, args: Any) -> ToolResult | None:
+        """Claim the paths this call writes; a failed result if another task holds one."""
+        if self._claims is None or self._task_id is None:
+            return None
+        paths = tool.writes(args)
+        if not paths:
+            return None
+        try:
+            conflict = self._claims.claim(paths, self._task_id)
+        except ToolError as e:
+            return self._fail(tool.name, str(e))
+        if conflict is None:
+            return None
+        path, other = conflict
+        self._emit(
+            "tool.path_conflict",
+            {"tool": tool.name, "path": _short(path, 300), "owner": other},
+        )
+        return self._fail(
+            tool.name,
+            f"{path!r} is being written by the parallel task {other!r}; "
+            "write your output to a different path (do not retry this one)",
+        )
 
     @staticmethod
     def _gate_data(tool: Tool) -> dict[str, Any]:

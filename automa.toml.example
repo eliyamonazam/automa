@@ -46,7 +46,9 @@ mode = "local"
 # How automa run schedules tasks. max_parallel: independent tasks (all dependencies
 # passed) driven at the same time, 1..8; 1 = one after another (default).
 # `automa run <id> --parallel N` overrides it for one run. Spending is still capped
-# by [limits] for all tasks together. Parallel tasks share the project's files/, and
-# concurrent writes to the same path are NOT prevented yet.
+# by [limits] for all tasks together. Parallel tasks share the project's files/:
+# tasks whose checks name the same path run one after the other, and a file written
+# by one running task cannot be written by another (write_file/delete_file only;
+# files written by run_command are NOT checked).
 [orchestrator]
 max_parallel = 1
