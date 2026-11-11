@@ -16,6 +16,14 @@ One ``run(project_id)`` drives a planned project until it is ``done``, ``failed`
 State is saved after every step (``tasks/<id>/state.json`` + write-once history), so
 a run can be stopped at any point and resumed by calling ``run`` again.
 
+Parallel mode (``max_parallel`` > 1, D35): up to ``max_parallel`` *ready* tasks (all
+dependencies passed) are driven at once, each in its own thread, by exactly the
+same steps as above. Scheduling, blocking and project status stay in the calling
+thread. The first stop (budget, approval, …) or unexpected error stops scheduling;
+tasks already running finish their current step (never interrupted mid-call), then
+the project is paused with the first stop. Spending stays bounded by the shared
+``BudgetGuard``: every concurrent call reserves its worst case before it runs.
+
 What the orchestrator never does:
 
 - mark a task passed by itself: only a stored ``pass`` verdict can (enforced by the
@@ -30,7 +38,9 @@ What the orchestrator never does:
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Sequence
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -68,6 +78,9 @@ TIER_ORDER: tuple[Tier, ...] = (Tier.SMALL, Tier.MEDIUM, Tier.LARGE)
 
 MAX_ERROR_CHARS = 2_000
 
+# Upper bound of concurrently driven tasks (each holds model calls in flight).
+MAX_PARALLEL = 8
+
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
@@ -90,6 +103,8 @@ class OrchestratorSettings(BaseModel):
     max_attempts: int = Field(default=4, ge=1, le=MAX_TASK_ATTEMPTS)
     # Consecutive rejections at one tier before moving to the next configured tier.
     escalate_after: int = Field(default=2, ge=1, le=MAX_TASK_ATTEMPTS)
+    # Ready tasks driven at the same time; 1 keeps the sequential loop (default).
+    max_parallel: int = Field(default=1, ge=1, le=MAX_PARALLEL)
 
 
 class StopReason(StrEnum):
@@ -202,7 +217,14 @@ class Orchestrator:
             raise OrchestratorError(f"project {project_id!r} has no plan yet")
         plan = store.load_plan(project_id)
         self._set_project(project_id, ProjectStatus.RUNNING)
-        self._emit(project_id, "orchestrator.started", {"plan_version": plan.version})
+        self._emit(
+            project_id,
+            "orchestrator.started",
+            {"plan_version": plan.version}
+            | ({"max_parallel": self._settings.max_parallel} if self._parallel else {}),
+        )
+        if self._parallel:
+            return self._run_parallel(project_id, plan)
 
         attempts_run = 0
         # Every iteration stores a result, a verdict or a terminal state, so the loop
@@ -219,31 +241,127 @@ class Orchestrator:
                 attempts_run += self._step(project_id, plan, task, states[task.id])
             raise OrchestratorError("orchestrator made no progress (iteration cap reached)")
         except _Stop as stop:
-            self._set_project(project_id, ProjectStatus.PAUSED)
-            report = self._report(
-                project_id,
-                plan,
-                ProjectStatus.PAUSED,
-                stop.reason,
-                detail=stop.detail,
-                task_id=stop.task_id,
-                attempts_run=attempts_run,
-                approval_id=stop.approval_id,
-            )
-            self._emit(
-                project_id,
-                "orchestrator.paused",
-                {"reason": stop.reason.value, "task": stop.task_id}
-                | ({"approval": stop.approval_id} if stop.approval_id else {}),
-            )
-            return report
+            return self._pause(project_id, plan, stop, attempts_run)
         except BaseException:
             # Unexpected (bug, interrupt): never leave the project marked running.
-            try:
-                self._set_project(project_id, ProjectStatus.PAUSED)
-            except Exception:  # noqa: BLE001, S110 - keep the original error
-                pass
+            self._pause_quietly(project_id)
             raise
+
+    # -- parallel mode -----------------------------------------------------
+
+    @property
+    def _parallel(self) -> bool:
+        return self._settings.max_parallel > 1
+
+    def _run_parallel(self, project_id: str, plan: Plan) -> RunReport:
+        """Like the sequential loop, but up to ``max_parallel`` ready tasks at once."""
+        store = self._store
+        halt = threading.Event()  # set → running tasks stop after their current step
+        attempts_run = 0
+        first_stop: _Stop | None = None
+        error: BaseException | None = None
+        running: dict[Future[int], str] = {}
+        pool = ThreadPoolExecutor(
+            max_workers=self._settings.max_parallel, thread_name_prefix="automa-task"
+        )
+        try:
+            while True:
+                if first_stop is None and error is None:
+                    states = store.task_states(project_id)
+                    self._block_dependents_of_failed(project_id, plan, states)
+                    states = store.task_states(project_id)
+                    busy = set(running.values())
+                    free = self._settings.max_parallel - len(running)
+                    for task in self._ready_tasks(plan, states, busy)[: max(free, 0)]:
+                        running[pool.submit(self._drive, project_id, plan, task, halt)] = task.id
+                        self._emit(project_id, "orchestrator.scheduled", {"task": task.id})
+                    if not running:
+                        return self._finish(project_id, plan, states, attempts_run)
+                if not running:
+                    break
+                done, _ = wait(running, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    running.pop(fut)
+                    try:
+                        attempts_run += fut.result()
+                    except _Stop as stop:
+                        halt.set()
+                        if first_stop is None:
+                            first_stop = stop
+                        elif stop is not first_stop:
+                            self._emit_stop(project_id, stop, "orchestrator.task_stopped")
+                    except BaseException as e:  # noqa: BLE001 - re-raised after draining
+                        halt.set()
+                        if error is None:
+                            error = e
+        except BaseException:
+            # Interrupt or bug in the scheduler itself: let running steps finish, pause.
+            halt.set()
+            pool.shutdown(wait=True, cancel_futures=True)
+            self._pause_quietly(project_id)
+            raise
+        pool.shutdown(wait=True)
+        if error is not None:
+            self._pause_quietly(project_id)
+            raise error
+        if first_stop is None:  # pragma: no cover - the loop only breaks after a stop
+            raise OrchestratorError("parallel run ended without a stop or an error")
+        return self._pause(project_id, plan, first_stop, attempts_run)
+
+    def _drive(self, project_id: str, plan: Plan, task: Task, halt: threading.Event) -> int:
+        """Advance one task (in a pool thread) until it is finished or the run halts."""
+        attempts = 0
+        # Each step stores a result, a verdict or a terminal state (as in ``run``).
+        for _ in range(2 * self._settings.max_attempts + 2):
+            if halt.is_set():
+                return attempts
+            state = self._store.task_states(project_id)[task.id]
+            if state.status not in _UNFINISHED:
+                return attempts
+            attempts += self._step(project_id, plan, task, state)
+        raise OrchestratorError(f"task {task.id!r} made no progress (step cap reached)")
+
+    @staticmethod
+    def _ready_tasks(plan: Plan, states: dict[str, TaskState], busy: set[str]) -> list[Task]:
+        passed = {tid for tid, s in states.items() if s.status is TaskStatus.PASSED}
+        return [
+            t
+            for t in plan.topological_order()
+            if t.id not in busy
+            and states[t.id].status in _UNFINISHED
+            and all(d in passed for d in t.depends_on)
+        ]
+
+    # -- stopping ----------------------------------------------------------
+
+    def _pause(self, project_id: str, plan: Plan, stop: _Stop, attempts_run: int) -> RunReport:
+        self._set_project(project_id, ProjectStatus.PAUSED)
+        report = self._report(
+            project_id,
+            plan,
+            ProjectStatus.PAUSED,
+            stop.reason,
+            detail=stop.detail,
+            task_id=stop.task_id,
+            attempts_run=attempts_run,
+            approval_id=stop.approval_id,
+        )
+        self._emit_stop(project_id, stop, "orchestrator.paused")
+        return report
+
+    def _emit_stop(self, project_id: str, stop: _Stop, type_: str) -> None:
+        self._emit(
+            project_id,
+            type_,
+            {"reason": stop.reason.value, "task": stop.task_id}
+            | ({"approval": stop.approval_id} if stop.approval_id else {}),
+        )
+
+    def _pause_quietly(self, project_id: str) -> None:
+        try:
+            self._set_project(project_id, ProjectStatus.PAUSED)
+        except Exception:  # noqa: BLE001, S110 - keep the original error
+            pass
 
     # -- one step ----------------------------------------------------------
 

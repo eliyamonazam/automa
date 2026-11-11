@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections import deque
 from collections.abc import Callable, Iterable
 
@@ -37,22 +38,28 @@ class FakeProvider:
         self._script: deque[FakeScript] = deque(script)
         self._default = default
         self.requests: list[ChatRequest] = []
+        # Recording and popping are atomic so concurrent callers (parallel tasks) each
+        # get exactly one script item; callables run outside the lock (they may block).
+        self._lock = threading.Lock()
 
     def push(self, *items: FakeScript) -> None:
-        self._script.extend(items)
+        with self._lock:
+            self._script.extend(items)
 
     @property
     def remaining(self) -> int:
-        return len(self._script)
+        with self._lock:
+            return len(self._script)
 
     def complete(self, request: ChatRequest) -> ChatResponse:
-        self.requests.append(request)
-        if self._script:
-            item = self._script.popleft()
-        elif self._default is not None:
-            item = self._default
-        else:
-            raise ProviderError("FakeProvider script exhausted")
+        with self._lock:
+            self.requests.append(request)
+            if self._script:
+                item = self._script.popleft()
+            elif self._default is not None:
+                item = self._default
+            else:
+                raise ProviderError("FakeProvider script exhausted")
         if isinstance(item, BaseException):
             raise item
         if callable(item) and not isinstance(item, ChatResponse):

@@ -59,12 +59,27 @@ class MemoryEventSink:
         return [e for e in self.events if e.type == type_]
 
 
+# One lock per log file, shared by every ``JsonlEventLog`` on that path in this
+# process, so lines from concurrent writers (parallel tasks, D35) never interleave.
+_PATH_LOCKS: dict[str, threading.Lock] = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _path_lock(path: Path) -> threading.Lock:
+    key = str(path.absolute())
+    with _PATH_LOCKS_GUARD:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = _PATH_LOCKS[key] = threading.Lock()
+        return lock
+
+
 class JsonlEventLog:
     """Appends events as JSON lines to ``path`` (created with its parent dirs)."""
 
     def __init__(self, path: str | Path):
         self._path = Path(path)
-        self._lock = threading.Lock()
+        self._lock = _path_lock(self._path)
 
     @property
     def path(self) -> Path:
