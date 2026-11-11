@@ -56,7 +56,13 @@ from automa.benchmarks import (
 )
 from automa.budget.guard import BudgetError, BudgetExceeded, BudgetGuard
 from automa.budget.ledger import CostLedger, nusd_to_usd
-from automa.config import AutomaConfig, ConfigError, load_config
+from automa.config import (
+    MAX_PARALLEL,
+    AutomaConfig,
+    ConfigError,
+    describe_parallel,
+    load_config,
+)
 from automa.events import Event
 from automa.llm.factory import provider_from_config
 from automa.llm.gateway import LLMGateway
@@ -285,6 +291,25 @@ def _clarify(agent: ExecutiveAgent, store: ProjectStore, project: Project) -> li
     return items
 
 
+def _run_settings(
+    config: AutomaConfig, *, max_attempts: int | None, parallel: int | None
+) -> OrchestratorSettings:
+    """Orchestrator settings for ``automa run``: CLI options override automa.toml (D36)."""
+    values: dict[str, int] = {"max_parallel": config.orchestrator.max_parallel}
+    for option, field, value in (
+        ("--max-attempts", "max_attempts", max_attempts),
+        ("--parallel", "max_parallel", parallel),
+    ):
+        if value is None:
+            continue
+        try:
+            OrchestratorSettings.model_validate({field: value})
+        except ValidationError as e:
+            raise _fail(f"invalid {option}: {e.errors()[0]['msg']}", EXIT_USER) from None
+        values[field] = value
+    return OrchestratorSettings.model_validate(values)
+
+
 @app.command()
 def run(
     project_id: Annotated[str, typer.Argument(help="Project to run (or resume).")],
@@ -299,6 +324,14 @@ def run(
     max_attempts: Annotated[
         int | None,
         typer.Option("--max-attempts", help="Attempts per task before it fails (1-50)."),
+    ] = None,
+    parallel: Annotated[
+        int | None,
+        typer.Option(
+            "--parallel",
+            help=f"Independent tasks run at the same time (1-{MAX_PARALLEL}); "
+            "overrides [orchestrator] max_parallel in automa.toml (default 1).",
+        ),
     ] = None,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Path to automa.toml.")
@@ -326,14 +359,7 @@ def run(
             "or was killed, run again with --force.",
             EXIT_USER,
         )
-    try:
-        settings = (
-            OrchestratorSettings()
-            if max_attempts is None
-            else OrchestratorSettings(max_attempts=max_attempts)
-        )
-    except ValidationError as e:
-        raise _fail(f"invalid --max-attempts: {e.errors()[0]['msg']}", EXIT_USER) from None
+    settings = _run_settings(config, max_attempts=max_attempts, parallel=parallel)
     try:
         # Validate what every model call needs before touching the project.
         provider = make_provider(config)
@@ -344,6 +370,7 @@ def run(
 
     typer.echo(f"project: {pid} ({project.status.value})")
     typer.echo(f"sandbox: {config.sandbox.describe()}")
+    typer.echo(f"parallel: {describe_parallel(settings.max_parallel)}")
     events = store.events(pid)
     with CostLedger.for_workspace(config.workspace) as ledger:
         spent_before = ledger.spent_nusd(project_id=pid)
@@ -475,6 +502,7 @@ def _status_all(store: ProjectStore, config: AutomaConfig, as_json: bool) -> Non
             f"{p.id}  {p.status.value:<8}  {_usd(spent.get(p.id, 0))}  {_preview(p.goal)}{waiting}"
         )
     typer.echo(f"sandbox: {config.sandbox.describe()}")
+    typer.echo(f"parallel: {config.orchestrator.describe()}")
 
 
 def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_json: bool) -> None:
@@ -496,6 +524,7 @@ def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_j
             "plan": plan.model_dump(mode="json") if plan is not None else None,
             "pending_approvals": [_approval_json(store, r) for r in pending],
             "sandbox": _sandbox_json(config),
+            "max_parallel": config.orchestrator.max_parallel,
         }
         typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
         return
@@ -506,6 +535,7 @@ def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_j
     typer.echo(f"updated: {project.updated_at.isoformat()}")
     typer.echo(f"cost: {_usd(spent)}")
     typer.echo(f"sandbox: {config.sandbox.describe()}")
+    typer.echo(f"parallel: {config.orchestrator.describe()}")
     if pending:
         typer.echo(f"pending approvals: {len(pending)}")
         for r in pending:

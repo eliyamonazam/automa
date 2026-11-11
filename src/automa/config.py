@@ -3,7 +3,8 @@
 Sources, from lowest to highest precedence:
 
 1. Built-in defaults (conservative, finite budget limits).
-2. ``automa.toml`` (non-secret settings: tiers, prices, limits, workspace).
+2. ``automa.toml`` (non-secret settings: tiers, prices, limits, workspace, sandbox,
+   orchestrator).
 3. ``.env`` file in the working directory.
 4. Process environment variables.
 
@@ -142,6 +143,35 @@ class SandboxConfig(_Strict):
         )
 
 
+# Upper bound of concurrently driven tasks (each holds model calls in flight).
+MAX_PARALLEL = 8
+
+
+class OrchestratorConfig(_Strict):
+    """How ``automa run`` schedules tasks (``[orchestrator]`` in automa.toml; D36).
+
+    Spending is bounded by the BudgetGuard whatever this says; with a tight cap,
+    parallel runs effectively become sequential.
+    """
+
+    # Ready tasks driven at the same time; 1 keeps the sequential loop (default).
+    max_parallel: int = Field(default=1, ge=1, le=MAX_PARALLEL)
+
+    def describe(self) -> str:
+        """One-line description for ``automa run`` / ``automa status``."""
+        return describe_parallel(self.max_parallel)
+
+
+def describe_parallel(max_parallel: int) -> str:
+    """Human description of a ``max_parallel`` value."""
+    if max_parallel == 1:
+        return "1 (sequential)"
+    return (
+        f"up to {max_parallel} tasks at a time (they share files/; "
+        "concurrent writes to the same path are not prevented yet)"
+    )
+
+
 class AutomaConfig(_Strict):
     """Fully resolved, validated configuration."""
 
@@ -152,6 +182,7 @@ class AutomaConfig(_Strict):
     limits: BudgetLimits = Field(default_factory=BudgetLimits)
     workspace: Path = Path("workspace")
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
 
     @model_validator(mode="after")
     def _check(self) -> AutomaConfig:

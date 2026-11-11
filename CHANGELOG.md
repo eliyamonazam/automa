@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-11 — M6: اجرای موازی وظایف مستقل (پیکربندی و CLI)
+- **انجام‌شده:** بخش `[orchestrator]` با `max_parallel` (پیش‌فرض ۱، سقف ۸) در `automa.toml` و `automa.toml.example`؛ گزینه `automa run <id> --parallel N` که برای همون اجرا جایگزین مقدار فایل می‌شه. مقدار نامعتبر (گزینه یا فایل) قبل از هر فراخوانی و ساخت Ledger رد می‌شه. `automa run` خط `parallel: …` چاپ می‌کنه؛ `automa status` (متن، و `max_parallel` در JSON) مقدار رو نشون می‌ده؛ برای بیشتر از ۱ هشدار تداخل فایل. `MAX_PARALLEL` به `config.py` منتقل شد.
+- **فایل‌های اصلی:** `src/automa/config.py`، `src/automa/cli.py`، `src/automa/orchestrator.py`، `automa.toml.example`، `tests/test_parallel_config.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D36).
+- **تست‌ها:** `pytest` ← ۱۳۸۶ تست سبز، ۲ رد شده (Docker واقعی)؛ ۲۹ تست جدید با `FakeProvider`: پیش‌فرض ترتیبی، بارگذاری و رد مقادیر نامعتبر/کلید ناشناخته/کلید شبیه راز، یکی بودن مرزها با `OrchestratorSettings`، اجرای واقعاً هم‌زمان از فایل و از `--parallel` (Barrier)، جایگزینی گزینه روی فایل در هر دو جهت، ترکیب با `--max-attempts`، رد گزینه/فایل نامعتبر بدون هیچ فراخوانی، **سقف بودجه در حالت موازی از CLI** و نمایش در `status`. `ruff check`، `ruff format --check` و `mypy` روی فایل‌های تغییرکرده تمیز. Guard و Policy دست نخوردن.
+- **مشکلات:** تداخل نوشتن وظایف موازی در `files/` هنوز کنترل نمی‌شه (فقط هشدار).
+- **قدم بعدی:** اجرای موازی (تداخل فایل‌ها): جلوگیری از نوشتن هم‌زمان دو وظیفه موازی روی یک فایل.
+
 ## 2026-11-11 — M6: اجرای موازی وظایف مستقل (هسته)
 - **انجام‌شده:** مورد «اجرای موازی وظایف مستقل» به سه بخش شکسته شد (هسته، پیکربندی و CLI، تداخل فایل‌ها) و هسته انجام شد. `OrchestratorSettings.max_parallel` (پیش‌فرض ۱، سقف `MAX_PARALLEL` = ۸): با ۱ همون حلقه ترتیبی قبلی؛ با بیشتر، `_run_parallel` وظایف آماده رو با `ThreadPoolExecutor` هم‌زمان جلو می‌بره (`_drive` همون `_step` رو تکرار می‌کنه). زمان‌بندی، بلاک کردن وابسته‌ها و وضعیت پروژه فقط در thread اصلی. اولین توقف یا خطا زمان‌بندی رو تموم می‌کنه، وظایف در حال اجرا فقط قدم فعلی رو تموم می‌کنن، پروژه با توقف اول `paused` می‌شه؛ رویدادهای جدید `orchestrator.scheduled` و `orchestrator.task_stopped`، و `max_parallel` در `orchestrator.started`. `JsonlEventLog` قفل مشترک بر اساس مسیر فایل گرفت و `FakeProvider` برای thread امن شد.
 - **فایل‌های اصلی:** `src/automa/orchestrator.py`، `src/automa/events.py`، `src/automa/llm/fake.py`، `tests/test_parallel.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D35).

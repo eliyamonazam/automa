@@ -50,7 +50,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from automa.agents.verifier import VerificationFailed, VerifierAgent, verifier_policy
 from automa.agents.worker import WorkerAgent
 from automa.budget.guard import BudgetError
-from automa.config import AutomaConfig, ConfigError, SandboxMode, Tier
+from automa.config import MAX_PARALLEL, AutomaConfig, ConfigError, SandboxMode, Tier
 from automa.events import Event
 from automa.llm.provider import ProviderError
 from automa.plan.models import (
@@ -77,9 +77,6 @@ Clock = Callable[[], datetime]
 TIER_ORDER: tuple[Tier, ...] = (Tier.SMALL, Tier.MEDIUM, Tier.LARGE)
 
 MAX_ERROR_CHARS = 2_000
-
-# Upper bound of concurrently driven tasks (each holds model calls in flight).
-MAX_PARALLEL = 8
 
 
 def _utc_now() -> datetime:

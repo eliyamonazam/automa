@@ -42,3 +42,11 @@ mode = "local"
 # memory_mb = 512        # 16..8192
 # cpus = 1.0             # >0..8
 # pids_limit = 128       # 8..4096
+
+# How automa run schedules tasks. max_parallel: independent tasks (all dependencies
+# passed) driven at the same time, 1..8; 1 = one after another (default).
+# `automa run <id> --parallel N` overrides it for one run. Spending is still capped
+# by [limits] for all tasks together. Parallel tasks share the project's files/, and
+# concurrent writes to the same path are NOT prevented yet.
+[orchestrator]
+max_parallel = 1

@@ -34,6 +34,7 @@ cp automa.toml.example automa.toml
 pip install -e .          # یا با Docker (پایین‌تر)
 automa new "ایده من ..."   # سؤال‌ها + ساخت plan.json
 automa run <project-id>    # اجرا/ادامه: Worker ← Verifier ← اصلاح
+automa run <project-id> --parallel 2   # وظایف مستقل هم‌زمان (یا [orchestrator] max_parallel در automa.toml)
 automa status             # فهرست پروژه‌ها، هزینه و برنامه
 automa approvals [<id>]   # درخواست‌های تأیید در انتظار با آرگومان‌های دقیق (فقط‌خوندنی؛ --all، --json)
 automa approve <id> <apr-id> [--note ...]  # تأیید یک‌باره (بعد از نمایش و پرسیدن؛ --yes)
