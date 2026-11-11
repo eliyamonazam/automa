@@ -36,6 +36,8 @@ automa new "ایده من ..."   # سؤال‌ها + ساخت plan.json
 automa run <project-id>    # اجرا/ادامه: Worker ← Verifier ← اصلاح
 automa run <project-id> --parallel 2   # وظایف مستقل هم‌زمان (یا [orchestrator] max_parallel در automa.toml)
 automa status             # فهرست پروژه‌ها، هزینه و برنامه
+automa workflow save <id>  # ذخیره برنامه پروژه تموم‌شده (همه وظایف قبول) به‌عنوان قالب Workflow (--json)
+automa workflows           # فهرست قالب‌های Workflow (فقط‌خوندنی؛ --json)
 automa approvals [<id>]   # درخواست‌های تأیید در انتظار با آرگومان‌های دقیق (فقط‌خوندنی؛ --all، --json)
 automa approve <id> <apr-id> [--note ...]  # تأیید یک‌باره (بعد از نمایش و پرسیدن؛ --yes)
 automa reject <id> <apr-id> [--note ...]   # رد؛ یادداشت به مدل می‌رسه

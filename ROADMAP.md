@@ -54,7 +54,7 @@
 - [x] اجرای موازی وظایف مستقل (پیکربندی و CLI): `max_parallel` در `automa.toml` (بخش `[orchestrator]`) و `automa run --parallel N`، نمایش در خروجی `run`/`status`
 - [x] اجرای موازی وظایف مستقل (تداخل فایل‌ها): وظایفی که چک‌هاشون مسیر هم‌پوشان دارن پشت سر هم زمان‌بندی می‌شن، و `write_file`/`delete_file` روی مسیری که وظیفه موازی در حال اجرای دیگه نوشته رد می‌شه (`PathClaims`، D37)
 - [x] قالب Workflow (هسته): `WorkflowStore` در `<workspace>/workflows/` — ذخیره یک‌باره برنامه پروژه `done` که همه وظایفش `passed`ن (با آمار تلاش و هزینه)، و پیشنهاد قالب‌های مشابه برای هدف جدید با شباهت قطعی واژه‌ها (بدون مدل و هزینه، فارسی و انگلیسی)؛ شکست بسته روی فایل خراب/symlink (D38)
-- [ ] قالب Workflow (CLI): `automa workflow save <project>`، `automa workflows [--json]`، و نمایش قالب‌های مشابه در `automa new` (فقط پیشنهاد)
+- [x] قالب Workflow (CLI): `automa workflow save <project> [--json]`، `automa workflows [--json]`، و نمایش قالب‌های مشابه در `automa new` (فقط پیشنهاد؛ بدون کلید و بدون فراخوانی مدل، D39)
 - [ ] قالب Workflow (استفاده): `automa new --workflow <id>` برنامه قالب رو (بعد از اعتبارسنجی با نقش‌های فعلی) بدون فراخوانی Executive برای پروژه جدید ذخیره می‌کنه
 - [ ] امکان تعریف/ویرایش Workflow توسط کاربر
 

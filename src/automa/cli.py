@@ -1,10 +1,13 @@
 """Command-line interface: ``automa new``, ``run``, ``status``, ``approvals``,
-``approve``/``reject`` and ``bench list|run|report``.
+``approve``/``reject``, ``workflow save``/``workflows`` and ``bench list|run|report``.
 
 Every model call goes through ``LLMGateway`` + ``BudgetGuard`` (never a bare provider).
 ``status`` and ``approvals`` are read-only: they need no API key, make no model call
 and create no files. ``approve``/``reject`` only record a decision on one pending
 Approval Gate request; the action itself runs (at most once) on the next ``automa run``.
+``workflow save`` copies the plan of a finished project into a workflow template and
+``workflows`` lists them; neither needs an API key or makes a model call. ``automa new``
+prints similar templates as a suggestion only (D39).
 
 Exit codes (stable, for scripts):
 
@@ -84,6 +87,7 @@ from automa.tools.approvals import (
     ApprovalStatus,
     ApprovalStore,
 )
+from automa.workflows import WorkflowError, WorkflowMatch, WorkflowStore, WorkflowTemplate
 
 EXIT_OK = 0
 EXIT_USER = 1
@@ -119,6 +123,11 @@ _ALLOWED_FORMAT_CHARS = frozenset({"\u200c", "\u200d"})
 app = typer.Typer(help="Automa command-line interface.", no_args_is_help=True)
 bench_app = typer.Typer(help="Benchmark suite: list and run sample goals.", no_args_is_help=True)
 app.add_typer(bench_app, name="bench")
+workflow_app = typer.Typer(
+    help="Workflow templates: plans of finished projects, saved for reuse.",
+    no_args_is_help=True,
+)
+app.add_typer(workflow_app, name="workflow")
 
 DEFAULT_SUITE_DIR = Path("benchmarks")
 RESULTS_DIRNAME = "results"
@@ -242,6 +251,7 @@ def new(
         raise _fail(str(e), EXIT_USER) from None
     pid = project.id
     typer.echo(f"project: {pid}")
+    _print_suggestions(config, goal)
 
     events = store.events(pid)
     with CostLedger.for_workspace(config.workspace) as ledger:
@@ -268,6 +278,34 @@ def new(
     for line in _plan_lines(plan):
         typer.echo(line)
     typer.echo(f"status: {store.load(pid).status.value}")
+
+
+def _print_suggestions(config: AutomaConfig, goal: str) -> None:
+    """Show stored templates similar to ``goal`` (suggestion only, D39).
+
+    Deterministic and free: no model call, nothing is reused or written. A broken
+    workflows directory never blocks a new project; it only produces a warning.
+    """
+    try:
+        matches = WorkflowStore.for_workspace(config.workspace).suggest(goal)
+    except WorkflowError as e:
+        typer.echo(f"warning: workflow suggestions unavailable: {_safe(str(e))}", err=True)
+        return
+    if not matches:
+        return
+    typer.echo("similar workflows (suggestion only; the plan below is made from scratch):")
+    for m in matches:
+        typer.echo(f"  {_match_line(m)}")
+    typer.echo("  see them with: automa workflows")
+
+
+def _match_line(m: WorkflowMatch) -> str:
+    t = m.template
+    shared = _safe(", ".join(m.shared))
+    return (
+        f"{t.id}  {round(m.score * 100)}%  {t.stats.tasks} task(s)  "
+        f"{_safe(_preview(t.goal))}  [shared: {shared}]"
+    )
 
 
 def _clarify(agent: ExecutiveAgent, store: ProjectStore, project: Project) -> list[Clarification]:
@@ -551,6 +589,80 @@ def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_j
     else:
         for line in _plan_lines(plan):
             typer.echo(line)
+
+
+# -- Workflow templates ----------------------------------------------------------
+
+
+def _workflow_json(t: WorkflowTemplate) -> dict[str, Any]:
+    data: dict[str, Any] = t.model_dump(mode="json")
+    data["stats"]["cost_usd"] = nusd_to_usd(t.stats.cost_nusd)
+    return data
+
+
+def _workflow_line(t: WorkflowTemplate) -> str:
+    s = t.stats
+    return (
+        f"{t.id}  {s.tasks} task(s)  {s.attempts} attempt(s)  {_usd(s.cost_nusd)}  "
+        f"from {t.source_project}  {_safe(_preview(t.goal))}"
+    )
+
+
+@workflow_app.command("save")
+def workflow_save(
+    project_id: Annotated[str, typer.Argument(help="A finished (done) project to save.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Save the plan of a finished project (every task passed) as a workflow template.
+
+    No API key or model call. A project is saved at most once; templates are never
+    overwritten.
+    """
+    config = _load(config_path)
+    projects = ProjectStore.for_workspace(config.workspace)
+    flows = WorkflowStore.for_workspace(config.workspace)
+    try:
+        template = flows.save_from_project(projects, project_id)
+    except (WorkflowError, ProjectStoreError) as e:
+        raise _fail(str(e), EXIT_USER) from None
+    if as_json:
+        typer.echo(json.dumps(_workflow_json(template), ensure_ascii=False, indent=2))
+        return
+    typer.echo(f"workflow: {template.id}")
+    typer.echo(_workflow_line(template))
+    for line in _plan_lines(template.plan):
+        typer.echo(line)
+    typer.echo(
+        "note: the template is a copy of this project's plan, including its task texts "
+        "and inputs; it stays in your workspace."
+    )
+
+
+@app.command()
+def workflows(
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """List saved workflow templates, newest first. Read-only."""
+    config = _load(config_path)
+    try:
+        templates = WorkflowStore.for_workspace(config.workspace).templates()
+    except WorkflowError as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    if as_json:
+        rows = [_workflow_json(t) for t in templates]
+        typer.echo(json.dumps(rows, ensure_ascii=False, indent=2))
+        return
+    if not templates:
+        typer.echo("no workflows yet; save a finished project with: automa workflow save <id>")
+        return
+    for t in templates:
+        typer.echo(_workflow_line(t))
 
 
 # -- Approval Gate -------------------------------------------------------------
