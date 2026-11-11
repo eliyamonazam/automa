@@ -44,7 +44,7 @@
 ## M5 — Approval Gate و ایزوله‌سازی
 - [x] Approval Gate (هسته): ثبت درخواست تأیید در `approvals/` پروژه هنگام توقف روی ابزار `external`، تصمیم یک‌باره (تأیید/رد)، و اجرای فقط همون فراخوانی (همون وظیفه، ابزار و آرگومان‌ها) حداکثر یک بار بعد از تأیید؛ رد ← خبر به مدل بدون اجرا
 - [x] Approval Gate (CLI): `automa approvals [<project>]` (فهرست درخواست‌ها با آرگومان‌ها)، `automa approve <project> <id> [--note]` / `automa reject <project> <id> [--note]`، نمایش درخواست در انتظار در `automa status` و خروجی `automa run`
-- [ ] Approval Gate (اقدامات برگشت‌ناپذیر): علامت `irreversible` روی ابزار (مثلاً حذف/بازنویسی فایل موجود) که حتی در سطح `write`/`execute` از Approval Gate رد بشه
+- [x] Approval Gate (اقدامات برگشت‌ناپذیر): علامت `irreversible` روی ابزار که حتی در سطح `write`/`execute` از Approval Gate رد بشه، و ابزار برگشت‌ناپذیر `delete_file` (بازنویسی با `write_file` عمداً gate نشد؛ D31)
 - [ ] اجرای `run_command` داخل کانتینر Docker
 - [ ] `Dockerfile` و `docker-compose.yml` برای خود Automa
 

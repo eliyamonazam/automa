@@ -199,6 +199,24 @@ class Workspace:
                 raise
         return len(data)
 
+    def delete_file(self, path: str) -> int:
+        """Delete one existing regular file (never a directory or symlink). Returns its size."""
+        norm = normalize(path)
+        *dirs, name = norm.split("/")
+        with self._dir(dirs) as dfd:
+            try:
+                st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+            except FileNotFoundError:
+                raise WorkspaceError(f"file not found: {norm}") from None
+            if not stat.S_ISREG(st.st_mode):
+                raise WorkspaceError(f"refusing to delete non-regular file: {norm}")
+            try:
+                # unlink never follows a symlink, even one swapped in after the check.
+                os.unlink(name, dir_fd=dfd)
+            except FileNotFoundError:
+                raise WorkspaceError(f"file not found: {norm}") from None
+        return st.st_size
+
     def list_dir(
         self, path: str = "", *, max_entries: int = MAX_LIST_ENTRIES
     ) -> tuple[list[DirEntry], int]:

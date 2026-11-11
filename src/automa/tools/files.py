@@ -1,14 +1,24 @@
-"""File tools confined to the project workspace: ``read_file``, ``write_file``, ``list_dir``."""
+"""File tools confined to the project workspace.
+
+``read_file``, ``write_file``, ``list_dir`` and ``delete_file`` (irreversible: it
+always needs the user's approval through the Approval Gate).
+"""
 
 from __future__ import annotations
 
 from typing import ClassVar
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from automa.plan.models import MAX_PATH_CHARS
 from automa.tools.base import MAX_TOOL_OUTPUT_CHARS, RiskLevel, Tool, ToolArgs
-from automa.tools.workspace import MAX_LIST_ENTRIES, MAX_WRITE_BYTES, Workspace
+from automa.tools.workspace import (
+    MAX_LIST_ENTRIES,
+    MAX_WRITE_BYTES,
+    Workspace,
+    WorkspaceError,
+    normalize,
+)
 
 
 class ReadFileArgs(ToolArgs):
@@ -82,4 +92,36 @@ class ListDir(Tool):
         return "\n".join(lines)
 
 
-FILE_TOOLS: tuple[type[Tool], ...] = (ReadFile, WriteFile, ListDir)
+class DeleteFileArgs(ToolArgs):
+    path: str = Field(min_length=1, max_length=MAX_PATH_CHARS, description="Relative path")
+
+    @field_validator("path")
+    @classmethod
+    def _safe_path(cls, v: str) -> str:
+        # Validated (and normalized) before the Approval Gate records a request, so
+        # the user is never asked to approve a path that could not be deleted, and
+        # two spellings of one path share one approval.
+        try:
+            return normalize(v)
+        except WorkspaceError as e:
+            raise ValueError(str(e)) from None
+
+
+class DeleteFile(Tool):
+    name: ClassVar[str] = "delete_file"
+    description: ClassVar[str] = (
+        "Delete one existing file from the project workspace. Irreversible: the "
+        "project pauses until the user approves this exact call."
+    )
+    risk: ClassVar[RiskLevel] = RiskLevel.WRITE
+    irreversible: ClassVar[bool] = True
+    args_model: ClassVar[type[ToolArgs]] = DeleteFileArgs
+
+    def run(self, args: ToolArgs, workspace: Workspace) -> str:
+        if not isinstance(args, DeleteFileArgs):
+            raise TypeError("arguments were not validated by the executor")
+        n = workspace.delete_file(args.path)
+        return f"deleted {args.path} ({n} bytes)"
+
+
+FILE_TOOLS: tuple[type[Tool], ...] = (ReadFile, WriteFile, ListDir, DeleteFile)

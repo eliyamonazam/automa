@@ -657,3 +657,62 @@ def test_orchestrator_never_calls_models_or_tools_directly() -> None:
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
     }  # never builds its own policy
     assert "LLMGateway" not in names and "FakeProvider" not in names
+
+
+# -- irreversible tools (delete_file) ------------------------------------------
+
+
+def _cleaner_roles() -> RoleRegistry:
+    cleaner = Role(
+        name="cleaner",
+        description="Removes a stale file, then writes the result.",
+        tools=("write_file", "delete_file"),
+        max_risk=RiskLevel.WRITE,
+        instructions="Delete old.txt, then write the file.",
+    )
+    return RoleRegistry([cleaner], tools=default_tools())
+
+
+def delete(path: str = "old.txt") -> ChatResponse:
+    return calls(("delete_file", {"path": path}))
+
+
+def cleaner_rig(tmp_path: Path, script: list[Any]) -> Rig:
+    rig = Rig(tmp_path, script, make_plan(task_dict("a", role="cleaner")), roles=_cleaner_roles())
+    old = rig.store.project_dir(PID) / "files" / "old.txt"
+    old.write_text("keep me until approved")
+    return rig
+
+
+def test_irreversible_tool_pauses_even_within_risk_limit(tmp_path: Path) -> None:
+    rig = cleaner_rig(tmp_path, [delete()])
+    old = rig.store.project_dir(PID) / "files" / "old.txt"
+    report = rig.run()
+    assert report.reason is StopReason.APPROVAL and report.status is ProjectStatus.PAUSED
+    assert old.exists()
+    (req,) = rig.store.approvals(PID).list(ApprovalStatus.PENDING)
+    assert (req.tool, req.arguments, req.risk) == ("delete_file", {"path": "old.txt"}, "write")
+    assert "irreversible" in req.reason
+    gated = [e for e in rig.store.events(PID).read() if e.type == "tool.approval_required"]
+    assert gated[-1].data["irreversible"] is True
+
+
+def test_irreversible_tool_runs_once_after_approval(tmp_path: Path) -> None:
+    rig = cleaner_rig(tmp_path, [delete(), delete(), *write("a")])
+    old = rig.store.project_dir(PID) / "files" / "old.txt"
+    report = rig.run()
+    assert report.approval_id is not None
+    rig.store.approvals(PID).decide(report.approval_id, approve=True)
+    assert rig.run().status is ProjectStatus.DONE
+    assert not old.exists()
+    assert rig.store.approvals(PID).is_used(report.approval_id)
+
+
+def test_rejected_irreversible_call_keeps_the_file(tmp_path: Path) -> None:
+    rig = cleaner_rig(tmp_path, [delete(), delete(), *write("a")])
+    old = rig.store.project_dir(PID) / "files" / "old.txt"
+    report = rig.run()
+    assert report.approval_id is not None
+    rig.store.approvals(PID).decide(report.approval_id, approve=False)
+    assert rig.run().status is ProjectStatus.DONE
+    assert old.read_text() == "keep me until approved"

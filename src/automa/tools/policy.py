@@ -7,6 +7,9 @@ Rules (enforced in code, never in a prompt):
 3. ``external`` tools are never allowed directly: a listed ``external`` tool
    always needs the Approval Gate (``needs_approval``), whatever ``max_risk`` is;
    an unlisted one is denied (an approval can never widen a role's tool list).
+4. An ``irreversible`` tool that passes rules 1-2 needs the Approval Gate too,
+   at any ``max_risk``; the flag never makes a tool *more* available (an
+   approval cannot lift a risk-level denial).
 
 The policy is immutable; there is no way to widen it after construction.
 """
@@ -62,9 +65,13 @@ class PermissionPolicy(BaseModel):
             raise ValueError("max_risk cannot be 'external': external tools need approval")
         return v
 
-    def decide(self, tool_name: str, risk: RiskLevel) -> PolicyDecision:
+    def decide(
+        self, tool_name: str, risk: RiskLevel, *, irreversible: bool = False
+    ) -> PolicyDecision:
         if not isinstance(risk, RiskLevel):
             return PolicyDecision(decision=Decision.DENY, reason="unknown risk level")
+        if type(irreversible) is not bool:
+            return PolicyDecision(decision=Decision.DENY, reason="invalid irreversible flag")
         if tool_name not in self.allowed_tools:
             return PolicyDecision(
                 decision=Decision.DENY, reason=f"tool {tool_name!r} is not allowed for this role"
@@ -79,5 +86,10 @@ class PermissionPolicy(BaseModel):
                 decision=Decision.DENY,
                 reason=f"tool {tool_name!r} has risk {risk.value!r}, "
                 f"above this role's limit {self.max_risk.value!r}",
+            )
+        if irreversible:
+            return PolicyDecision(
+                decision=Decision.NEEDS_APPROVAL,
+                reason=f"{tool_name!r} is irreversible and needs user approval",
             )
         return PolicyDecision(decision=Decision.ALLOW, reason="allowed")

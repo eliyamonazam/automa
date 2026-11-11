@@ -4,7 +4,7 @@ For every call it (1) finds the tool, (2) asks the ``PermissionPolicy``,
 (3) validates the arguments against the tool's model, (4) runs it inside the
 ``Workspace`` and (5) logs a ``tool.*`` event. Problems the model can fix
 (unknown tool, bad arguments, denied, tool error) come back as a failed
-``ToolResult``; an external action goes through the Approval Gate (see
+``ToolResult``; an external or irreversible action goes through the Approval Gate (see
 ``_gate``): without a matching decision it records a request and raises
 ``ApprovalRequired`` so the orchestrator can pause the project. Event-log
 failures fail closed.
@@ -22,7 +22,7 @@ from pydantic import ValidationError
 from automa.events import Event, EventSink
 from automa.tools.approvals import ApprovalError, ApprovalStatus, ApprovalStore
 from automa.tools.base import MAX_TOOL_OUTPUT_CHARS, Tool, ToolError, ToolResult
-from automa.tools.policy import Decision, PermissionPolicy
+from automa.tools.policy import Decision, PermissionPolicy, PolicyDecision
 from automa.tools.workspace import MAX_WRITE_BYTES, Workspace
 
 MAX_ARGUMENTS_CHARS = 2 * MAX_WRITE_BYTES
@@ -102,12 +102,21 @@ class ToolExecutor:
     def tool_names(self) -> list[str]:
         return sorted(self._tools)
 
+    def _decide(self, tool: Tool) -> PolicyDecision:
+        return self._policy.decide(tool.name, tool.risk, irreversible=tool.irreversible)
+
     def specs(self) -> list[dict[str, Any]]:
-        """Schemas of the tools this policy allows outright (what the model is offered)."""
+        """Schemas of the tools the model is offered.
+
+        Tools the policy allows outright, plus gated (``needs_approval``) tools when
+        this executor has an Approval Gate store; without a store a gated tool could
+        never run, so it is not offered.
+        """
+        offered = {Decision.ALLOW}
+        if self._approvals is not None:
+            offered.add(Decision.NEEDS_APPROVAL)
         return [
-            t.spec()
-            for name, t in sorted(self._tools.items())
-            if self._policy.decide(name, t.risk).decision is Decision.ALLOW
+            t.spec() for _, t in sorted(self._tools.items()) if self._decide(t).decision in offered
         ]
 
     def _emit(self, type_: str, data: dict[str, Any]) -> None:
@@ -129,11 +138,11 @@ class ToolExecutor:
             known = ", ".join(self.tool_names()) or "(none)"
             return self._fail(_short(label, 100), f"unknown tool; available: {known}", denied=True)
 
-        decision = self._policy.decide(tool.name, tool.risk)
+        decision = self._policy.decide(tool.name, tool.risk, irreversible=tool.irreversible)
         needs_approval = decision.decision is Decision.NEEDS_APPROVAL
         if needs_approval and self._approvals is None:
             # No Approval Gate store: nothing can ever be approved here.
-            self._emit("tool.approval_required", {"tool": tool.name, "risk": tool.risk.value})
+            self._emit("tool.approval_required", self._gate_data(tool))
             raise ApprovalRequired(tool.name, decision.reason)
         if not needs_approval and decision.decision is not Decision.ALLOW:
             self._emit(
@@ -180,6 +189,13 @@ class ToolExecutor:
             result = ToolResult(tool=tool.name, ok=True, content=content)
         return self._finish(tool, args, result)
 
+    @staticmethod
+    def _gate_data(tool: Tool) -> dict[str, Any]:
+        data: dict[str, Any] = {"tool": tool.name, "risk": tool.risk.value}
+        if tool.irreversible:
+            data["irreversible"] = True
+        return data
+
     def _gate(self, tool: Tool, args: Any, reason: str) -> ToolResult | None:
         """Approval Gate for one validated call.
 
@@ -195,7 +211,7 @@ class ToolExecutor:
                 tool=tool.name, arguments=arguments, task_id=self._task_id
             )
             if found is not None and self._approvals.consume(found.id):
-                data = {"tool": tool.name, "risk": tool.risk.value, "request": found.id}
+                data = {**self._gate_data(tool), "request": found.id}
                 if found.status is ApprovalStatus.APPROVED:
                     self._emit("tool.approved", data)
                     return None
@@ -217,7 +233,7 @@ class ToolExecutor:
             raise ToolLayerError(f"approval gate failed: {e}") from e
         self._emit(
             "tool.approval_required",
-            {"tool": tool.name, "risk": tool.risk.value, "request": req.id},
+            {**self._gate_data(tool), "request": req.id},
         )
         raise ApprovalRequired(tool.name, reason, request_id=req.id)
 

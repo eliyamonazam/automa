@@ -432,7 +432,10 @@ class TestToolDefinition:
             "write_file": RiskLevel.WRITE,
             "list_dir": RiskLevel.READ,
             "run_command": RiskLevel.EXECUTE,
+            "delete_file": RiskLevel.WRITE,
         }
+        irreversible = {t.name for t in default_tools() if t.irreversible}
+        assert irreversible == {"delete_file"}
 
     def test_specs_are_openai_functions(self) -> None:
         for t in default_tools():

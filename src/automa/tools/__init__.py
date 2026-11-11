@@ -10,7 +10,7 @@ from automa.tools.base import (
 )
 from automa.tools.command import RunCommand, RunCommandArgs, clean_env
 from automa.tools.executor import ApprovalRequired, ToolExecutor, ToolLayerError
-from automa.tools.files import FILE_TOOLS, ListDir, ReadFile, WriteFile
+from automa.tools.files import FILE_TOOLS, DeleteFile, ListDir, ReadFile, WriteFile
 from automa.tools.policy import Decision, PermissionPolicy, PolicyDecision
 from automa.tools.workspace import DirEntry, Workspace, WorkspaceError
 
@@ -25,6 +25,7 @@ __all__ = [
     "MAX_TOOL_OUTPUT_CHARS",
     "ApprovalRequired",
     "Decision",
+    "DeleteFile",
     "DirEntry",
     "ListDir",
     "PermissionPolicy",

@@ -69,6 +69,9 @@ class Tool(ABC):
     description: ClassVar[str]
     risk: ClassVar[RiskLevel]
     args_model: ClassVar[type[ToolArgs]]
+    # An irreversible tool (e.g. deleting a file) always goes through the Approval
+    # Gate, even when its risk level is within the role's limit.
+    irreversible: ClassVar[bool] = False
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -82,6 +85,8 @@ class Tool(ABC):
         args = getattr(cls, "args_model", None)
         if not (isinstance(args, type) and issubclass(args, ToolArgs)):
             raise TypeError(f"{cls.__name__}: args_model must subclass ToolArgs")
+        if type(getattr(cls, "irreversible", False)) is not bool:
+            raise TypeError(f"{cls.__name__}: irreversible must be a bool")
         if not getattr(cls, "description", "").strip():
             raise TypeError(f"{cls.__name__}: description is required")
 
