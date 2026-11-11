@@ -34,6 +34,9 @@ docker compose up -d
 automa new "ایده من ..."   # سؤال‌ها + ساخت plan.json
 automa run <project-id>    # اجرا/ادامه: Worker ← Verifier ← اصلاح
 automa status             # فهرست پروژه‌ها، هزینه و برنامه
+automa approvals [<id>]   # درخواست‌های تأیید در انتظار با آرگومان‌های دقیق (فقط‌خوندنی؛ --all، --json)
+automa approve <id> <apr-id> [--note ...]  # تأیید یک‌باره (بعد از نمایش و پرسیدن؛ --yes)
+automa reject <id> <apr-id> [--note ...]   # رد؛ یادداشت به مدل می‌رسه
 automa bench list         # فهرست benchmarkها
 automa bench run <id>     # اجرای یک benchmark و ثبت نتیجه در benchmarks/results/
 automa bench report       # تحلیل نتیجه‌های ثبت‌شده (فقط‌خوندنی؛ --json، --benchmark <id>)

@@ -1,7 +1,10 @@
-"""Command-line interface: ``automa new``, ``run``, ``status``, ``bench list|run|report``.
+"""Command-line interface: ``automa new``, ``run``, ``status``, ``approvals``,
+``approve``/``reject`` and ``bench list|run|report``.
 
 Every model call goes through ``LLMGateway`` + ``BudgetGuard`` (never a bare provider).
-``status`` is read-only: it needs no API key, makes no model call and creates no files.
+``status`` and ``approvals`` are read-only: they need no API key, make no model call
+and create no files. ``approve``/``reject`` only record a decision on one pending
+Approval Gate request; the action itself runs (at most once) on the next ``automa run``.
 
 Exit codes (stable, for scripts):
 
@@ -22,6 +25,7 @@ Exit codes (stable, for scripts):
 from __future__ import annotations
 
 import json
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
@@ -53,6 +57,7 @@ from automa.benchmarks import (
 from automa.budget.guard import BudgetError, BudgetExceeded, BudgetGuard
 from automa.budget.ledger import CostLedger, nusd_to_usd
 from automa.config import AutomaConfig, ConfigError, load_config
+from automa.events import Event
 from automa.llm.factory import provider_from_config
 from automa.llm.gateway import LLMGateway
 from automa.llm.provider import Provider, ProviderError
@@ -67,6 +72,12 @@ from automa.plan import Plan
 from automa.project import Project, ProjectStatus, ProjectStore, ProjectStoreError
 from automa.roles import RoleError, RoleRegistry
 from automa.tools import default_tools
+from automa.tools.approvals import (
+    ApprovalError,
+    ApprovalRequest,
+    ApprovalStatus,
+    ApprovalStore,
+)
 
 EXIT_OK = 0
 EXIT_USER = 1
@@ -93,6 +104,11 @@ RUN_EXIT_CODES: dict[StopReason, int] = {
 
 LEDGER_FILENAME = "ledger.sqlite3"
 GOAL_PREVIEW_CHARS = 60
+# ``automa approvals`` shows at most this much of each request's arguments (the full
+# arguments are always shown by ``automa approve`` before asking for confirmation).
+ARGUMENTS_PREVIEW_CHARS = 2_000
+# Zero-width (non-)joiners are format characters needed by Persian/Arabic text.
+_ALLOWED_FORMAT_CHARS = frozenset({"\u200c", "\u200d"})
 
 app = typer.Typer(help="Automa command-line interface.", no_args_is_help=True)
 bench_app = typer.Typer(help="Benchmark suite: list and run sample goals.", no_args_is_help=True)
@@ -321,6 +337,7 @@ def run(
             roles,
             config,
             settings=settings,
+            tools=default_tools,
         )
         try:
             report = orchestrator.run(pid)
@@ -342,7 +359,7 @@ _REASON_HINTS: dict[StopReason, str] = {
     StopReason.BUDGET: "raise the cap in automa.toml or wait for the daily reset",
     StopReason.PROVIDER: "check the provider/network",
     StopReason.CONFIG: "fix automa.toml (e.g. map the task's tier to a model)",
-    StopReason.APPROVAL: "this action needs approval (approval gate: not available yet)",
+    StopReason.APPROVAL: "review the request with: automa approvals {pid}",
     StopReason.VERIFICATION: "the verifier gave no valid evaluation; the result is kept",
     StopReason.TOOL_LAYER: "the tool layer failed; see the events log",
 }
@@ -361,8 +378,17 @@ def _report_lines(report: RunReport) -> list[str]:
     if report.status is ProjectStatus.PAUSED:
         where = f" at task {report.task_id}" if report.task_id else ""
         lines.append(f"paused{where}: {_preview(report.detail, 200) or report.reason.value}")
+        if report.reason is StopReason.APPROVAL and report.approval_id:
+            lines.append(f"approval needed: {report.approval_id}")
+            lines.append(
+                f"next: automa approvals {report.project_id}, then "
+                f"automa approve {report.project_id} {report.approval_id} (or: automa reject "
+                f"{report.project_id} {report.approval_id}), then: automa run {report.project_id}"
+            )
+            return lines
         hint = _REASON_HINTS.get(report.reason)
         if hint:
+            hint = hint.format(pid=report.project_id)
             lines.append(f"next: {hint}, then: automa run {report.project_id}")
     return lines
 
@@ -385,13 +411,14 @@ def status(
             _status_all(store, config.workspace, as_json)
         else:
             _status_one(store, config.workspace, project_id, as_json)
-    except ProjectStoreError as e:
+    except (ProjectStoreError, ApprovalError) as e:
         raise _fail(str(e), EXIT_USER) from None
 
 
 def _status_all(store: ProjectStore, workspace: Path, as_json: bool) -> None:
     projects = store.list_projects() if store.root.is_dir() else []
     spent = _all_spent_nusd(workspace)
+    pending = {p.id: _pending_approvals(store, p.id) for p in projects}
     if as_json:
         rows = [
             {
@@ -400,6 +427,7 @@ def _status_all(store: ProjectStore, workspace: Path, as_json: bool) -> None:
                 "goal": p.goal,
                 "created_at": p.created_at.isoformat(),
                 "cost_usd": nusd_to_usd(spent.get(p.id, 0)),
+                "pending_approvals": len(pending[p.id]),
             }
             for p in projects
         ]
@@ -409,7 +437,10 @@ def _status_all(store: ProjectStore, workspace: Path, as_json: bool) -> None:
         typer.echo('no projects yet; create one with: automa new "<goal>"')
         return
     for p in projects:
-        typer.echo(f"{p.id}  {p.status.value:<8}  {_usd(spent.get(p.id, 0))}  {_preview(p.goal)}")
+        waiting = f"  [{len(pending[p.id])} approval(s) pending]" if pending[p.id] else ""
+        typer.echo(
+            f"{p.id}  {p.status.value:<8}  {_usd(spent.get(p.id, 0))}  {_preview(p.goal)}{waiting}"
+        )
 
 
 def _status_one(store: ProjectStore, workspace: Path, project_id: str, as_json: bool) -> None:
@@ -417,6 +448,7 @@ def _status_one(store: ProjectStore, workspace: Path, project_id: str, as_json: 
     plan = store.load_plan(project_id) if store.has_plan(project_id) else None
     clarifications = store.load_clarifications(project_id)
     spent = _project_spent_nusd(workspace, project_id)
+    pending = _pending_approvals(store, project_id)
     if as_json:
         data: dict[str, Any] = {
             "id": project.id,
@@ -427,6 +459,7 @@ def _status_one(store: ProjectStore, workspace: Path, project_id: str, as_json: 
             "cost_usd": nusd_to_usd(spent),
             "clarifications": [c.model_dump() for c in clarifications],
             "plan": plan.model_dump(mode="json") if plan is not None else None,
+            "pending_approvals": [_approval_json(store, r) for r in pending],
         }
         typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
         return
@@ -436,6 +469,11 @@ def _status_one(store: ProjectStore, workspace: Path, project_id: str, as_json: 
     typer.echo(f"created: {project.created_at.isoformat()}")
     typer.echo(f"updated: {project.updated_at.isoformat()}")
     typer.echo(f"cost: {_usd(spent)}")
+    if pending:
+        typer.echo(f"pending approvals: {len(pending)}")
+        for r in pending:
+            typer.echo(f"  {_approval_summary(r)}")
+        typer.echo(f"  review with: automa approvals {project.id}")
     if clarifications:
         typer.echo(f"clarifications: {len(clarifications)}")
         for c in clarifications:
@@ -446,6 +484,206 @@ def _status_one(store: ProjectStore, workspace: Path, project_id: str, as_json: 
     else:
         for line in _plan_lines(plan):
             typer.echo(line)
+
+
+# -- Approval Gate -------------------------------------------------------------
+
+
+def _safe(text: str) -> str:
+    """``text`` with control/format characters escaped, so recorded content (which may
+    come from the model) can't move the cursor, recolour or reorder the terminal and
+    hide what is being approved. Newlines and tabs are kept."""
+    out = []
+    for ch in text:
+        if ch in "\n\t" or ch in _ALLOWED_FORMAT_CHARS:
+            out.append(ch)
+        elif ch.isprintable() and unicodedata.category(ch) != "Cf":
+            out.append(ch)
+        else:
+            code = ord(ch)
+            out.append(f"\\x{code:02x}" if code < 0x100 else f"\\u{code:04x}")
+    return "".join(out)
+
+
+def _arguments_text(req: ApprovalRequest) -> str:
+    return _safe(json.dumps(req.arguments, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _pending_approvals(store: ProjectStore, project_id: str) -> list[ApprovalRequest]:
+    return store.approvals(project_id).list(ApprovalStatus.PENDING)
+
+
+def _approval_state(approvals: ApprovalStore, req: ApprovalRequest) -> str:
+    if req.decided and approvals.is_used(req.id):
+        return f"{req.status.value}, used"
+    return req.status.value
+
+
+def _approval_json(store: ProjectStore, req: ApprovalRequest) -> dict[str, Any]:
+    approvals = store.approvals(req.project_id)
+    data = req.model_dump(mode="json")
+    data["used"] = req.decided and approvals.is_used(req.id)
+    data["path"] = str(approvals.directory / f"{req.id}.json")
+    return data
+
+
+def _approval_summary(req: ApprovalRequest) -> str:
+    task = _safe(req.task_id or "-")
+    return f"{req.id}  {req.status.value:<8}  task {task}  {req.tool} ({req.risk.value})"
+
+
+def _approval_lines(
+    approvals: ApprovalStore, req: ApprovalRequest, *, full: bool = False
+) -> list[str]:
+    lines = [
+        f"{req.id}  [{_approval_state(approvals, req)}]",
+        f"  project: {req.project_id}",
+        f"  task: {_safe(req.task_id or '-')}",
+        f"  tool: {req.tool} (risk: {req.risk.value})",
+        f"  requested: {req.created_at.isoformat(timespec='seconds')}",
+        f"  reason: {_safe(_preview(req.reason, 200))}",
+    ]
+    if req.decided_at is not None:
+        lines.append(f"  decided: {req.decided_at.isoformat(timespec='seconds')}")
+    if req.note:
+        lines.append(f"  note: {_safe(req.note)}")
+    args = _arguments_text(req)
+    truncated = not full and len(args) > ARGUMENTS_PREVIEW_CHARS
+    if truncated:
+        args = args[:ARGUMENTS_PREVIEW_CHARS]
+    lines.append("  arguments:")
+    lines.extend(f"    {line}" for line in args.splitlines())
+    if truncated:
+        lines.append(
+            f"    … (truncated; full arguments: {approvals.directory / (req.id + '.json')})"
+        )
+    return lines
+
+
+@app.command()
+def approvals(
+    project_id: Annotated[
+        str | None, typer.Argument(help="Project id; omit for all projects.")
+    ] = None,
+    show_all: Annotated[
+        bool, typer.Option("--all", help="Also show decided requests (default: pending only).")
+    ] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """List Approval Gate requests (with their exact arguments). Read-only."""
+    config = _load(config_path)
+    store = ProjectStore.for_workspace(config.workspace)
+    status = None if show_all else ApprovalStatus.PENDING
+    try:
+        if project_id is not None:
+            pids = [store.load(project_id).id]
+        else:
+            pids = [p.id for p in store.list_projects()] if store.root.is_dir() else []
+        found = [(pid, store.approvals(pid).list(status)) for pid in pids]
+        if as_json:
+            rows = [_approval_json(store, r) for _, reqs in found for r in reqs]
+            typer.echo(json.dumps(rows, ensure_ascii=False, indent=2))
+            return
+        total = 0
+        for pid, reqs in found:
+            approvals_store = store.approvals(pid)
+            for req in reqs:
+                if total:
+                    typer.echo("")
+                for line in _approval_lines(approvals_store, req):
+                    typer.echo(line)
+                if not req.decided:
+                    typer.echo(
+                        f"  decide: automa approve {pid} {req.id} | automa reject {pid} {req.id}"
+                    )
+                total += 1
+    except (ProjectStoreError, ApprovalError) as e:
+        raise _fail(str(e), EXIT_USER) from None
+    if total == 0:
+        typer.echo("no approval requests" if show_all else "no pending approval requests")
+
+
+def _decide(
+    project_id: str,
+    approval_id: str,
+    *,
+    approve: bool,
+    note: str | None,
+    yes: bool,
+    config_path: Path | None,
+) -> None:
+    config = _load(config_path)
+    store = ProjectStore.for_workspace(config.workspace)
+    try:
+        pid = store.load(project_id).id
+        approvals_store = store.approvals(pid)
+        req = approvals_store.get(approval_id)
+    except (ProjectStoreError, ApprovalError) as e:
+        raise _fail(str(e), EXIT_USER) from None
+    if req.decided:
+        raise _fail(f"approval request {req.id} is already {req.status.value}", EXIT_USER)
+    if note is not None:
+        note = note.strip() or None
+    if approve:
+        # The user approves exactly what they see: show the full request first.
+        for line in _approval_lines(approvals_store, req, full=True):
+            typer.echo(line)
+        if not yes and not typer.confirm(
+            f"Approve running {req.tool} once with exactly these arguments?", default=False
+        ):
+            raise _fail("not approved; nothing was recorded", EXIT_USER)
+    try:
+        decided = approvals_store.decide(req.id, approve=approve, note=note)
+        store.events(pid).emit(
+            Event(
+                ts=decided.decided_at or decided.created_at,
+                type="approval.decided",
+                data={
+                    "approval": decided.id,
+                    "task": decided.task_id,
+                    "tool": decided.tool,
+                    "status": decided.status.value,
+                    "note": decided.note is not None,
+                },
+            )
+        )
+    except (ProjectStoreError, ApprovalError) as e:
+        raise _fail(str(e), EXIT_USER) from None
+    typer.echo(f"{decided.id}: {decided.status.value}")
+    if approve:
+        typer.echo(f"the call runs at most once, on the next: automa run {pid}")
+    else:
+        typer.echo(f"the model will be told it was rejected on the next: automa run {pid}")
+
+
+_NOTE_OPTION = typer.Option("--note", help="Note recorded with the decision (shown to the model).")
+_CONFIG_OPTION = typer.Option("--config", help="Path to automa.toml.")
+
+
+@app.command()
+def approve(
+    project_id: Annotated[str, typer.Argument(help="Project of the request.")],
+    approval_id: Annotated[str, typer.Argument(help="Request id (see: automa approvals).")],
+    note: Annotated[str | None, _NOTE_OPTION] = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
+    config_path: Annotated[Path | None, _CONFIG_OPTION] = None,
+) -> None:
+    """Approve one pending request: that exact call may run once on the next run."""
+    _decide(project_id, approval_id, approve=True, note=note, yes=yes, config_path=config_path)
+
+
+@app.command()
+def reject(
+    project_id: Annotated[str, typer.Argument(help="Project of the request.")],
+    approval_id: Annotated[str, typer.Argument(help="Request id (see: automa approvals).")],
+    note: Annotated[str | None, _NOTE_OPTION] = None,
+    config_path: Annotated[Path | None, _CONFIG_OPTION] = None,
+) -> None:
+    """Reject one pending request: the call never runs; the model is told why."""
+    _decide(project_id, approval_id, approve=False, note=note, yes=True, config_path=config_path)
 
 
 def _suite(suite_dir: Path) -> BenchmarkSuite:
