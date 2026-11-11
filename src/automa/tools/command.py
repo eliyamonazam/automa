@@ -45,6 +45,7 @@ from automa.tools.sandbox import (
     container_name,
     kill_argv,
     run_argv,
+    version_argv,
 )
 from automa.tools.workspace import Workspace
 
@@ -57,6 +58,8 @@ DEFAULT_PATH = "/usr/local/bin:/usr/bin:/bin"
 ENV_PASSTHROUGH = ("PATH", "LANG", "LC_ALL", "TZ")
 _DRAIN_JOIN_S = 2.0
 _DOCKER_RM_TIMEOUT_S = 30.0
+DOCKER_CHECK_TIMEOUT_S = 15.0
+_CHECK_OUTPUT_CHARS = 300
 
 
 class RunCommandArgs(ToolArgs):
@@ -250,6 +253,38 @@ class RunCommand(Tool):
                 + (f": {tail}" if tail else "")
             )
         return _format(code, out, err)
+
+
+def check_docker(sandbox: DockerSandbox, *, timeout_s: float = DOCKER_CHECK_TIMEOUT_S) -> str:
+    """Preflight: confirm the docker client exists and its daemon answers.
+
+    Returns the daemon's version. Raises ``SandboxError`` otherwise, so a caller that
+    asked for the Docker sandbox can stop before any work starts (fail closed). It
+    starts no container and touches no workspace.
+    """
+    env = client_env()
+    try:
+        done = subprocess.run(  # noqa: S603 - argv list, no shell
+            version_argv(sandbox),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            shell=False,
+            close_fds=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except FileNotFoundError:
+        raise SandboxError(f"docker client not found: {sandbox.docker!r}") from None
+    except subprocess.TimeoutExpired:
+        raise SandboxError(f"docker did not answer within {timeout_s:g}s") from None
+    except (OSError, subprocess.SubprocessError) as e:
+        raise SandboxError(f"cannot run the docker client: {e.__class__.__name__}") from None
+    out = done.stdout.decode("utf-8", "replace").strip()
+    if done.returncode != 0 or not out:
+        tail = done.stderr.decode("utf-8", "replace").strip()[-_CHECK_OUTPUT_CHARS:]
+        raise SandboxError("docker daemon is not available" + (f": {tail}" if tail else ""))
+    return out[:_CHECK_OUTPUT_CHARS]
 
 
 def _remove_container(sandbox: DockerSandbox, name: str) -> None:

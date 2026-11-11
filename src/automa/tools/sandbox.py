@@ -25,6 +25,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from automa.config import SandboxMode
+
 CONTAINER_WORKDIR = "/workspace"
 CONTAINER_NAME_PREFIX = "automa-run-"
 DEFAULT_IMAGE = "python:3.12-slim"
@@ -63,6 +65,18 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # Characters that would change the meaning of ``--mount type=bind,source=...``.
 _BAD_MOUNT_CHARS = frozenset(',"\n\r\x00')
+
+__all__ = [
+    "DockerSandbox",
+    "SandboxError",
+    "SandboxMode",
+    "client_env",
+    "container_env",
+    "container_name",
+    "kill_argv",
+    "run_argv",
+    "version_argv",
+]
 
 ImageRef = Annotated[str, Field(min_length=1, max_length=255)]
 
@@ -220,3 +234,8 @@ def kill_argv(sandbox: DockerSandbox, name: str) -> list[str]:
     if not _NAME_RE.fullmatch(name):
         raise SandboxError(f"invalid container name: {name!r}")
     return [sandbox.docker, "rm", "-f", name]
+
+
+def version_argv(sandbox: DockerSandbox) -> list[str]:
+    """``docker version`` argument list: succeeds only if the daemon answers."""
+    return [sandbox.docker, "version", "--format", "{{.Server.Version}}"]

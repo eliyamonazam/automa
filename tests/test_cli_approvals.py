@@ -447,6 +447,7 @@ def test_status_corrupt_approval_fails_closed(env: Env) -> None:
 def pub(env: Env, monkeypatch: pytest.MonkeyPatch) -> Env:
     monkeypatch.setattr(cli, "RoleRegistry", _PubRegistry)
     monkeypatch.setattr(cli, "default_tools", _pub_tools)
+    monkeypatch.setattr(cli, "tools_factory", lambda sandbox=None: _pub_tools)
     env.project()
     plan = {
         "goal": "test goal",

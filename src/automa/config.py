@@ -18,7 +18,7 @@ import tomllib
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import (
     BaseModel,
@@ -28,6 +28,9 @@ from pydantic import (
     ValidationError,
     model_validator,
 )
+
+if TYPE_CHECKING:
+    from automa.tools.sandbox import DockerSandbox
 
 DEFAULT_CONFIG_FILE = "automa.toml"
 DEFAULT_ENV_FILE = ".env"
@@ -78,6 +81,67 @@ class BudgetLimits(_Strict):
         return self
 
 
+class SandboxMode(StrEnum):
+    """Where ``run_command`` runs: on the host (``local``) or in Docker (``docker``)."""
+
+    LOCAL = "local"
+    DOCKER = "docker"
+
+
+def _docker_sandbox_cls() -> type[DockerSandbox]:
+    # Imported lazily: automa.tools imports automa.plan, which imports this module.
+    from automa.tools.sandbox import DockerSandbox
+
+    return DockerSandbox
+
+
+class SandboxConfig(_Strict):
+    """Where ``run_command`` runs (``[sandbox]`` in automa.toml; D33).
+
+    ``mode = "local"`` (default) runs commands on the host with the user's privileges.
+    ``mode = "docker"`` runs each call in a fresh, isolated container (D32); if Docker
+    is unavailable, nothing runs (fail closed, no host fallback). Docker settings
+    given with ``mode = "local"`` are rejected: they would suggest an isolation that
+    is not there.
+    """
+
+    mode: SandboxMode = SandboxMode.LOCAL
+    image: str | None = None
+    docker: str | None = None
+    memory_mb: int | None = None
+    cpus: float | None = None
+    pids_limit: int | None = None
+
+    def _docker_fields(self) -> dict[str, Any]:
+        names = ("image", "docker", "memory_mb", "cpus", "pids_limit")
+        return {n: getattr(self, n) for n in names if getattr(self, n) is not None}
+
+    @model_validator(mode="after")
+    def _check(self) -> SandboxConfig:
+        fields = self._docker_fields()
+        if self.mode is SandboxMode.LOCAL and fields:
+            raise ValueError(f'docker settings ({", ".join(sorted(fields))}) need mode = "docker"')
+        if self.mode is SandboxMode.DOCKER:
+            _docker_sandbox_cls().model_validate(fields)  # validate now, not at the first command
+        return self
+
+    def docker_sandbox(self) -> DockerSandbox | None:
+        """The Docker sandbox to use, or ``None`` for ``mode = "local"``."""
+        if self.mode is SandboxMode.LOCAL:
+            return None
+        return _docker_sandbox_cls().model_validate(self._docker_fields())
+
+    def describe(self) -> str:
+        """One human-readable line, e.g. for ``automa status``."""
+        sb = self.docker_sandbox()
+        if sb is None:
+            return "local (run_command runs on this machine, not isolated)"
+        return (
+            f"docker (image {sb.image}, memory {sb.memory_mb}m, cpus {sb.cpus:g}, "
+            f"pids {sb.pids_limit}, no network)"
+        )
+
+
 class AutomaConfig(_Strict):
     """Fully resolved, validated configuration."""
 
@@ -87,6 +151,7 @@ class AutomaConfig(_Strict):
     prices: dict[str, ModelPrice] = Field(default_factory=dict)
     limits: BudgetLimits = Field(default_factory=BudgetLimits)
     workspace: Path = Path("workspace")
+    sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
 
     @model_validator(mode="after")
     def _check(self) -> AutomaConfig:

@@ -168,7 +168,13 @@ def run_benchmark(
         plan = store.load_plan(pid)
         attempts = sum(len(store.task_history(pid, t.id)) for t in plan.tasks)
 
-    outcome = evaluate_benchmark(benchmark, store.files_dir(pid), events, project_id=pid)
+    outcome = evaluate_benchmark(
+        benchmark,
+        store.files_dir(pid),
+        events,
+        project_id=pid,
+        sandbox=config.sandbox.docker_sandbox(),
+    )
     record = BenchmarkRunRecord.build(
         outcome=outcome,
         title=benchmark.title,

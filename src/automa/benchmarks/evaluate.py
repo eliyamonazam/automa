@@ -14,7 +14,7 @@ from pathlib import Path
 from automa.agents.verifier import run_criteria_checks, verifier_policy
 from automa.benchmarks.models import Benchmark, BenchmarkOutcome
 from automa.events import EventSink
-from automa.tools import default_tools
+from automa.tools import DockerSandbox, default_tools
 from automa.tools.executor import ToolExecutor
 from automa.tools.workspace import Workspace
 
@@ -25,14 +25,16 @@ def evaluate_benchmark(
     events: EventSink,
     *,
     project_id: str | None = None,
+    sandbox: DockerSandbox | None = None,
 ) -> BenchmarkOutcome:
     """Run every success criterion of ``benchmark`` against ``files_dir``.
 
     ``files_dir`` is a project's ``files/`` directory (must be a real directory).
     ``project_id`` labels the emitted events (defaults to the benchmark id).
+    ``sandbox`` runs the check commands in Docker (the same ``[sandbox]`` as the run).
     """
     executor = ToolExecutor(
-        default_tools(),
+        default_tools(sandbox),
         verifier_policy(),
         Workspace(files_dir),
         events,

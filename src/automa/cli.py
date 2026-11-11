@@ -71,7 +71,7 @@ from automa.orchestrator import (
 from automa.plan import Plan
 from automa.project import Project, ProjectStatus, ProjectStore, ProjectStoreError
 from automa.roles import RoleError, RoleRegistry
-from automa.tools import default_tools
+from automa.tools import DockerSandbox, SandboxError, check_docker, default_tools, tools_factory
 from automa.tools.approvals import (
     ApprovalError,
     ApprovalRequest,
@@ -121,11 +121,28 @@ RESULTS_DIRNAME = "results"
 # Indirection point: tests replace this with a FakeProvider factory. The provider is
 # always wrapped in a guarded LLMGateway below; nothing here calls it directly.
 make_provider: Callable[[AutomaConfig], Provider] = provider_from_config
+# Indirection point for the Docker preflight (tests use a fake docker client).
+docker_check: Callable[[DockerSandbox], str] = check_docker
 
 
 def _fail(message: str, code: int) -> typer.Exit:
     typer.echo(f"error: {message}", err=True)
     return typer.Exit(code)
+
+
+def _require_sandbox(config: AutomaConfig) -> None:
+    """With ``mode = "docker"``, stop before any work unless Docker answers (fail closed)."""
+    sandbox = config.sandbox.docker_sandbox()
+    if sandbox is None:
+        return
+    try:
+        docker_check(sandbox)
+    except SandboxError as e:
+        raise _fail(
+            f"sandbox mode is docker but Docker is not usable: {e}; nothing was run "
+            '(start Docker, or set [sandbox] mode = "local" in automa.toml)',
+            EXIT_CONFIG,
+        ) from None
 
 
 def _load(config_path: Path | None) -> AutomaConfig:
@@ -323,8 +340,10 @@ def run(
         roles = RoleRegistry.builtin(tools=default_tools())
     except (ConfigError, RoleError) as e:
         raise _fail(str(e), EXIT_CONFIG) from None
+    _require_sandbox(config)
 
     typer.echo(f"project: {pid} ({project.status.value})")
+    typer.echo(f"sandbox: {config.sandbox.describe()}")
     events = store.events(pid)
     with CostLedger.for_workspace(config.workspace) as ledger:
         spent_before = ledger.spent_nusd(project_id=pid)
@@ -337,7 +356,7 @@ def run(
             roles,
             config,
             settings=settings,
-            tools=default_tools,
+            tools=tools_factory(config.sandbox.docker_sandbox()),
         )
         try:
             report = orchestrator.run(pid)
@@ -408,14 +427,28 @@ def status(
     store = ProjectStore.for_workspace(config.workspace)
     try:
         if project_id is None:
-            _status_all(store, config.workspace, as_json)
+            _status_all(store, config, as_json)
         else:
-            _status_one(store, config.workspace, project_id, as_json)
+            _status_one(store, config, project_id, as_json)
     except (ProjectStoreError, ApprovalError) as e:
         raise _fail(str(e), EXIT_USER) from None
 
 
-def _status_all(store: ProjectStore, workspace: Path, as_json: bool) -> None:
+def _sandbox_json(config: AutomaConfig) -> dict[str, Any]:
+    sb = config.sandbox.docker_sandbox()
+    if sb is None:
+        return {"mode": config.sandbox.mode.value}
+    return {
+        "mode": config.sandbox.mode.value,
+        "image": sb.image,
+        "memory_mb": sb.memory_mb,
+        "cpus": sb.cpus,
+        "pids_limit": sb.pids_limit,
+    }
+
+
+def _status_all(store: ProjectStore, config: AutomaConfig, as_json: bool) -> None:
+    workspace = config.workspace
     projects = store.list_projects() if store.root.is_dir() else []
     spent = _all_spent_nusd(workspace)
     pending = {p.id: _pending_approvals(store, p.id) for p in projects}
@@ -441,9 +474,11 @@ def _status_all(store: ProjectStore, workspace: Path, as_json: bool) -> None:
         typer.echo(
             f"{p.id}  {p.status.value:<8}  {_usd(spent.get(p.id, 0))}  {_preview(p.goal)}{waiting}"
         )
+    typer.echo(f"sandbox: {config.sandbox.describe()}")
 
 
-def _status_one(store: ProjectStore, workspace: Path, project_id: str, as_json: bool) -> None:
+def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_json: bool) -> None:
+    workspace = config.workspace
     project = store.load(project_id)
     plan = store.load_plan(project_id) if store.has_plan(project_id) else None
     clarifications = store.load_clarifications(project_id)
@@ -460,6 +495,7 @@ def _status_one(store: ProjectStore, workspace: Path, project_id: str, as_json: 
             "clarifications": [c.model_dump() for c in clarifications],
             "plan": plan.model_dump(mode="json") if plan is not None else None,
             "pending_approvals": [_approval_json(store, r) for r in pending],
+            "sandbox": _sandbox_json(config),
         }
         typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
         return
@@ -469,6 +505,7 @@ def _status_one(store: ProjectStore, workspace: Path, project_id: str, as_json: 
     typer.echo(f"created: {project.created_at.isoformat()}")
     typer.echo(f"updated: {project.updated_at.isoformat()}")
     typer.echo(f"cost: {_usd(spent)}")
+    typer.echo(f"sandbox: {config.sandbox.describe()}")
     if pending:
         typer.echo(f"pending approvals: {len(pending)}")
         for r in pending:
@@ -742,6 +779,7 @@ def bench_run(
         roles = RoleRegistry.builtin(tools=default_tools())
     except (ConfigError, RoleError) as e:
         raise _fail(str(e), EXIT_CONFIG) from None
+    _require_sandbox(config)
     try:
         prepare_results_dir(results, benchmark.id)
     except BenchmarkResultError as e:
@@ -749,6 +787,7 @@ def bench_run(
 
     store = ProjectStore.for_workspace(config.workspace)
     typer.echo(f"benchmark: {benchmark.id} ({benchmark.kind.value}) — {benchmark.title}")
+    typer.echo(f"sandbox: {config.sandbox.describe()}")
     with CostLedger.for_workspace(config.workspace) as ledger:
         try:
             record = run_benchmark(

@@ -40,7 +40,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from automa.agents.verifier import VerificationFailed, VerifierAgent, verifier_policy
 from automa.agents.worker import WorkerAgent
 from automa.budget.guard import BudgetError
-from automa.config import AutomaConfig, ConfigError, Tier
+from automa.config import AutomaConfig, ConfigError, SandboxMode, Tier
 from automa.events import Event
 from automa.llm.provider import ProviderError
 from automa.plan.models import (
@@ -55,7 +55,7 @@ from automa.plan.models import (
 )
 from automa.project.store import ProjectStatus, ProjectStore
 from automa.roles.registry import RoleError, RoleRegistry
-from automa.tools import default_tools
+from automa.tools import RunCommand, tools_factory
 from automa.tools.base import Tool
 from automa.tools.executor import ApprovalRequired, ToolExecutor, ToolLayerError
 from automa.tools.policy import PermissionPolicy
@@ -164,7 +164,7 @@ class Orchestrator:
         config: AutomaConfig,
         *,
         settings: OrchestratorSettings | None = None,
-        tools: Callable[[], list[Tool]] = default_tools,
+        tools: Callable[[], list[Tool]] | None = None,
         clock: Clock = _utc_now,
     ):
         if not isinstance(store, ProjectStore):
@@ -183,8 +183,10 @@ class Orchestrator:
         self._roles = roles
         self._config = config
         self._settings = settings or OrchestratorSettings()
-        self._tools = tools
+        # Without an explicit factory the tools follow ``[sandbox]`` in the config.
+        self._tools = tools or tools_factory(config.sandbox.docker_sandbox())
         self._clock = clock
+        self._make_tools()  # a factory that ignores a required sandbox fails here
 
     @property
     def settings(self) -> OrchestratorSettings:
@@ -451,12 +453,24 @@ class Orchestrator:
             return _Stop(StopReason.CONFIG, str(e), task_id)
         return None
 
+    def _make_tools(self) -> list[Tool]:
+        """Fresh tools; with ``mode = "docker"`` every ``run_command`` must be sandboxed."""
+        tools = self._tools()
+        if self._config.sandbox.mode is SandboxMode.DOCKER:
+            for tool in tools:
+                if isinstance(tool, RunCommand) and tool.sandbox is None:
+                    raise ConfigError(
+                        "sandbox mode is docker but run_command has no sandbox; "
+                        "refusing to run commands on the host"
+                    )
+        return tools
+
     def _executor(
         self, project_id: str, policy: PermissionPolicy, *, task_id: str | None = None
     ) -> ToolExecutor:
         workspace = Workspace(self._store.files_dir(project_id))
         return ToolExecutor(
-            self._tools(),
+            self._make_tools(),
             policy,
             workspace,
             self._store.events(project_id),

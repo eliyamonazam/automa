@@ -46,7 +46,7 @@
 - [x] Approval Gate (CLI): `automa approvals [<project>]` (فهرست درخواست‌ها با آرگومان‌ها)، `automa approve <project> <id> [--note]` / `automa reject <project> <id> [--note]`، نمایش درخواست در انتظار در `automa status` و خروجی `automa run`
 - [x] Approval Gate (اقدامات برگشت‌ناپذیر): علامت `irreversible` روی ابزار که حتی در سطح `write`/`execute` از Approval Gate رد بشه، و ابزار برگشت‌ناپذیر `delete_file` (بازنویسی با `write_file` عمداً gate نشد؛ D31)
 - [x] اجرای `run_command` داخل کانتینر Docker (هسته): `DockerSandbox` (ایمیج، سقف حافظه/CPU/پروسه) و `RunCommand(sandbox=…)` با کانتینر یک‌بارمصرف بدون شبکه، فایل‌سیستم فقط‌خوندنی، بدون capability، کاربر غیر root، تنها mount پوشه `files/`؛ حذف کانتینر در timeout؛ بدون Docker ← خطا و هیچ اجرایی روی میزبان (D32)
-- [ ] اجرای `run_command` داخل کانتینر Docker (پیکربندی): بخش `[sandbox]` در `automa.toml` (`mode = "local"|"docker"`، ایمیج، سقف‌ها)، اتصال به `default_tools`/CLI/Orchestrator/Verifier/benchmark، نمایش حالت در `automa status`، و شکست بسته وقتی `docker` خواسته شده ولی در دسترس نیست
+- [x] اجرای `run_command` داخل کانتینر Docker (پیکربندی): بخش `[sandbox]` در `automa.toml` (`mode = "local"|"docker"`، ایمیج، سقف‌ها)، اتصال به `default_tools`/CLI/Orchestrator/Verifier/benchmark، نمایش حالت در `automa status`، و شکست بسته وقتی `docker` خواسته شده ولی در دسترس نیست (D33)
 - [ ] `Dockerfile` و `docker-compose.yml` برای خود Automa
 
 ## M6 — اجرای موازی و Workflowهای ذخیره‌شده

@@ -28,3 +28,17 @@ output_per_mtok = 20.00
 project_usd = 5.0
 daily_usd = 2.0
 per_call_usd = 0.25
+
+# Where run_command runs. "local" (default): on this machine, with your privileges,
+# NOT isolated. "docker": each call in a fresh container with no network, read-only
+# root filesystem, no capabilities, non-root user, only the project's files/ mounted.
+# With "docker", automa run / automa bench run stop before any work if Docker does not
+# answer (nothing ever falls back to the host). The image must already be pulled.
+[sandbox]
+mode = "local"
+# mode = "docker"
+# image = "python:3.12-slim"
+# docker = "docker"      # client: a name on PATH or an absolute path
+# memory_mb = 512        # 16..8192
+# cpus = 1.0             # >0..8
+# pids_limit = 128       # 8..4096
