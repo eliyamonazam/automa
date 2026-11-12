@@ -1,5 +1,6 @@
 """Command-line interface: ``automa new``, ``run``, ``status``, ``approvals``,
-``approve``/``reject``, ``workflow save``/``workflows`` and ``bench list|run|report``.
+``approve``/``reject``, ``workflow save|create|edit|show``/``workflows`` and
+``bench list|run|report``.
 
 Every model call goes through ``LLMGateway`` + ``BudgetGuard`` (never a bare provider).
 ``status`` and ``approvals`` are read-only: they need no API key, make no model call
@@ -9,6 +10,9 @@ Approval Gate request; the action itself runs (at most once) on the next ``autom
 ``workflows`` lists them; neither needs an API key or makes a model call. ``automa new``
 prints similar templates as a suggestion only (D39); ``automa new --workflow <id>``
 uses a template's plan instead of the Executive (no API key, no model call, D40).
+``workflow create``/``edit`` save a user-written or edited plan as a new template and
+``workflow show`` prints one (``--plan-json`` gives an editable plan file); none of
+them needs an API key or makes a model call (D41, D42).
 
 Exit codes (stable, for scripts):
 
@@ -64,6 +68,7 @@ from automa.config import (
     MAX_PARALLEL,
     AutomaConfig,
     ConfigError,
+    Tier,
     describe_parallel,
     load_config,
 )
@@ -123,6 +128,8 @@ RUN_EXIT_CODES: dict[StopReason, int] = {
 
 LEDGER_FILENAME = "ledger.sqlite3"
 GOAL_PREVIEW_CHARS = 60
+# ``automa workflow create/edit --plan``: largest plan file read (plans are small).
+MAX_PLAN_FILE_BYTES = 1_000_000
 # ``automa approvals`` shows at most this much of each request's arguments (the full
 # arguments are always shown by ``automa approve`` before asking for confirmation).
 ARGUMENTS_PREVIEW_CHARS = 2_000
@@ -300,6 +307,16 @@ def new(
     typer.echo(f"status: {store.load(pid).status.value}")
 
 
+def _compat_context(config: AutomaConfig) -> tuple[dict[str, Tier], frozenset[Tier]]:
+    """Current roles (with their default tiers) and configured tiers: what a workflow
+    plan is checked against before it is saved or used (D40, D41)."""
+    try:
+        roles = RoleRegistry.builtin(tools=default_tools())
+    except RoleError as e:
+        raise _fail(str(e), EXIT_CONFIG) from None
+    return {role.name: role.tier for role in roles}, frozenset(config.tiers)
+
+
 def _new_from_workflow(
     config: AutomaConfig, goal: str, project_id: str | None, workflow_id: str
 ) -> None:
@@ -309,12 +326,7 @@ def _new_from_workflow(
     known, starting tiers configured), so a bad template never leaves an orphan
     project. No provider is built and no model is called.
     """
-    try:
-        roles = RoleRegistry.builtin(tools=default_tools())
-    except RoleError as e:
-        raise _fail(str(e), EXIT_CONFIG) from None
-    role_tiers = {role.name: role.tier for role in roles}
-    configured = frozenset(config.tiers)
+    role_tiers, configured = _compat_context(config)
     flows = WorkflowStore.for_workspace(config.workspace)
     try:
         template = flows.load(workflow_id)
@@ -720,6 +732,197 @@ def workflow_save(
     typer.echo(
         "note: the template is a copy of this project's plan, including its task texts "
         "and inputs; it stays in your workspace."
+    )
+
+
+def _read_plan_file(path: Path) -> Any:
+    """The JSON value in a user-written plan file (validated later by ``user_plan``).
+
+    Read-only and bounded: a missing file, a non-regular file, a file over
+    ``MAX_PLAN_FILE_BYTES``, invalid UTF-8 or invalid JSON is a user error.
+    """
+    try:
+        if not path.is_file():
+            raise _fail(f"plan file not found or not a regular file: {path}", EXIT_USER)
+        with path.open("rb") as fh:
+            raw = fh.read(MAX_PLAN_FILE_BYTES + 1)
+    except OSError as e:
+        raise _fail(f"cannot read plan file {path}: {e.strerror or e}", EXIT_USER) from None
+    if len(raw) > MAX_PLAN_FILE_BYTES:
+        raise _fail(f"plan file {path} is larger than {MAX_PLAN_FILE_BYTES} bytes", EXIT_USER)
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        raise _fail(f"plan file {path} is not valid UTF-8", EXIT_USER) from None
+    except json.JSONDecodeError as e:
+        raise _fail(
+            f"plan file {path} is not valid JSON (line {e.lineno}, column {e.colno}: {e.msg})",
+            EXIT_USER,
+        ) from None
+
+
+def _print_saved_user_template(template: WorkflowTemplate, as_json: bool) -> None:
+    if as_json:
+        typer.echo(json.dumps(_workflow_json(template), ensure_ascii=False, indent=2))
+        return
+    typer.echo(f"workflow: {template.id}")
+    typer.echo(_workflow_line(template))
+    for line in _plan_lines(template.plan):
+        typer.echo(_safe(line))
+    typer.echo(
+        "note: this plan has not been run yet; its checks still pass the Permission "
+        "Policy and its tasks the budget and Approval Gate when used"
+    )
+    typer.echo(f"use it with: automa new GOAL --workflow {template.id}")
+
+
+def _user_template_errors(action: Callable[[], WorkflowTemplate]) -> WorkflowTemplate:
+    try:
+        return action()
+    except WorkflowIncompatible as e:
+        raise _fail(f"{_safe(str(e))}; nothing was saved", EXIT_CONFIG) from None
+    except WorkflowError as e:
+        raise _fail(f"{_safe(str(e))}; nothing was saved", EXIT_USER) from None
+
+
+@workflow_app.command("create")
+def workflow_create(
+    goal: Annotated[str, typer.Option("--goal", help="What the workflow is for.")],
+    plan_file: Annotated[
+        Path,
+        typer.Option(
+            "--plan",
+            help="JSON file with the plan (the shape of plan.json; its goal and version "
+            "are ignored).",
+        ),
+    ],
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Save a plan you wrote as a new workflow template (D41).
+
+    The plan is validated like any plan and checked against the current roles and
+    configured tiers; nothing is saved on any error. No API key or model call.
+    """
+    config = _load(config_path)
+    data = _read_plan_file(plan_file)
+    role_tiers, configured = _compat_context(config)
+    flows = WorkflowStore.for_workspace(config.workspace)
+    template = _user_template_errors(
+        lambda: flows.create(goal, data, role_tiers=role_tiers, configured_tiers=configured)
+    )
+    _print_saved_user_template(template, as_json)
+
+
+@workflow_app.command("edit")
+def workflow_edit(
+    workflow_id: Annotated[str, typer.Argument(help="The template to edit.")],
+    goal: Annotated[str | None, typer.Option("--goal", help="A new goal.")] = None,
+    plan_file: Annotated[
+        Path | None,
+        typer.Option("--plan", help="JSON file with a new plan (see: workflow show --plan-json)."),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Save an edited copy of a template as a new template (the original is kept).
+
+    The new template records the original as its parent and has no stats: it has
+    not been run as is (D41). No API key or model call.
+    """
+    config = _load(config_path)
+    if goal is None and plan_file is None:
+        raise _fail("nothing to change: give --goal and/or --plan", EXIT_USER)
+    data = _read_plan_file(plan_file) if plan_file is not None else None
+    role_tiers, configured = _compat_context(config)
+    flows = WorkflowStore.for_workspace(config.workspace)
+    template = _user_template_errors(
+        lambda: flows.revise(
+            workflow_id,
+            goal=goal,
+            plan=data,
+            role_tiers=role_tiers,
+            configured_tiers=configured,
+        )
+    )
+    _print_saved_user_template(template, as_json)
+
+
+def _editable_plan(t: WorkflowTemplate) -> dict[str, Any]:
+    """The template's plan as accepted by ``workflow edit --plan`` (no goal/version:
+    those come from the template)."""
+    data: dict[str, Any] = t.plan.model_dump(mode="json")
+    data.pop("goal", None)
+    data.pop("version", None)
+    return data
+
+
+@workflow_app.command("show")
+def workflow_show(
+    workflow_id: Annotated[str, typer.Argument(help="The template to show.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    plan_json: Annotated[
+        bool,
+        typer.Option(
+            "--plan-json",
+            help="Print only the plan, as a file for: automa workflow edit ID --plan FILE.",
+        ),
+    ] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Show one workflow template: goal, origin, stats, edit history and plan.
+
+    Read-only: no API key, no model call, nothing is written.
+    """
+    if as_json and plan_json:
+        raise _fail("use either --json or --plan-json, not both", EXIT_USER)
+    config = _load(config_path)
+    flows = WorkflowStore.for_workspace(config.workspace)
+    try:
+        template = flows.load(workflow_id)
+    except WorkflowError as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    if plan_json:
+        typer.echo(json.dumps(_editable_plan(template), ensure_ascii=False, indent=2))
+        return
+    history_ids: list[str] | None
+    history_error: str | None = None
+    try:
+        history_ids = [t.id for t in flows.history(template.id)]
+    except WorkflowError as e:
+        history_ids, history_error = None, str(e)
+    if as_json:
+        data = _workflow_json(template)
+        data["history"] = history_ids
+        typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+    typer.echo(f"workflow: {template.id}")
+    typer.echo(f"source: {_workflow_source(template)}")
+    typer.echo(f"created: {template.created_at.isoformat()}")
+    s = template.stats
+    if s is None:
+        typer.echo("stats: not run yet")
+    else:
+        typer.echo(
+            f"stats: {s.attempts} attempt(s) for {template.task_count} task(s), {_usd(s.cost_nusd)}"
+        )
+    if history_ids is not None:
+        if len(history_ids) > 1:
+            typer.echo(f"history: {' <- '.join(history_ids)}")
+    else:
+        typer.echo(f"warning: history unavailable: {_safe(history_error or '')}", err=True)
+    typer.echo(f"goal: {_safe(template.goal)}")
+    for line in _plan_lines(template.plan):
+        typer.echo(_safe(line))
+    typer.echo(
+        f"edit with: automa workflow show {template.id} --plan-json > plan.json, then "
+        f"automa workflow edit {template.id} --plan plan.json"
     )
 
 

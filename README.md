@@ -39,6 +39,9 @@ automa status             # فهرست پروژه‌ها، هزینه و برن�
 automa workflow save <id>  # ذخیره برنامه پروژه تموم‌شده (همه وظایف قبول) به‌عنوان قالب Workflow (--json)
 automa workflows           # فهرست قالب‌های Workflow (فقط‌خوندنی؛ --json)
 automa new "<هدف>" --workflow <wf-id>  # پروژه جدید با برنامه قالب (بدون Executive، بدون کلید و هزینه)
+automa workflow create --goal "<هدف>" --plan plan.json  # قالب جدید از برنامه‌ای که خودتون نوشتید (--json)
+automa workflow show <wf-id> [--json | --plan-json]      # نمایش قالب؛ --plan-json فایل قابل ویرایش برنامه
+automa workflow edit <wf-id> [--goal "…"] [--plan plan.json]  # ویرایش = قالب جدید با والد؛ قالب قبلی دست نمی‌خوره
 automa approvals [<id>]   # درخواست‌های تأیید در انتظار با آرگومان‌های دقیق (فقط‌خوندنی؛ --all، --json)
 automa approve <id> <apr-id> [--note ...]  # تأیید یک‌باره (بعد از نمایش و پرسیدن؛ --yes)
 automa reject <id> <apr-id> [--note ...]   # رد؛ یادداشت به مدل می‌رسه
