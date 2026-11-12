@@ -60,7 +60,9 @@
 - [x] تعریف/ویرایش Workflow توسط کاربر (CLI): `automa workflow create --goal … --plan <file.json>`، `automa workflow edit <id> [--goal …] [--plan <file>]`، `automa workflow show <id> [--json | --plan-json]` (خروجی قابل ویرایش؛ D42)
 
 ## M7 — Skillها و حافظه
-- [ ] بارگذاری Skillها با قالب `SKILL.md` و اتصال به نقش‌ها
+- [x] بارگذاری Skillها (هسته): `Skill` و `SkillRegistry.from_dir` برای پوشه‌های `<name>/SKILL.md` با frontmatter محدود (`name`، `description`، `license`) بدون وابستگی YAML، شکست بسته (symlink، فایل خراب/بزرگ/غیر UTF-8، نام ناهمخوان)، و رد `allowed-tools` (Skill هیچ ابزاری نمی‌ده؛ D43)
+- [ ] اتصال Skillها به نقش‌ها: فیلد `skills` در فایل نقش، بررسی وجود Skill موقع بارگذاری، و افزودن متن Skillها به پیام سیستمی Worker (بدون تغییر Policy)
+- [ ] Skillها در CLI و workspace: پوشه `<workspace>/skills/` و Skillهای داخلی، `automa skills [--json]`، نمایش Skillهای نقش در `automa status`
 - [ ] حافظه سه‌لایه (کاربر، پروژه، درس‌های عمومی) + مرحله بازبینی بعد از هر پروژه
 
 ## M8 — Router هوشمند و Financial Controller

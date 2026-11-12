@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-12 — M7: بارگذاری Skillها (هسته)
+- **انجام‌شده:** مورد «بارگذاری Skillها با قالب `SKILL.md` و اتصال به نقش‌ها» به سه بخش شکسته شد (هسته، اتصال به نقش‌ها، CLI/workspace) و هسته انجام شد. ماژول جدید `automa.skills`: مدل `Skill` (تغییرناپذیر، `extra="forbid"`)، `split_frontmatter`/`parse_skill` با زیرمجموعه کوچک و قطعی YAML بدون وابستگی جدید، و `SkillRegistry.from_dir`/`from_optional_dir` برای پوشه‌های `<name>/SKILL.md` با شکست بسته. `allowed-tools` رد می‌شه چون Skill هیچ ابزاری نمی‌ده؛ مجوزها فقط از نقش میان.
+- **فایل‌های اصلی:** `src/automa/skills/` (جدید: `__init__.py`، `models.py`، `registry.py`)، `tests/test_skills.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D43).
+- **تست‌ها:** `pytest` ← ۱۵۸۵ تست سبز، ۲ رد شده (Docker واقعی)؛ ۴۶ تست جدید بدون مدل: پارس frontmatter (نقل‌قول، کامنت، فارسی، CRLF، BOM)، ۱۲ نوع frontmatter نامعتبر، رد `allowed-tools`/`tools`، نام‌های نامعتبر و ناهمخوان، بدنه خالی/بلند، پوشه و ورودی و فایل symlink، `SKILL.md` گمشده/پوشه/FIFO (بدون قفل)، فایل بزرگ و غیر UTF-8، رد کل مجموعه با یک Skill خراب، تکراری. `ruff check` سبز.
+- **مشکلات:** `SKILL.md`های بیرونی با YAML پیچیده (چندخطی، تودرتو) رد می‌شن (عمداً؛ D43). خطای قدیمی mypy در `src/automa/benchmarks/report.py:230` هنوز هست.
+- **قدم بعدی:** اتصال Skillها به نقش‌ها: فیلد `skills` در فایل نقش و افزودن متن Skillها به پیام سیستمی Worker.
+
 ## 2026-11-12 — M6: تعریف/ویرایش Workflow توسط کاربر (CLI)
 - **انجام‌شده:** سه دستور جدید زیر `automa workflow`: `create --goal … --plan <file.json> [--json]` (قالب `user` از برنامه‌ای که کاربر نوشته)، `edit <id> [--goal …] [--plan <file>] [--json]` (قالب جدید با `parent`؛ والد دست نمی‌خوره) و `show <id> [--json | --plan-json]` (منبع، زمان، آمار یا «not run yet»، زنجیره ویرایش، هدف کامل و برنامه؛ `--plan-json` فایل قابل ویرایش برای `edit --plan`). خوندن فایل برنامه محدود و امن (فایل معمولی، ≤۱MB، UTF-8، JSON با محل خطا). بررسی نقش/سطح در `_compat_context` مشترک با `new --workflow` شد. هیچ‌کدوم کلید، Provider یا فراخوانی مدل ندارن.
 - **فایل‌های اصلی:** `src/automa/cli.py`، `tests/test_cli_workflow_edit.py` (جدید)، `README.md`، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D42).
