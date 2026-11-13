@@ -39,6 +39,9 @@ automa status             # فهرست پروژه‌ها، هزینه و برن�
 automa workflow save <id>  # ذخیره برنامه پروژه تموم‌شده (همه وظایف قبول) به‌عنوان قالب Workflow (--json)
 automa workflows           # فهرست قالب‌های Workflow (فقط‌خوندنی؛ --json)
 automa skills              # فهرست Skillها (داخلی و workspace/skills/) و نقش‌هایی که استفاده می‌کنن (فقط‌خوندنی؛ --json؛ اتصال به نقش داخلی: [roles.writer] skills = ["house-style"] در automa.toml)
+automa memory list         # حافظه سه‌لایه (کاربر، پروژه، درس‌ها) با متن کامل؛ فقط‌خوندنی (--scope user|project|lesson، --project <id>، --json)
+automa memory add "<متن>"  # افزودن یک مورد نوشته‌شده توسط کاربر (--scope، --project؛ source همیشه user؛ بدون کلید و مدل)
+automa memory forget <id>  # حذف یک مورد بعد از نمایش و تأیید (--yes برای رد کردن پرسش)
 automa new "<هدف>" --workflow <wf-id>  # پروژه جدید با برنامه قالب (بدون Executive، بدون کلید و هزینه)
 automa workflow create --goal "<هدف>" --plan plan.json  # قالب جدید از برنامه‌ای که خودتون نوشتید (--json)
 automa workflow show <wf-id> [--json | --plan-json]      # نمایش قالب؛ --plan-json فایل قابل ویرایش برنامه

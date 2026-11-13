@@ -66,7 +66,7 @@
 - [x] Skillها در CLI (نمایش): `automa skills [--json]` (نام، توضیح، منبع داخلی/workspace، نقش‌هایی که استفاده می‌کنن) و خط `skills:` در `automa status` (و کلید `skills` در `status <id> --json`)؛ فقط‌خوندنی، بدون کلید و مدل؛ Skill خراب در `skills` کد ۲ و در `status` فقط گزارش (D46)
 - [x] اتصال Skill به نقش‌های داخلی از تنظیمات کاربر: `[roles.<name>] skills = [...]` در `automa.toml` (فقط کلید `skills`؛ به انتهای Skillهای نقش اضافه می‌شه، سقف ۸، نقش ناشناخته یا Skill تکراری خطا؛ ابزار/ریسک/Policy بدون تغییر؛ D47)
 - [x] حافظه سه‌لایه (هسته): `MemoryStore` در `<workspace>/memory/` با سه لایه `user/`، `projects/<id>/` و `lessons/`، هر مورد یک فایل JSON یک‌بارنوشتنی (حداکثر ۲۰۰۰ نویسه، ۲۰۰ مورد در هر لایه، بدون تکرار)، `forget` با حذف فایل، شکست بسته روی فایل/پوشه خراب یا symlink؛ ترجیحات کاربر فقط از خود کاربر (D48)
-- [ ] حافظه (CLI): `automa memory list|add|forget` (فقط‌خوندنی/نوشتنی محلی، بدون کلید و مدل) و خط `memory:` در `automa status`
+- [x] حافظه (CLI): `automa memory list|add|forget` و خط `memory:` در `automa status` (و کلید `memory` در `status <id> --json`)؛ `list`/`status` فقط‌خوندنی، `add` فقط `source=user`، `forget` با تأیید؛ بدون کلید و مدل؛ فیلتر `--scope`/`--project`، فرار کاراکتر کنترلی، شکست بسته روی حافظه خراب (D49)
 - [ ] حافظه در پرامپت‌ها: افزودن حافظه مرتبط (کاربر، پروژه، درس‌ها) به پیام سیستمی Executive و Worker به‌عنوان داده نه دستور، با سقف اندازه و بدون تغییر Policy
 - [ ] مرحله بازبینی بعد از هر پروژه: استخراج درس‌ها و دانش پروژه با مدل (از مسیر BudgetGuard، با FakeProvider در تست)، ثبت به‌عنوان پیشنهاد و ورود به حافظه فقط با تأیید کاربر
 

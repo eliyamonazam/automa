@@ -1,6 +1,6 @@
 """Command-line interface: ``automa new``, ``run``, ``status``, ``approvals``,
 ``approve``/``reject``, ``workflow save|create|edit|show``/``workflows`` and
-``skills`` and ``bench list|run|report``.
+``skills``, ``memory list|add|forget`` and ``bench list|run|report``.
 
 Every model call goes through ``LLMGateway`` + ``BudgetGuard`` (never a bare provider).
 ``status`` and ``approvals`` are read-only: they need no API key, make no model call
@@ -13,7 +13,9 @@ uses a template's plan instead of the Executive (no API key, no model call, D40)
 ``workflow create``/``edit`` save a user-written or edited plan as a new template and
 ``workflow show`` prints one (``--plan-json`` gives an editable plan file); none of
 them needs an API key or makes a model call (D41, D42). ``skills`` lists the available
-skills and the roles that use them, read-only (D46).
+skills and the roles that use them, read-only (D46). ``memory list`` shows the three
+memory layers (read-only); ``memory add`` writes a user-written entry and ``memory forget``
+deletes one after confirmation; none of them needs an API key or makes a model call (D49).
 
 Exit codes (stable, for scripts):
 
@@ -77,6 +79,14 @@ from automa.events import Event
 from automa.llm.factory import provider_from_config
 from automa.llm.gateway import LLMGateway
 from automa.llm.provider import Provider, ProviderError
+from automa.memory import (
+    MemoryContext,
+    MemoryEntry,
+    MemoryScope,
+    MemorySource,
+    MemoryStore,
+    MemoryStoreError,
+)
 from automa.orchestrator import (
     Orchestrator,
     OrchestratorError,
@@ -155,6 +165,11 @@ workflow_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(workflow_app, name="workflow")
+memory_app = typer.Typer(
+    help="Memory: user preferences, per-project knowledge and general lessons.",
+    no_args_is_help=True,
+)
+app.add_typer(memory_app, name="memory")
 
 DEFAULT_SUITE_DIR = Path("benchmarks")
 RESULTS_DIRNAME = "results"
@@ -703,6 +718,7 @@ def _status_all(store: ProjectStore, config: AutomaConfig, as_json: bool) -> Non
     typer.echo(f"sandbox: {config.sandbox.describe()}")
     typer.echo(f"parallel: {config.orchestrator.describe()}")
     typer.echo(f"skills: {_skills_status(config)[0]}")
+    typer.echo(f"memory: {_memory_status(config)[0]}")
 
 
 def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_json: bool) -> None:
@@ -713,6 +729,7 @@ def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_j
     spent = _project_spent_nusd(workspace, project_id)
     pending = _pending_approvals(store, project_id)
     skills_line, skills_json = _skills_status(config)
+    memory_line, memory_json = _memory_status(config, project.id)
     if as_json:
         data: dict[str, Any] = {
             "id": project.id,
@@ -727,6 +744,7 @@ def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_j
             "sandbox": _sandbox_json(config),
             "max_parallel": config.orchestrator.max_parallel,
             "skills": skills_json,
+            "memory": memory_json,
         }
         typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
         return
@@ -739,6 +757,7 @@ def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_j
     typer.echo(f"sandbox: {config.sandbox.describe()}")
     typer.echo(f"parallel: {config.orchestrator.describe()}")
     typer.echo(f"skills: {skills_line}")
+    typer.echo(f"memory: {memory_line}")
     if pending:
         typer.echo(f"pending approvals: {len(pending)}")
         for r in pending:
@@ -1067,6 +1086,184 @@ def skills(
     for s in overview.skills:
         used = ", ".join(overview.used_by(s.name)) or "-"
         typer.echo(f"{s.name}  {overview.source[s.name]:<9}  roles: {used}  {_safe(s.description)}")
+
+
+# -- Memory ----------------------------------------------------------------------
+
+
+def _memory_store(config: AutomaConfig) -> MemoryStore:
+    return MemoryStore.for_workspace(config.workspace)
+
+
+def _memory_status(
+    config: AutomaConfig, project_id: str | None = None
+) -> tuple[str, dict[str, Any]]:
+    """The memory line for ``automa status``: entry counts per layer. Read-only and
+    diagnostic, so a broken memory is reported (with the reason) instead of failing."""
+    store = _memory_store(config)
+    try:
+        user = len(store.entries(MemoryScope.USER))
+        lessons = len(store.entries(MemoryScope.LESSON))
+        if project_id is None:
+            project = sum(len(store.entries(MemoryScope.PROJECT, p)) for p in store.project_ids())
+        else:
+            project = len(store.entries(MemoryScope.PROJECT, project_id))
+    except MemoryStoreError as e:
+        reason = _safe(str(e))
+        return f"error: {reason}", {"user": 0, "project": 0, "lessons": 0, "error": reason}
+    where = "all projects" if project_id is None else "this project"
+    line = f"{user} user, {project} project ({where}), {lessons} lessons"
+    return line, {"user": user, "project": project, "lessons": lessons, "error": None}
+
+
+def _memory_json(entry: MemoryEntry) -> dict[str, Any]:
+    return entry.model_dump(mode="json")
+
+
+def _memory_lines(entry: MemoryEntry) -> list[str]:
+    """Header line, then the full text indented (escaped: review entries may come
+    from a model)."""
+    header = (
+        f"{entry.id}  {entry.scope.value:<7}  {entry.project_id or '-'}  "
+        f"{entry.source.value:<6}  {entry.created_at.isoformat()}"
+    )
+    return [header, *(f"  {_safe(line)}" for line in entry.text.split("\n"))]
+
+
+def _memory_project(config: AutomaConfig, project_id: str) -> str:
+    """``project_id`` of an existing project (memory is only added to real projects)."""
+    try:
+        return ProjectStore.for_workspace(config.workspace).load(project_id).id
+    except ProjectStoreError as e:
+        raise _fail(str(e), EXIT_USER) from None
+
+
+def _selected_memory(
+    store: MemoryStore, scope: MemoryScope | None, project_id: str | None
+) -> list[MemoryEntry]:
+    want = {scope} if scope is not None else set(MemoryScope)
+    if project_id is not None:
+        if scope in (MemoryScope.USER, MemoryScope.LESSON):
+            raise MemoryStoreError(f"{scope.value} memory is not tied to a project; drop --project")
+        context = store.context(project_id)
+    else:
+        projects = [
+            e
+            for pid in (store.project_ids() if MemoryScope.PROJECT in want else [])
+            for e in store.entries(MemoryScope.PROJECT, pid)
+        ]
+        context = MemoryContext(
+            user=tuple(store.entries(MemoryScope.USER)) if MemoryScope.USER in want else (),
+            project=tuple(projects),
+            lessons=tuple(store.entries(MemoryScope.LESSON)) if MemoryScope.LESSON in want else (),
+        )
+    result: list[MemoryEntry] = []
+    if MemoryScope.USER in want:
+        result += context.user
+    if MemoryScope.PROJECT in want:
+        result += context.project
+    if MemoryScope.LESSON in want:
+        result += context.lessons
+    return result
+
+
+_SCOPE_OPTION = typer.Option("--scope", help="Memory layer: user, project or lesson.")
+
+
+@memory_app.command("list")
+def memory_list(
+    scope: Annotated[MemoryScope | None, _SCOPE_OPTION] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option(
+            "--project",
+            help="Only the memory that applies to this project (user, its own, lessons).",
+        ),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """List memory entries (user, project, lessons) with their full text. Read-only:
+    no API key, no model call, no files written; a broken memory is exit code 1."""
+    config = _load(config_path)
+    store = _memory_store(config)
+    try:
+        selected = _selected_memory(store, scope, project_id)
+    except MemoryStoreError as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    if as_json:
+        typer.echo(json.dumps([_memory_json(e) for e in selected], ensure_ascii=False, indent=2))
+        return
+    if not selected:
+        typer.echo('no memory yet; add some with: automa memory add --scope user "<text>"')
+        return
+    for entry in selected:
+        for line in _memory_lines(entry):
+            typer.echo(line)
+
+
+@memory_app.command("add")
+def memory_add(
+    text: Annotated[str, typer.Argument(help="What to remember (at most 2000 characters).")],
+    scope: Annotated[MemoryScope, _SCOPE_OPTION] = MemoryScope.USER,
+    project_id: Annotated[
+        str | None,
+        typer.Option(
+            "--project",
+            help="Project of the entry: required for --scope project, optional for lesson.",
+        ),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Remember one thing written by you (source: user). No API key, no model call."""
+    config = _load(config_path)
+    if scope is MemoryScope.PROJECT and project_id is None:
+        raise _fail("project memory needs --project <id>", EXIT_USER)
+    if scope is MemoryScope.USER and project_id is not None:
+        raise _fail("user memory is not tied to a project; drop --project", EXIT_USER)
+    if project_id is not None:
+        project_id = _memory_project(config, project_id)
+    try:
+        entry = _memory_store(config).add(
+            scope, text, project_id=project_id, source=MemorySource.USER
+        )
+    except MemoryStoreError as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    if as_json:
+        typer.echo(json.dumps(_memory_json(entry), ensure_ascii=False, indent=2))
+        return
+    typer.echo(f"remembered: {entry.id}")
+
+
+@memory_app.command("forget")
+def memory_forget(
+    memory_id: Annotated[str, typer.Argument(help="Entry id (see: automa memory list).")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Delete one memory entry after showing it. No API key, no model call."""
+    config = _load(config_path)
+    store = _memory_store(config)
+    try:
+        entry = store.find(memory_id)
+    except MemoryStoreError as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    for line in _memory_lines(entry):
+        typer.echo(line)
+    if not yes and not typer.confirm("Forget this memory for good?", default=False):
+        raise _fail("not forgotten; nothing was changed", EXIT_USER)
+    try:
+        store.forget(entry.id)
+    except MemoryStoreError as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    typer.echo(f"forgotten: {entry.id}")
 
 
 # -- Approval Gate -------------------------------------------------------------
