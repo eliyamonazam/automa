@@ -1,6 +1,6 @@
 """Command-line interface: ``automa new``, ``run``, ``status``, ``approvals``,
 ``approve``/``reject``, ``workflow save|create|edit|show``/``workflows`` and
-``skills``, ``memory list|add|forget`` and ``bench list|run|report``.
+``skills``, ``memory list|add|forget``, ``review run|show`` and ``bench list|run|report``.
 
 Every model call goes through ``LLMGateway`` + ``BudgetGuard`` (never a bare provider).
 ``status`` and ``approvals`` are read-only: they need no API key, make no model call
@@ -19,7 +19,10 @@ deletes one after confirmation; none of them needs an API key or makes a model c
 ``new`` and ``run`` load the relevant memory before any model call and add it to the
 Executive's/Worker's system prompts as data (``--no-memory`` or ``[memory] in_prompts =
 false`` turns it off; a broken memory is a configuration error); ``bench run`` never
-reads memory (D51).
+reads memory (D51). ``review run`` reviews a finished (done/failed) project with the
+``ReviewAgent`` (API key + guarded gateway; the cost counts toward the project) and
+stores the proposals; nothing becomes memory until accepted. ``review show`` prints the
+stored proposals and their decisions, read-only (D54).
 
 Exit codes (stable, for scripts):
 
@@ -27,7 +30,8 @@ Exit codes (stable, for scripts):
 * 1 — usage/user error (unknown project, aborted prompt, invalid id, …)
 * 2 — configuration error (missing key, tier without a model, invalid ``automa.toml``)
 * 3 — budget stop: the project is ``paused`` until the user decides
-* 4 — planning failed: the model gave no valid plan within the retry limit
+* 4 — planning failed: the model gave no valid plan (or ``review run``: no valid
+  review) within the retry limit
 * 5 — provider error (network, HTTP status from the gateway)
 * 6 — run finished but some task failed for good (dependents blocked)
 * 7 — run paused for another reason (approval needed, no valid verification,
@@ -54,6 +58,10 @@ from automa.agents import (
     ExecutiveAgent,
     ExecutiveSettings,
     PlanningFailed,
+    ReviewAgent,
+    ReviewError,
+    ReviewFailed,
+    ReviewSettings,
     VerifierAgent,
     WorkerAgent,
     plan_project,
@@ -100,6 +108,13 @@ from automa.orchestrator import (
 )
 from automa.plan import Plan
 from automa.project import Project, ProjectStatus, ProjectStore, ProjectStoreError
+from automa.reviews import (
+    MAX_REVIEWS_PER_PROJECT,
+    ProposalDecision,
+    ReviewStore,
+    ReviewStoreError,
+    StoredReview,
+)
 from automa.roles import RoleError, RoleRegistry
 from automa.skills import (
     Skill,
@@ -174,6 +189,11 @@ memory_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(memory_app, name="memory")
+review_app = typer.Typer(
+    help="Post-project review: proposals for memory from a finished project.",
+    no_args_is_help=True,
+)
+app.add_typer(review_app, name="review")
 
 DEFAULT_SUITE_DIR = Path("benchmarks")
 RESULTS_DIRNAME = "results"
@@ -1319,6 +1339,196 @@ def memory_forget(
     except MemoryStoreError as e:
         raise _fail(_safe(str(e)), EXIT_USER) from None
     typer.echo(f"forgotten: {entry.id}")
+
+
+# -- Post-project review -------------------------------------------------------
+
+
+def _review_store(config: AutomaConfig, store: ProjectStore) -> ReviewStore:
+    return ReviewStore(store, _memory_store(config))
+
+
+def _decision_state(decision: ProposalDecision | None) -> str:
+    if decision is None:
+        return "pending"
+    if decision.memory_id is None:
+        return decision.status.value
+    existed = ", already in memory" if decision.memory_existed else ""
+    return f"{decision.status.value} ({decision.memory_id}{existed})"
+
+
+def _review_json(review: StoredReview, decisions: dict[int, ProposalDecision]) -> dict[str, Any]:
+    return {
+        "review": review.model_dump(mode="json"),
+        "decisions": {str(n): d.model_dump(mode="json") for n, d in sorted(decisions.items())},
+        "pending": [n for n in range(1, len(review.proposals) + 1) if n not in decisions],
+    }
+
+
+def _review_lines(review: StoredReview, decisions: dict[int, ProposalDecision]) -> list[str]:
+    """Header, then every proposal numbered (the number used to decide it) with its full
+    text, escaped: proposals come from a model."""
+    lessons = sum(1 for p in review.proposals if p.scope == "lesson")
+    count = len(review.proposals)
+    lines = [
+        f"review: {review.id} (project was {review.project_status.value}, "
+        f"saved {review.saved_at.isoformat()})",
+        f"proposals: {count} ({count - lessons} project, {lessons} lesson)"
+        + (
+            f"; {review.dropped_duplicates} duplicate(s) of existing memory dropped"
+            if review.dropped_duplicates
+            else ""
+        ),
+    ]
+    for n, proposal in enumerate(review.proposals, start=1):
+        text = _safe(proposal.text).split("\n")
+        lines.append(f"  {n}. [{proposal.scope}] {_decision_state(decisions.get(n))}")
+        lines += [f"     {line}" for line in text]
+    if not review.proposals:
+        lines.append("  (nothing worth remembering was proposed)")
+    return lines
+
+
+@review_app.command("run")
+def review_run(
+    project_id: Annotated[str, typer.Argument(help="A finished (done or failed) project.")],
+    again: Annotated[
+        bool,
+        typer.Option(
+            "--again",
+            help="Review again even if the project already has a review (costs again).",
+        ),
+    ] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Review a finished project with the model and store its memory proposals.
+
+    Needs the API key; every call goes through the BudgetGuard and counts toward the
+    project's budget. The proposals are only stored: nothing is remembered until a
+    proposal is accepted.
+    """
+    config = _load(config_path)
+    store = ProjectStore.for_workspace(config.workspace)
+    reviews = _review_store(config, store)
+    # Everything that can fail for free is checked before any model call.
+    try:
+        project = store.load(project_id)
+        pid = project.id
+        if project.status not in (ProjectStatus.DONE, ProjectStatus.FAILED):
+            raise _fail(
+                f"project {pid} is {project.status.value}; only done or failed projects "
+                "can be reviewed",
+                EXIT_USER,
+            )
+        previous = reviews.all(pid)
+    except (ProjectStoreError, ReviewStoreError) as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    if len(previous) >= MAX_REVIEWS_PER_PROJECT:
+        raise _fail(
+            f"project {pid} already has {MAX_REVIEWS_PER_PROJECT} reviews; no more can be stored",
+            EXIT_USER,
+        )
+    if previous and not again:
+        raise _fail(
+            f"project {pid} already has a review ({previous[-1].id}); see it with: "
+            f"automa review show {pid} (use --again to pay for another one)",
+            EXIT_USER,
+        )
+    settings = ReviewSettings()
+    try:
+        config.model_for(settings.tier)
+        provider = make_provider(config)
+        # Existing memory is only used to drop duplicate proposals; never sent to the model.
+        existing = _memory_store(config).context(pid)
+    except (ConfigError, MemoryStoreError) as e:
+        raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+
+    if not as_json:
+        typer.echo(f"project: {pid} ({project.status.value})")
+    events = store.events(pid)
+    with CostLedger.for_workspace(config.workspace) as ledger:
+        spent_before = ledger.spent_nusd(project_id=pid)
+        guard = BudgetGuard(config.limits, ledger, events=events)
+        gateway = LLMGateway(config, provider, guard=guard)
+        agent = ReviewAgent(gateway, settings=settings, events=events)
+        try:
+            review = agent.review(store, pid, existing=existing)
+        except KeyboardInterrupt:
+            typer.echo("interrupted: nothing was stored", err=True)
+            raise typer.Exit(EXIT_INTERRUPTED) from None
+        except BudgetError as e:
+            detail = f" ({e.scope.value} cap)" if isinstance(e, BudgetExceeded) else ""
+            raise _fail(
+                f"budget stop{detail}: {e}. Nothing was stored; the project is unchanged.",
+                EXIT_BUDGET,
+            ) from None
+        except ReviewFailed as e:
+            raise _fail(f"{e}; nothing was stored\n{_safe(e.details)}", EXIT_PLANNING) from None
+        except ProviderError as e:
+            raise _fail(f"provider error: {e}; nothing was stored", EXIT_PROVIDER) from None
+        except (ReviewError, ProjectStoreError) as e:
+            raise _fail(_safe(str(e)), EXIT_USER) from None
+        finally:
+            cost = ledger.spent_nusd(project_id=pid) - spent_before
+            if not as_json:
+                typer.echo(f"cost: {_usd(cost)}")
+    try:
+        stored = reviews.save(review)
+    except (ReviewStoreError, ProjectStoreError) as e:
+        raise _fail(f"review not stored: {_safe(str(e))}", EXIT_USER) from None
+    if as_json:
+        data = _review_json(stored, {})
+        data["cost_nusd"] = cost
+        typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+    for line in _review_lines(stored, {}):
+        typer.echo(line)
+    typer.echo("note: these are proposals only; nothing has been added to memory")
+
+
+@review_app.command("show")
+def review_show(
+    project_id: Annotated[str, typer.Argument(help="Project whose review to show.")],
+    review_id: Annotated[
+        str | None, typer.Option("--review", help="Review id; default: the latest.")
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Show a stored review: every proposal with its full text and decision. Read-only:
+    no API key, no model call, no files written."""
+    config = _load(config_path)
+    store = ProjectStore.for_workspace(config.workspace)
+    reviews = _review_store(config, store)
+    try:
+        pid = store.load(project_id).id
+        all_reviews = reviews.all(pid)
+        if review_id is not None:
+            review: StoredReview | None = reviews.get(pid, review_id)
+        else:
+            review = all_reviews[-1] if all_reviews else None
+        decisions = reviews.decisions(pid, review.id) if review is not None else {}
+    except (ProjectStoreError, ReviewStoreError) as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    if review is None:
+        if as_json:
+            typer.echo("null")
+        else:
+            typer.echo(f"no reviews yet; run one with: automa review run {pid}")
+        return
+    if as_json:
+        typer.echo(json.dumps(_review_json(review, decisions), ensure_ascii=False, indent=2))
+        return
+    if len(all_reviews) > 1:
+        others = ", ".join(r.id for r in all_reviews if r.id != review.id)
+        typer.echo(f"reviews: {len(all_reviews)} (others: {others})")
+    for line in _review_lines(review, decisions):
+        typer.echo(line)
 
 
 # -- Approval Gate -------------------------------------------------------------

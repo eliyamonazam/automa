@@ -44,6 +44,8 @@ automa memory add "<متن>"  # افزودن یک مورد نوشته‌شده �
 automa memory forget <id>  # حذف یک مورد بعد از نمایش و تأیید (--yes برای رد کردن پرسش)
 # automa new/run حافظهٔ مرتبط را به‌عنوان داده (نه دستور) به پیام سیستمی اضافه می‌کنند؛
 # خاموش کردن: --no-memory یا [memory] in_prompts = false در automa.toml. bench run حافظه نمی‌خواند.
+automa review run <id>     # بازبینی پروژه done/failed با مدل (کلید و بودجه؛ هزینه به حساب پروژه) و ذخیره پیشنهادهای حافظه — هنوز حافظه نیستند (--again، --json)
+automa review show <id>    # پیشنهادهای آخرین بازبینی با شماره و وضعیت تصمیم (فقط‌خوندنی؛ --review <rid>، --json)
 automa new "<هدف>" --workflow <wf-id>  # پروژه جدید با برنامه قالب (بدون Executive، بدون کلید و هزینه)
 automa workflow create --goal "<هدف>" --plan plan.json  # قالب جدید از برنامه‌ای که خودتون نوشتید (--json)
 automa workflow show <wf-id> [--json | --plan-json]      # نمایش قالب؛ --plan-json فایل قابل ویرایش برنامه
