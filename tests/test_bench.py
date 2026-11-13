@@ -704,3 +704,13 @@ def test_bench_wraps_the_provider_in_one_guarded_gateway_with_benchmark_limits()
     src = inspect.getsource(bench)
     assert "limits = benchmark_limits(config.limits, benchmark)" in src
     assert ".complete(" not in src
+
+
+def test_broken_workspace_skill_is_config_error_before_anything(env: Env) -> None:
+    bad = env.ws / "skills" / "bad"
+    bad.mkdir(parents=True)
+    (bad / "SKILL.md").write_text("no frontmatter\n", encoding="utf-8")
+    r = env.bench(BID)
+    assert r.exit_code == cli.EXIT_CONFIG, r.output
+    assert "workspace skills" in r.output
+    assert env.projects() == [] and env.provider.requests == []

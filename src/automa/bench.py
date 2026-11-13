@@ -42,6 +42,7 @@ from automa.llm.provider import Provider, ProviderError
 from automa.orchestrator import Orchestrator, OrchestratorSettings, StopReason
 from automa.project import ProjectStatus, ProjectStore
 from automa.roles import RoleRegistry
+from automa.skills import SkillRegistry
 
 Clock = Callable[[], datetime]
 PROJECT_PREFIX = "bench"
@@ -116,6 +117,7 @@ def run_benchmark(
     store: ProjectStore,
     ledger: CostLedger,
     roles: RoleRegistry,
+    skills: SkillRegistry | None = None,
     project_id: str | None = None,
     clock: Clock | None = None,
 ) -> BenchmarkRunRecord:
@@ -152,7 +154,7 @@ def run_benchmark(
     if stop is None:
         orchestrator = Orchestrator(
             store,
-            WorkerAgent(gateway, events=events),
+            WorkerAgent(gateway, events=events, skills=skills),
             VerifierAgent(gateway, events=events),
             roles,
             config,

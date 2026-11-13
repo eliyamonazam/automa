@@ -86,6 +86,7 @@ from automa.orchestrator import (
 from automa.plan import Plan
 from automa.project import Project, ProjectStatus, ProjectStore, ProjectStoreError
 from automa.roles import RoleError, RoleRegistry
+from automa.skills import SkillError, SkillRegistry, load_skills
 from automa.tools import DockerSandbox, SandboxError, check_docker, default_tools, tools_factory
 from automa.tools.approvals import (
     ApprovalError,
@@ -183,6 +184,13 @@ def _load(config_path: Path | None) -> AutomaConfig:
         raise _fail(str(e), EXIT_CONFIG) from None
 
 
+def _roles_and_skills(config: AutomaConfig) -> tuple[RoleRegistry, SkillRegistry]:
+    """Built-in roles checked against the real tools and the workspace's skills
+    (built-in + ``<workspace>/skills/``). Raises ``SkillError``/``RoleError`` (D45)."""
+    skills = load_skills(config.workspace)
+    return RoleRegistry.builtin(tools=default_tools(), skills=skills), skills
+
+
 def _usd(nusd: int) -> str:
     return f"${nusd_to_usd(nusd):.4f}"
 
@@ -267,8 +275,8 @@ def new(
         # missing key or tier never leaves an orphan project behind.
         config.model_for(settings.tier)
         provider = make_provider(config)
-        roles = RoleRegistry.builtin(tools=default_tools())
-    except (ConfigError, RoleError) as e:
+        roles, _ = _roles_and_skills(config)
+    except (ConfigError, RoleError, SkillError) as e:
         raise _fail(str(e), EXIT_CONFIG) from None
 
     store = ProjectStore.for_workspace(config.workspace)
@@ -487,8 +495,8 @@ def run(
     try:
         # Validate what every model call needs before touching the project.
         provider = make_provider(config)
-        roles = RoleRegistry.builtin(tools=default_tools())
-    except (ConfigError, RoleError) as e:
+        roles, skills = _roles_and_skills(config)
+    except (ConfigError, RoleError, SkillError) as e:
         raise _fail(str(e), EXIT_CONFIG) from None
     _require_sandbox(config)
 
@@ -502,7 +510,7 @@ def run(
         gateway = LLMGateway(config, provider, guard=guard)
         orchestrator = Orchestrator(
             store,
-            WorkerAgent(gateway, events=events),
+            WorkerAgent(gateway, events=events, skills=skills),
             VerifierAgent(gateway, events=events),
             roles,
             config,
@@ -1203,8 +1211,8 @@ def bench_run(
         # Everything a run needs is checked before a project is created or a cent spent.
         config.model_for(ExecutiveSettings().tier)
         provider = make_provider(config)
-        roles = RoleRegistry.builtin(tools=default_tools())
-    except (ConfigError, RoleError) as e:
+        roles, skills = _roles_and_skills(config)
+    except (ConfigError, RoleError, SkillError) as e:
         raise _fail(str(e), EXIT_CONFIG) from None
     _require_sandbox(config)
     try:
@@ -1224,6 +1232,7 @@ def bench_run(
                 store=store,
                 ledger=ledger,
                 roles=roles,
+                skills=skills,
             )
         except KeyboardInterrupt:
             typer.echo("interrupted: no result recorded (the project is kept and paused)")

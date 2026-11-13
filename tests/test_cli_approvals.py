@@ -75,7 +75,7 @@ class _PubRegistry:
     """Stands in for ``RoleRegistry`` in the CLI: one role that may ``publish``."""
 
     @staticmethod
-    def builtin(*, tools: Any) -> RoleRegistry:
+    def builtin(*, tools: Any, skills: Any = None) -> RoleRegistry:
         publisher = Role(
             name="publisher",
             description="Writes and publishes.",
