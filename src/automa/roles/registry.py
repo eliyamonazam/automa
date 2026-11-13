@@ -6,6 +6,11 @@ available tools are given, every tool a role lists must exist and must be
 reachable under the role's ``max_risk`` (an unreachable tool is a mistake in
 the role file, not something to discover at run time). Likewise, when the
 available skills are given, every skill a role lists must exist.
+
+``extra_skills`` (from ``[roles.<name>] skills`` in automa.toml, D47) appends skill
+names to existing roles before those checks. It is text only: the resulting role
+has exactly the same tools, risk level and policy; an unknown role, a skill the
+role already lists or going over the per-role cap is an error.
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ from __future__ import annotations
 import os
 import stat
 import tomllib
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -92,6 +97,37 @@ def _check_tools(role: Role, tools: Mapping[str, RiskLevel]) -> None:
         )
 
 
+def _add_skills(role: Role, extra: Sequence[str], source: str) -> Role:
+    if isinstance(extra, str):
+        raise RoleError(f"{source}: skills must be a list of names, not a string")
+    extra = tuple(extra)
+    again = sorted(set(extra) & set(role.skills))
+    if again:
+        raise RoleError(f"{source}: skills {again} are already listed by role {role.name!r}")
+    try:
+        new = Role.model_validate(role.model_dump() | {"skills": role.skills + extra})
+    except ValidationError as e:
+        msgs = "; ".join(err["msg"] for err in e.errors(include_input=False)[:5])
+        raise RoleError(f"{source}: {msgs}") from None
+    if new.policy() != role.policy():  # defence in depth: skills never change permissions
+        raise RoleError(f"{source}: adding skills changed the policy of role {role.name!r}")
+    return new
+
+
+def apply_extra_skills(
+    roles: Mapping[str, Role], extra_skills: Mapping[str, Sequence[str]]
+) -> dict[str, Role]:
+    """Return ``roles`` with ``extra_skills[name]`` appended to each named role."""
+    unknown = sorted(set(extra_skills) - set(roles))
+    if unknown:
+        raise RoleError(f"automa.toml [roles]: unknown roles {unknown} (known: {sorted(roles)})")
+    result = dict(roles)
+    for name, extra in extra_skills.items():
+        if extra:
+            result[name] = _add_skills(roles[name], extra, f"automa.toml [roles.{name}]")
+    return result
+
+
 class RoleRegistry:
     """An immutable set of roles, keyed by name."""
 
@@ -101,6 +137,7 @@ class RoleRegistry:
         *,
         tools: Iterable[Tool] | None = None,
         skills: SkillRegistry | None = None,
+        extra_skills: Mapping[str, Sequence[str]] | None = None,
     ):
         by_name: dict[str, Role] = {}
         for role in roles:
@@ -111,6 +148,8 @@ class RoleRegistry:
             by_name[role.name] = role
         if not by_name:
             raise RoleError("no roles defined")
+        if extra_skills:
+            by_name = apply_extra_skills(by_name, extra_skills)
         if tools is not None:
             risks = {t.name: t.risk for t in tools}
             for role in by_name.values():
@@ -131,6 +170,7 @@ class RoleRegistry:
         *,
         tools: Iterable[Tool] | None = None,
         skills: SkillRegistry | None = None,
+        extra_skills: Mapping[str, Sequence[str]] | None = None,
     ) -> RoleRegistry:
         directory = Path(directory)
         if directory.is_symlink() or not directory.is_dir():
@@ -142,14 +182,20 @@ class RoleRegistry:
             path = directory / entry.name
             stem = entry.name[: -len(ROLE_SUFFIX)]
             roles.append(parse_role(_read_role_file(path), expected_name=stem, source=entry.name))
-        return cls(roles, tools=tools, skills=skills)
+        return cls(roles, tools=tools, skills=skills, extra_skills=extra_skills)
 
     @classmethod
     def builtin(
-        cls, *, tools: Iterable[Tool] | None = None, skills: SkillRegistry | None = None
+        cls,
+        *,
+        tools: Iterable[Tool] | None = None,
+        skills: SkillRegistry | None = None,
+        extra_skills: Mapping[str, Sequence[str]] | None = None,
     ) -> RoleRegistry:
         """The roles shipped with Automa (``src/automa/roles/builtin/``)."""
-        return cls.from_dir(BUILTIN_ROLES_DIR, tools=tools, skills=skills)
+        return cls.from_dir(
+            BUILTIN_ROLES_DIR, tools=tools, skills=skills, extra_skills=extra_skills
+        )
 
     def get(self, name: str) -> Role:
         try:

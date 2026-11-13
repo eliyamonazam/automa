@@ -242,7 +242,12 @@ class Env:
 
         class _Roles:
             @staticmethod
-            def builtin(*, tools: Any, skills: SkillRegistry | None = None) -> RoleRegistry:
+            def builtin(
+                *,
+                tools: Any,
+                skills: SkillRegistry | None = None,
+                extra_skills: Any = None,
+            ) -> RoleRegistry:
                 seen.append(skills)
                 writer = Role(
                     name="writer",
@@ -252,7 +257,7 @@ class Env:
                     instructions="Write the file.",
                     skills=names,
                 )
-                return RoleRegistry([writer], tools=tools, skills=skills)
+                return RoleRegistry([writer], tools=tools, skills=skills, extra_skills=extra_skills)
 
         self.monkeypatch.setattr(cli, "RoleRegistry", _Roles)
         return seen

@@ -198,7 +198,10 @@ def _roles_and_skills(config: AutomaConfig) -> tuple[RoleRegistry, SkillRegistry
     """Built-in roles checked against the real tools and the workspace's skills
     (built-in + ``<workspace>/skills/``). Raises ``SkillError``/``RoleError`` (D45)."""
     skills = load_skills(config.workspace)
-    return RoleRegistry.builtin(tools=default_tools(), skills=skills), skills
+    roles = RoleRegistry.builtin(
+        tools=default_tools(), skills=skills, extra_skills=config.role_skills()
+    )
+    return roles, skills
 
 
 class SkillOverview:
@@ -210,7 +213,9 @@ class SkillOverview:
         builtin = builtin_skills()
         workspace = workspace_skills(config.workspace)
         merged = merge_skills(builtin, workspace)
-        roles = RoleRegistry.builtin(tools=default_tools(), skills=merged)
+        roles = RoleRegistry.builtin(
+            tools=default_tools(), skills=merged, extra_skills=config.role_skills()
+        )
         self.skills: list[Skill] = sorted(merged, key=lambda s: s.name)
         self.source = {s.name: "builtin" for s in builtin} | {
             s.name: "workspace" for s in workspace

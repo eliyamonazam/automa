@@ -52,3 +52,10 @@ mode = "local"
 # files written by run_command are NOT checked).
 [orchestrator]
 max_parallel = 1
+
+# Extra skills for built-in roles (names of folders in <workspace>/skills/ or built-in
+# skills). Text only: a skill adds instructions to the role's system prompt and never
+# changes its tools, risk level or budget; only `skills` is accepted here. Each skill's
+# text is sent with every step, so it adds input cost. At most 8 skills per role.
+# [roles.writer]
+# skills = ["house-style"]

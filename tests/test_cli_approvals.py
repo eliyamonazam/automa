@@ -75,7 +75,7 @@ class _PubRegistry:
     """Stands in for ``RoleRegistry`` in the CLI: one role that may ``publish``."""
 
     @staticmethod
-    def builtin(*, tools: Any, skills: Any = None) -> RoleRegistry:
+    def builtin(*, tools: Any, skills: Any = None, extra_skills: Any = None) -> RoleRegistry:
         publisher = Role(
             name="publisher",
             description="Writes and publishes.",
@@ -83,7 +83,7 @@ class _PubRegistry:
             max_risk=RiskLevel.WRITE,
             instructions="Publish the text, then write the file.",
         )
-        return RoleRegistry([publisher], tools=_pub_tools())
+        return RoleRegistry([publisher], tools=_pub_tools(), extra_skills=extra_skills)
 
 
 def calls(*items: tuple[str, dict[str, Any]]) -> ChatResponse:

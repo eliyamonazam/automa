@@ -64,7 +64,7 @@
 - [x] اتصال Skillها به نقش‌ها: فیلد `skills` در فایل نقش (حداکثر ۸)، بررسی وجود Skill در `RoleRegistry(skills=…)`، و افزودن متن Skillها به پیام سیستمی Worker بین دستورالعمل نقش و پروتکل ثابت؛ Skill گمشده یا متن بیش از ۶۰٬۰۰۰ نویسه قبل از هر فراخوانی مدل خطاست؛ Policy دست نخورد (D44)
 - [x] Skillها در CLI و workspace (بارگذاری): `load_skills(workspace)` = Skillهای داخلی (`src/automa/skills/builtin/`، فعلاً خالی) + `<workspace>/skills/`؛ نام تکراری بین دو منبع خطاست؛ `new`/`run`/`bench run` قبل از هر هزینه بارگذاری و به نقش‌ها و Worker وصل می‌کنن (D45)
 - [x] Skillها در CLI (نمایش): `automa skills [--json]` (نام، توضیح، منبع داخلی/workspace، نقش‌هایی که استفاده می‌کنن) و خط `skills:` در `automa status` (و کلید `skills` در `status <id> --json`)؛ فقط‌خوندنی، بدون کلید و مدل؛ Skill خراب در `skills` کد ۲ و در `status` فقط گزارش (D46)
-- [ ] اتصال Skill به نقش‌های داخلی از تنظیمات کاربر (مثلاً `[roles.<name>] skills = [...]` در `automa.toml`؛ فقط افزودن متن، بدون تغییر ابزار/ریسک)
+- [x] اتصال Skill به نقش‌های داخلی از تنظیمات کاربر: `[roles.<name>] skills = [...]` در `automa.toml` (فقط کلید `skills`؛ به انتهای Skillهای نقش اضافه می‌شه، سقف ۸، نقش ناشناخته یا Skill تکراری خطا؛ ابزار/ریسک/Policy بدون تغییر؛ D47)
 - [ ] حافظه سه‌لایه (کاربر، پروژه، درس‌های عمومی) + مرحله بازبینی بعد از هر پروژه
 
 ## M8 — Router هوشمند و Financial Controller

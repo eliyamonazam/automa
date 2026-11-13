@@ -4,7 +4,7 @@ Sources, from lowest to highest precedence:
 
 1. Built-in defaults (conservative, finite budget limits).
 2. ``automa.toml`` (non-secret settings: tiers, prices, limits, workspace, sandbox,
-   orchestrator).
+   orchestrator, extra skills for built-in roles).
 3. ``.env`` file in the working directory.
 4. Process environment variables.
 
@@ -15,6 +15,7 @@ A secret found in ``automa.toml`` is rejected, so the TOML file stays safe to co
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from collections.abc import Mapping
 from enum import StrEnum
@@ -27,6 +28,7 @@ from pydantic import (
     Field,
     SecretStr,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -173,6 +175,28 @@ def describe_parallel(max_parallel: int) -> str:
     )
 
 
+# Same as automa.plan.models.ROLE_PATTERN (not imported: automa.plan imports this module).
+_ROLE_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+
+
+class RoleSettings(_Strict):
+    """``[roles.<name>]`` in automa.toml: skills added to a built-in role (D47).
+
+    Only ``skills`` is accepted: the file cannot change a role's tools, risk level,
+    tier, steps or instructions (``extra="forbid"``). Skill names, the per-role cap
+    and the existence of each skill are checked when the roles are loaded.
+    """
+
+    skills: tuple[str, ...] = ()
+
+    @field_validator("skills", mode="before")
+    @classmethod
+    def _skill_list(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            raise ValueError("skills must be a list of names, not a string")
+        return v
+
+
 class AutomaConfig(_Strict):
     """Fully resolved, validated configuration."""
 
@@ -184,6 +208,19 @@ class AutomaConfig(_Strict):
     workspace: Path = Path("workspace")
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
+    roles: dict[str, RoleSettings] = Field(default_factory=dict)
+
+    @field_validator("roles")
+    @classmethod
+    def _role_keys(cls, v: dict[str, RoleSettings]) -> dict[str, RoleSettings]:
+        bad = sorted(repr(k) for k in v if not _ROLE_KEY_RE.fullmatch(k))
+        if bad:
+            raise ValueError(f"invalid role names: {', '.join(bad)}")
+        return v
+
+    def role_skills(self) -> dict[str, tuple[str, ...]]:
+        """Extra skills per role from ``[roles.<name>]`` (roles with none are left out)."""
+        return {name: rs.skills for name, rs in sorted(self.roles.items()) if rs.skills}
 
     @model_validator(mode="after")
     def _check(self) -> AutomaConfig:
