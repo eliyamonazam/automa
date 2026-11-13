@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-13 — M7: اتصال Skillها به نقش‌ها
+- **انجام‌شده:** فیلد اختیاری `skills` به `Role` اضافه شد (فهرست نام‌ها با همون الگوی نام Skill، بدون تکرار، حداکثر ۸). `RoleRegistry`، `from_dir` و `builtin` پارامتر اختیاری `skills: SkillRegistry` گرفتن و اگه داده بشه، Skill ناموجود هر نقش خطای `RoleError`ه. `WorkerAgent(skills=…)` متن Skillهای نقش رو (به ترتیب فهرست نقش) بعد از دستورالعمل نقش و قبل از `WORKER_PROTOCOL` در پیام سیستمی می‌ذاره، با سرتیتری که صریحاً می‌گه Skill هیچ ابزار یا مجوزی نمی‌ده. Skill گمشده، نبودن مجموعه Skill یا متن بیش از ۶۰٬۰۰۰ نویسه قبل از هر فراخوانی مدل (بدون هزینه) خطاست. رویداد `worker.started` فهرست Skillها رو هم ثبت می‌کنه. `Role.policy()` و BudgetGuard دست نخوردن؛ نقش‌های بدون Skill دقیقاً همون پیام سیستمی قبلی رو دارن.
+- **فایل‌های اصلی:** `src/automa/roles/models.py`، `src/automa/roles/registry.py`، `src/automa/roles/__init__.py`، `src/automa/agents/worker.py` (`skills_prompt`، `system_prompt`)، `tests/test_role_skills.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D44).
+- **تست‌ها:** `pytest` ← ۱۶۲۰ تست سبز، ۲ رد شده (Docker واقعی)؛ ۳۵ تست جدید با `FakeProvider`: فیلد `skills` از TOML، ۱۱ فهرست نامعتبر، سقف ۸، برابری Policy با و بدون Skill، بررسی وجود در Registry و `from_dir`، ترتیب پیام سیستمی، فقط Skillهای فهرست‌شده، سقف اندازه، شکست قبل از فراخوانی مدل، ابزارهای ارسالی بدون تغییر. `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** CLI هنوز `SkillRegistry` رو بارگذاری نمی‌کنه، پس فعلاً هیچ نقش داخلی‌ای Skill نداره و اتصال فقط از طریق API قابل استفاده‌ست (بخش بعد). خطای قدیمی mypy در `src/automa/benchmarks/report.py:230` هنوز هست.
+- **قدم بعدی:** Skillها در CLI و workspace: پوشه `<workspace>/skills/` و Skillهای داخلی، `automa skills [--json]`، نمایش Skillهای نقش در `automa status`.
+
 ## 2026-11-12 — M7: بارگذاری Skillها (هسته)
 - **انجام‌شده:** مورد «بارگذاری Skillها با قالب `SKILL.md` و اتصال به نقش‌ها» به سه بخش شکسته شد (هسته، اتصال به نقش‌ها، CLI/workspace) و هسته انجام شد. ماژول جدید `automa.skills`: مدل `Skill` (تغییرناپذیر، `extra="forbid"`)، `split_frontmatter`/`parse_skill` با زیرمجموعه کوچک و قطعی YAML بدون وابستگی جدید، و `SkillRegistry.from_dir`/`from_optional_dir` برای پوشه‌های `<name>/SKILL.md` با شکست بسته. `allowed-tools` رد می‌شه چون Skill هیچ ابزاری نمی‌ده؛ مجوزها فقط از نقش میان.
 - **فایل‌های اصلی:** `src/automa/skills/` (جدید: `__init__.py`، `models.py`، `registry.py`)، `tests/test_skills.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D43).

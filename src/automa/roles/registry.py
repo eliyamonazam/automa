@@ -4,7 +4,8 @@ Loading fails closed: a malformed, oversized, symlinked or inconsistent role
 file is an error for the whole registry, never silently skipped. When the
 available tools are given, every tool a role lists must exist and must be
 reachable under the role's ``max_risk`` (an unreachable tool is a mistake in
-the role file, not something to discover at run time).
+the role file, not something to discover at run time). Likewise, when the
+available skills are given, every skill a role lists must exist.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from automa.roles.models import Role
+from automa.skills.registry import SkillRegistry
 from automa.tools.base import RiskLevel, Tool
 
 ROLE_SUFFIX = ".toml"
@@ -93,7 +95,13 @@ def _check_tools(role: Role, tools: Mapping[str, RiskLevel]) -> None:
 class RoleRegistry:
     """An immutable set of roles, keyed by name."""
 
-    def __init__(self, roles: Iterable[Role], *, tools: Iterable[Tool] | None = None):
+    def __init__(
+        self,
+        roles: Iterable[Role],
+        *,
+        tools: Iterable[Tool] | None = None,
+        skills: SkillRegistry | None = None,
+    ):
         by_name: dict[str, Role] = {}
         for role in roles:
             if not isinstance(role, Role):
@@ -107,10 +115,23 @@ class RoleRegistry:
             risks = {t.name: t.risk for t in tools}
             for role in by_name.values():
                 _check_tools(role, risks)
+        if skills is not None:
+            if not isinstance(skills, SkillRegistry):
+                raise TypeError("skills must be a SkillRegistry")
+            for role in by_name.values():
+                missing = sorted(set(role.skills) - skills.names())
+                if missing:
+                    raise RoleError(f"role {role.name!r}: unknown skills {missing}")
         self._roles = dict(sorted(by_name.items()))
 
     @classmethod
-    def from_dir(cls, directory: Path, *, tools: Iterable[Tool] | None = None) -> RoleRegistry:
+    def from_dir(
+        cls,
+        directory: Path,
+        *,
+        tools: Iterable[Tool] | None = None,
+        skills: SkillRegistry | None = None,
+    ) -> RoleRegistry:
         directory = Path(directory)
         if directory.is_symlink() or not directory.is_dir():
             raise RoleError(f"roles directory not found: {directory}")
@@ -121,12 +142,14 @@ class RoleRegistry:
             path = directory / entry.name
             stem = entry.name[: -len(ROLE_SUFFIX)]
             roles.append(parse_role(_read_role_file(path), expected_name=stem, source=entry.name))
-        return cls(roles, tools=tools)
+        return cls(roles, tools=tools, skills=skills)
 
     @classmethod
-    def builtin(cls, *, tools: Iterable[Tool] | None = None) -> RoleRegistry:
+    def builtin(
+        cls, *, tools: Iterable[Tool] | None = None, skills: SkillRegistry | None = None
+    ) -> RoleRegistry:
         """The roles shipped with Automa (``src/automa/roles/builtin/``)."""
-        return cls.from_dir(BUILTIN_ROLES_DIR, tools=tools)
+        return cls.from_dir(BUILTIN_ROLES_DIR, tools=tools, skills=skills)
 
     def get(self, name: str) -> Role:
         try:

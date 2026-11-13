@@ -61,7 +61,7 @@
 
 ## M7 — Skillها و حافظه
 - [x] بارگذاری Skillها (هسته): `Skill` و `SkillRegistry.from_dir` برای پوشه‌های `<name>/SKILL.md` با frontmatter محدود (`name`، `description`، `license`) بدون وابستگی YAML، شکست بسته (symlink، فایل خراب/بزرگ/غیر UTF-8، نام ناهمخوان)، و رد `allowed-tools` (Skill هیچ ابزاری نمی‌ده؛ D43)
-- [ ] اتصال Skillها به نقش‌ها: فیلد `skills` در فایل نقش، بررسی وجود Skill موقع بارگذاری، و افزودن متن Skillها به پیام سیستمی Worker (بدون تغییر Policy)
+- [x] اتصال Skillها به نقش‌ها: فیلد `skills` در فایل نقش (حداکثر ۸)، بررسی وجود Skill در `RoleRegistry(skills=…)`، و افزودن متن Skillها به پیام سیستمی Worker بین دستورالعمل نقش و پروتکل ثابت؛ Skill گمشده یا متن بیش از ۶۰٬۰۰۰ نویسه قبل از هر فراخوانی مدل خطاست؛ Policy دست نخورد (D44)
 - [ ] Skillها در CLI و workspace: پوشه `<workspace>/skills/` و Skillهای داخلی، `automa skills [--json]`، نمایش Skillهای نقش در `automa status`
 - [ ] حافظه سه‌لایه (کاربر، پروژه، درس‌های عمومی) + مرحله بازبینی بعد از هر پروژه
 
