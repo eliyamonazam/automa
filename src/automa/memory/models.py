@@ -32,6 +32,27 @@ def normalize_text(text: str) -> str:
     return " ".join(unicodedata.normalize("NFC", text).casefold().split())
 
 
+def clean_memory_text(v: str, *, max_chars: int = MAX_MEMORY_TEXT_CHARS) -> str:
+    """NFC, CRLF to LF, stripped; no control characters except newline and tab.
+
+    Raises ``ValueError`` for empty, too long or control-character text. Shared by
+    ``MemoryEntry`` and the review step's proposals, so a proposal that passes here
+    can always be stored as a memory entry.
+    """
+    v = unicodedata.normalize("NFC", v).replace("\r\n", "\n").strip()
+    if not v:
+        raise ValueError("memory text must not be empty")
+    for ch in v:
+        if ch in _ALLOWED_CONTROL:
+            continue
+        if unicodedata.category(ch) in {"Cc", "Cs"}:
+            raise ValueError("memory text must not contain control characters")
+    limit = min(max_chars, MAX_MEMORY_TEXT_CHARS)
+    if len(v) > limit:
+        raise ValueError(f"memory text longer than {limit} characters")
+    return v
+
+
 class MemoryEntry(BaseModel):
     """Contents of one ``memory/.../<id>.json`` file. Immutable; written once."""
 
@@ -55,17 +76,7 @@ class MemoryEntry(BaseModel):
     @field_validator("text")
     @classmethod
     def _clean_text(cls, v: str) -> str:
-        v = unicodedata.normalize("NFC", v).replace("\r\n", "\n").strip()
-        if not v:
-            raise ValueError("memory text must not be empty")
-        for ch in v:
-            if ch in _ALLOWED_CONTROL:
-                continue
-            if unicodedata.category(ch) in {"Cc", "Cs"}:
-                raise ValueError("memory text must not contain control characters")
-        if len(v) > MAX_MEMORY_TEXT_CHARS:
-            raise ValueError(f"memory text longer than {MAX_MEMORY_TEXT_CHARS} characters")
-        return v
+        return clean_memory_text(v)
 
     @field_validator("project_id")
     @classmethod

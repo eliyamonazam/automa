@@ -11,6 +11,8 @@ from automa.memory.models import (
     MemoryEntry,
     MemoryScope,
     MemorySource,
+    clean_memory_text,
+    normalize_text,
 )
 from automa.memory.prompt import (
     MAX_MEMORY_PROMPT_CHARS,
@@ -46,7 +48,9 @@ __all__ = [
     "MemorySource",
     "MemoryStore",
     "check_memory_project",
+    "clean_memory_text",
     "memory_prompt",
+    "normalize_text",
     "select_memory",
     "validate_memory_id",
 ]
