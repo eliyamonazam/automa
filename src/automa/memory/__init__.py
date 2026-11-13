@@ -1,8 +1,8 @@
 """Three-layer memory: user preferences, per-project knowledge, general lessons (M7, D48).
 
-This package is storage only: it never calls a model and never grants a tool,
-risk level or budget. Using memory in prompts and the post-project review step
-are separate roadmap items.
+This package never calls a model and never grants a tool, risk level or budget.
+``memory_prompt`` renders memory as a bounded, data-only system-prompt section
+(D50); the post-project review step is a separate roadmap item.
 """
 
 from automa.memory.models import (
@@ -11,6 +11,12 @@ from automa.memory.models import (
     MemoryEntry,
     MemoryScope,
     MemorySource,
+)
+from automa.memory.prompt import (
+    MAX_MEMORY_PROMPT_CHARS,
+    check_memory_project,
+    memory_prompt,
+    select_memory,
 )
 from automa.memory.store import (
     MAX_ENTRIES_PER_LAYER,
@@ -26,6 +32,7 @@ from automa.memory.store import (
 
 __all__ = [
     "MAX_ENTRIES_PER_LAYER",
+    "MAX_MEMORY_PROMPT_CHARS",
     "MAX_MEMORY_FILE_BYTES",
     "MAX_MEMORY_TEXT_CHARS",
     "MEMORY_DIRNAME",
@@ -38,5 +45,8 @@ __all__ = [
     "MemoryScope",
     "MemorySource",
     "MemoryStore",
+    "check_memory_project",
+    "memory_prompt",
+    "select_memory",
     "validate_memory_id",
 ]

@@ -38,6 +38,8 @@ from automa.events import Event, EventSink
 from automa.llm.gateway import CallContext, LLMGateway
 from automa.llm.types import FinishReason, Message, ToolCall, ToolSpec
 from automa.llm.types import Role as MsgRole
+from automa.memory.prompt import check_memory_project, memory_prompt
+from automa.memory.store import MemoryContext
 from automa.plan.models import MAX_TEXT_CHARS, Issue, ResultStatus, Task, TaskResult
 from automa.roles.models import Role
 from automa.skills.registry import SkillRegistry
@@ -103,9 +105,23 @@ def skills_prompt(role: Role, skills: SkillRegistry | None) -> str:
     return text
 
 
-def system_prompt(role: Role, skills: SkillRegistry | None = None) -> str:
-    """Role instructions, then the role's skills, then the fixed worker protocol."""
-    return role.instructions.strip() + "\n" + skills_prompt(role, skills) + WORKER_PROTOCOL
+def system_prompt(
+    role: Role, skills: SkillRegistry | None = None, memory: MemoryContext | None = None
+) -> str:
+    """Role instructions, the role's skills, memory (data only), then the worker protocol."""
+    return (
+        role.instructions.strip()
+        + "\n"
+        + skills_prompt(role, skills)
+        + memory_prompt(memory)
+        + WORKER_PROTOCOL
+    )
+
+
+def _memory_count(memory: MemoryContext | None) -> int:
+    if memory is None:
+        return 0
+    return len(memory.user) + len(memory.project) + len(memory.lessons)
 
 
 def _utc_now() -> datetime:
@@ -188,12 +204,16 @@ class WorkerAgent:
         events: EventSink | None = None,
         clock: Clock = _utc_now,
         skills: SkillRegistry | None = None,
+        memory: MemoryContext | None = None,
     ):
         if not isinstance(gateway, LLMGateway):
             raise TypeError("WorkerAgent requires an LLMGateway (all calls are guarded)")
         if skills is not None and not isinstance(skills, SkillRegistry):
             raise TypeError("skills must be a SkillRegistry")
+        if memory is not None and not isinstance(memory, MemoryContext):
+            raise TypeError("memory must be a MemoryContext")
         self._skills = skills
+        self._memory = memory
         self._gateway = gateway
         self._settings = settings or WorkerSettings()
         self._events = events
@@ -231,7 +251,8 @@ class WorkerAgent:
             raise ValueError("attempt must be >= 1")
         feedback = [Issue.model_validate(i) for i in feedback]
         # Built before any model call: a missing or oversized skill fails here, for free.
-        system = system_prompt(role, self._skills)
+        check_memory_project(self._memory, project_id)
+        system = system_prompt(role, self._skills, self._memory)
 
         s = self._settings
         tier = tier or task.tier or role.tier
@@ -256,6 +277,7 @@ class WorkerAgent:
                 "attempt": attempt,
                 "tier": tier.value,
                 "skills": list(role.skills),
+                "memory": _memory_count(self._memory),
             },
         )
 

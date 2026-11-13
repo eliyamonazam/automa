@@ -25,6 +25,8 @@ from automa.config import Tier
 from automa.events import Event, EventSink
 from automa.llm.gateway import CallContext, LLMGateway
 from automa.llm.types import FinishReason, LLMResult, Message
+from automa.memory.prompt import check_memory_project, memory_prompt
+from automa.memory.store import MemoryContext
 from automa.plan.models import (
     Clarification,
     Plan,
@@ -174,6 +176,7 @@ class ExecutiveAgent:
         known_roles: Collection[str] | None = None,
         events: EventSink | None = None,
         clock: Clock = _utc_now,
+        memory: MemoryContext | None = None,
     ):
         if not isinstance(gateway, LLMGateway):
             raise TypeError("ExecutiveAgent requires an LLMGateway (all calls are guarded)")
@@ -182,6 +185,9 @@ class ExecutiveAgent:
         self._gateway = gateway
         self._settings = settings or ExecutiveSettings()
         self._roles = frozenset(known_roles) if known_roles is not None else None
+        if memory is not None and not isinstance(memory, MemoryContext):
+            raise TypeError("memory must be a MemoryContext")
+        self._memory = memory
         self._events = events
         self._clock = clock
 
@@ -195,7 +201,7 @@ class ExecutiveAgent:
         """Return clarifying questions for ``goal`` (empty if none are needed)."""
         goal = self._check_goal(goal)
         result = self._run(
-            system=QUESTIONS_SYSTEM_PROMPT,
+            system=self._with_memory(QUESTIONS_SYSTEM_PROMPT, project_id),
             user=_goal_message(goal, ()),
             max_tokens=self._settings.questions_max_tokens,
             project_id=project_id,
@@ -239,7 +245,7 @@ class ExecutiveAgent:
         if self._roles is not None:
             system += f"\nAllowed roles: {', '.join(sorted(self._roles))}."
         plan = self._run(
-            system=system,
+            system=self._with_memory(system, project_id),
             user=_goal_message(goal, clarifications),
             max_tokens=self._settings.plan_max_tokens,
             project_id=project_id,
@@ -254,6 +260,11 @@ class ExecutiveAgent:
         return plan
 
     # -- internals ---------------------------------------------------------
+
+    def _with_memory(self, system: str, project_id: str) -> str:
+        # Checked before any model call: memory of another project fails here, for free.
+        check_memory_project(self._memory, project_id)
+        return system + memory_prompt(self._memory)
 
     @staticmethod
     def _check_goal(goal: str) -> str:
