@@ -4,7 +4,7 @@ Sources, from lowest to highest precedence:
 
 1. Built-in defaults (conservative, finite budget limits).
 2. ``automa.toml`` (non-secret settings: tiers, prices, limits, workspace, sandbox,
-   orchestrator, extra skills for built-in roles).
+   orchestrator, extra skills for built-in roles, memory in prompts).
 3. ``.env`` file in the working directory.
 4. Process environment variables.
 
@@ -27,6 +27,7 @@ from pydantic import (
     ConfigDict,
     Field,
     SecretStr,
+    StrictBool,
     ValidationError,
     field_validator,
     model_validator,
@@ -197,6 +198,18 @@ class RoleSettings(_Strict):
         return v
 
 
+class MemoryConfig(_Strict):
+    """``[memory]`` in automa.toml (D51).
+
+    ``in_prompts``: whether ``automa new``/``automa run`` add the relevant memory
+    (user preferences, the project's own memory, lessons) to the Executive's and
+    Worker's system prompts. Default on; ``--no-memory`` turns it off for one command.
+    Memory is data only either way: it never grants a tool, risk level or budget.
+    """
+
+    in_prompts: StrictBool = True
+
+
 class AutomaConfig(_Strict):
     """Fully resolved, validated configuration."""
 
@@ -209,6 +222,7 @@ class AutomaConfig(_Strict):
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
     roles: dict[str, RoleSettings] = Field(default_factory=dict)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
     @field_validator("roles")
     @classmethod

@@ -59,3 +59,11 @@ max_parallel = 1
 # text is sent with every step, so it adds input cost. At most 8 skills per role.
 # [roles.writer]
 # skills = ["house-style"]
+
+# Memory (automa memory list|add|forget). in_prompts: automa new/run add the relevant
+# memory (your preferences, this project's memory, lessons) to the system prompts as
+# data, never as instructions: it grants no tool, risk level or budget. It adds input
+# cost to every call (at most ~12k characters). `--no-memory` turns it off for one
+# command, `--memory` on. automa bench run never uses memory.
+[memory]
+in_prompts = true

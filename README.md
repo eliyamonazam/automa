@@ -42,6 +42,8 @@ automa skills              # فهرست Skillها (داخلی و workspace/skill
 automa memory list         # حافظه سه‌لایه (کاربر، پروژه، درس‌ها) با متن کامل؛ فقط‌خوندنی (--scope user|project|lesson، --project <id>، --json)
 automa memory add "<متن>"  # افزودن یک مورد نوشته‌شده توسط کاربر (--scope، --project؛ source همیشه user؛ بدون کلید و مدل)
 automa memory forget <id>  # حذف یک مورد بعد از نمایش و تأیید (--yes برای رد کردن پرسش)
+# automa new/run حافظهٔ مرتبط را به‌عنوان داده (نه دستور) به پیام سیستمی اضافه می‌کنند؛
+# خاموش کردن: --no-memory یا [memory] in_prompts = false در automa.toml. bench run حافظه نمی‌خواند.
 automa new "<هدف>" --workflow <wf-id>  # پروژه جدید با برنامه قالب (بدون Executive، بدون کلید و هزینه)
 automa workflow create --goal "<هدف>" --plan plan.json  # قالب جدید از برنامه‌ای که خودتون نوشتید (--json)
 automa workflow show <wf-id> [--json | --plan-json]      # نمایش قالب؛ --plan-json فایل قابل ویرایش برنامه

@@ -16,6 +16,10 @@ them needs an API key or makes a model call (D41, D42). ``skills`` lists the ava
 skills and the roles that use them, read-only (D46). ``memory list`` shows the three
 memory layers (read-only); ``memory add`` writes a user-written entry and ``memory forget``
 deletes one after confirmation; none of them needs an API key or makes a model call (D49).
+``new`` and ``run`` load the relevant memory before any model call and add it to the
+Executive's/Worker's system prompts as data (``--no-memory`` or ``[memory] in_prompts =
+false`` turns it off; a broken memory is a configuration error); ``bench run`` never
+reads memory (D51).
 
 Exit codes (stable, for scripts):
 
@@ -219,6 +223,30 @@ def _roles_and_skills(config: AutomaConfig) -> tuple[RoleRegistry, SkillRegistry
     return roles, skills
 
 
+def _prompt_memory(
+    config: AutomaConfig, enabled: bool | None, project_id: str | None
+) -> MemoryContext | None:
+    """Memory for the system prompts of ``new``/``run`` (D51), or ``None`` when turned
+    off (``--no-memory`` or ``[memory] in_prompts = false``). Loaded before any model
+    call; a broken memory raises ``MemoryStoreError`` (a configuration error) instead
+    of being skipped silently. Read-only: nothing is created when memory is empty."""
+    use = config.memory.in_prompts if enabled is None else enabled
+    if not use:
+        return None
+    return _memory_store(config).context(project_id)
+
+
+def _describe_prompt_memory(memory: MemoryContext | None) -> str:
+    if memory is None:
+        return "off"
+    if memory.is_empty():
+        return "on (empty)"
+    return (
+        f"on ({len(memory.user)} user, {len(memory.project)} project, "
+        f"{len(memory.lessons)} lessons; data only, never instructions)"
+    )
+
+
 class SkillOverview:
     """What ``automa skills`` and ``automa status`` show: every available skill with its
     source and the roles that list it. Built the same way ``automa run`` loads skills, so
@@ -339,6 +367,14 @@ def new(
             "(no questions, no API key, no model call).",
         ),
     ] = None,
+    memory: Annotated[
+        bool | None,
+        typer.Option(
+            "--memory/--no-memory",
+            help="Add memory (user preferences, this project's memory, lessons) to the "
+            "system prompts as data; default: [memory] in_prompts in automa.toml (on).",
+        ),
+    ] = None,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Path to automa.toml.")
     ] = None,
@@ -358,7 +394,9 @@ def new(
         config.model_for(settings.tier)
         provider = make_provider(config)
         roles, _ = _roles_and_skills(config)
-    except (ConfigError, RoleError, SkillError) as e:
+        # A new project has no project memory yet: user preferences and lessons only.
+        prompt_memory = _prompt_memory(config, memory, None)
+    except (ConfigError, RoleError, SkillError, MemoryStoreError) as e:
         raise _fail(str(e), EXIT_CONFIG) from None
 
     store = ProjectStore.for_workspace(config.workspace)
@@ -368,13 +406,20 @@ def new(
         raise _fail(str(e), EXIT_USER) from None
     pid = project.id
     typer.echo(f"project: {pid}")
+    typer.echo(f"memory: {_describe_prompt_memory(prompt_memory)}")
     _print_suggestions(config, goal)
 
     events = store.events(pid)
     with CostLedger.for_workspace(config.workspace) as ledger:
         guard = BudgetGuard(config.limits, ledger, events=events)
         gateway = LLMGateway(config, provider, guard=guard)
-        agent = ExecutiveAgent(gateway, settings=settings, known_roles=roles.names(), events=events)
+        agent = ExecutiveAgent(
+            gateway,
+            settings=settings,
+            known_roles=roles.names(),
+            events=events,
+            memory=prompt_memory,
+        )
         try:
             clarifications = _clarify(agent, store, project) if ask else []
             plan = plan_project(agent, store, pid, clarifications=clarifications)
@@ -547,6 +592,14 @@ def run(
             "overrides [orchestrator] max_parallel in automa.toml (default 1).",
         ),
     ] = None,
+    memory: Annotated[
+        bool | None,
+        typer.Option(
+            "--memory/--no-memory",
+            help="Add memory (user preferences, this project's memory, lessons) to the "
+            "system prompts as data; default: [memory] in_prompts in automa.toml (on).",
+        ),
+    ] = None,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Path to automa.toml.")
     ] = None,
@@ -578,13 +631,15 @@ def run(
         # Validate what every model call needs before touching the project.
         provider = make_provider(config)
         roles, skills = _roles_and_skills(config)
-    except (ConfigError, RoleError, SkillError) as e:
+        prompt_memory = _prompt_memory(config, memory, pid)
+    except (ConfigError, RoleError, SkillError, MemoryStoreError) as e:
         raise _fail(str(e), EXIT_CONFIG) from None
     _require_sandbox(config)
 
     typer.echo(f"project: {pid} ({project.status.value})")
     typer.echo(f"sandbox: {config.sandbox.describe()}")
     typer.echo(f"parallel: {describe_parallel(settings.max_parallel)}")
+    typer.echo(f"memory: {_describe_prompt_memory(prompt_memory)}")
     events = store.events(pid)
     with CostLedger.for_workspace(config.workspace) as ledger:
         spent_before = ledger.spent_nusd(project_id=pid)
@@ -592,7 +647,7 @@ def run(
         gateway = LLMGateway(config, provider, guard=guard)
         orchestrator = Orchestrator(
             store,
-            WorkerAgent(gateway, events=events, skills=skills),
+            WorkerAgent(gateway, events=events, skills=skills, memory=prompt_memory),
             VerifierAgent(gateway, events=events),
             roles,
             config,
