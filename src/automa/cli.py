@@ -1,6 +1,6 @@
 """Command-line interface: ``automa new``, ``run``, ``status``, ``approvals``,
 ``approve``/``reject``, ``workflow save|create|edit|show``/``workflows`` and
-``bench list|run|report``.
+``skills`` and ``bench list|run|report``.
 
 Every model call goes through ``LLMGateway`` + ``BudgetGuard`` (never a bare provider).
 ``status`` and ``approvals`` are read-only: they need no API key, make no model call
@@ -12,7 +12,8 @@ prints similar templates as a suggestion only (D39); ``automa new --workflow <id
 uses a template's plan instead of the Executive (no API key, no model call, D40).
 ``workflow create``/``edit`` save a user-written or edited plan as a new template and
 ``workflow show`` prints one (``--plan-json`` gives an editable plan file); none of
-them needs an API key or makes a model call (D41, D42).
+them needs an API key or makes a model call (D41, D42). ``skills`` lists the available
+skills and the roles that use them, read-only (D46).
 
 Exit codes (stable, for scripts):
 
@@ -86,7 +87,16 @@ from automa.orchestrator import (
 from automa.plan import Plan
 from automa.project import Project, ProjectStatus, ProjectStore, ProjectStoreError
 from automa.roles import RoleError, RoleRegistry
-from automa.skills import SkillError, SkillRegistry, load_skills
+from automa.skills import (
+    Skill,
+    SkillError,
+    SkillRegistry,
+    builtin_skills,
+    load_skills,
+    merge_skills,
+    workspace_skills,
+    workspace_skills_dir,
+)
 from automa.tools import DockerSandbox, SandboxError, check_docker, default_tools, tools_factory
 from automa.tools.approvals import (
     ApprovalError,
@@ -189,6 +199,58 @@ def _roles_and_skills(config: AutomaConfig) -> tuple[RoleRegistry, SkillRegistry
     (built-in + ``<workspace>/skills/``). Raises ``SkillError``/``RoleError`` (D45)."""
     skills = load_skills(config.workspace)
     return RoleRegistry.builtin(tools=default_tools(), skills=skills), skills
+
+
+class SkillOverview:
+    """What ``automa skills`` and ``automa status`` show: every available skill with its
+    source and the roles that list it. Built the same way ``automa run`` loads skills, so
+    an error here is exactly what ``run`` would refuse to start with (D46)."""
+
+    def __init__(self, config: AutomaConfig) -> None:
+        builtin = builtin_skills()
+        workspace = workspace_skills(config.workspace)
+        merged = merge_skills(builtin, workspace)
+        roles = RoleRegistry.builtin(tools=default_tools(), skills=merged)
+        self.skills: list[Skill] = sorted(merged, key=lambda s: s.name)
+        self.source = {s.name: "builtin" for s in builtin} | {
+            s.name: "workspace" for s in workspace
+        }
+        self.role_skills: dict[str, list[str]] = {r.name: list(r.skills) for r in roles if r.skills}
+
+    def used_by(self, name: str) -> list[str]:
+        return sorted(role for role, names in self.role_skills.items() if name in names)
+
+    def summary(self) -> str:
+        if not self.skills:
+            return "none"
+        text = f"{len(self.skills)} available"
+        if not self.role_skills:
+            return f"{text}; no role uses them"
+        uses = "; ".join(
+            f"{role}: {', '.join(names)}" for role, names in sorted(self.role_skills.items())
+        )
+        return f"{text}; {uses}"
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "available": [s.name for s in self.skills],
+            "roles": dict(sorted(self.role_skills.items())),
+            "error": None,
+        }
+
+
+def _skills_status(config: AutomaConfig) -> tuple[str, dict[str, Any]]:
+    """The skills line for ``automa status``. Status is read-only and diagnostic, so a
+    broken skill set is reported (with the reason) instead of failing the command."""
+    try:
+        overview = SkillOverview(config)
+    except (RoleError, SkillError) as e:
+        reason = _safe(str(e))
+        return (
+            f"error: {reason} (automa run will refuse to start)",
+            {"available": [], "roles": {}, "error": reason},
+        )
+    return overview.summary(), overview.to_json()
 
 
 def _usd(nusd: int) -> str:
@@ -635,6 +697,7 @@ def _status_all(store: ProjectStore, config: AutomaConfig, as_json: bool) -> Non
         )
     typer.echo(f"sandbox: {config.sandbox.describe()}")
     typer.echo(f"parallel: {config.orchestrator.describe()}")
+    typer.echo(f"skills: {_skills_status(config)[0]}")
 
 
 def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_json: bool) -> None:
@@ -644,6 +707,7 @@ def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_j
     clarifications = store.load_clarifications(project_id)
     spent = _project_spent_nusd(workspace, project_id)
     pending = _pending_approvals(store, project_id)
+    skills_line, skills_json = _skills_status(config)
     if as_json:
         data: dict[str, Any] = {
             "id": project.id,
@@ -657,6 +721,7 @@ def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_j
             "pending_approvals": [_approval_json(store, r) for r in pending],
             "sandbox": _sandbox_json(config),
             "max_parallel": config.orchestrator.max_parallel,
+            "skills": skills_json,
         }
         typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
         return
@@ -668,6 +733,7 @@ def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_j
     typer.echo(f"cost: {_usd(spent)}")
     typer.echo(f"sandbox: {config.sandbox.describe()}")
     typer.echo(f"parallel: {config.orchestrator.describe()}")
+    typer.echo(f"skills: {skills_line}")
     if pending:
         typer.echo(f"pending approvals: {len(pending)}")
         for r in pending:
@@ -956,6 +1022,46 @@ def workflows(
         return
     for t in templates:
         typer.echo(_workflow_line(t))
+
+
+# -- Skills ----------------------------------------------------------------------
+
+
+@app.command()
+def skills(
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """List available skills (built-in and <workspace>/skills/) and the roles that use
+    them. Read-only: no API key, no model call; a broken skill set is exit code 2."""
+    config = _load(config_path)
+    try:
+        overview = SkillOverview(config)
+    except (RoleError, SkillError) as e:
+        raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+    if as_json:
+        rows = [
+            {
+                "name": s.name,
+                "source": overview.source[s.name],
+                "description": s.description,
+                "license": s.license,
+                "used_by": overview.used_by(s.name),
+                "body_chars": len(s.body),
+            }
+            for s in overview.skills
+        ]
+        typer.echo(json.dumps(rows, ensure_ascii=False, indent=2))
+        return
+    if not overview.skills:
+        where = workspace_skills_dir(config.workspace) / "<name>" / "SKILL.md"
+        typer.echo(f"no skills yet; add one as: {where}")
+        return
+    for s in overview.skills:
+        used = ", ".join(overview.used_by(s.name)) or "-"
+        typer.echo(f"{s.name}  {overview.source[s.name]:<9}  roles: {used}  {_safe(s.description)}")
 
 
 # -- Approval Gate -------------------------------------------------------------

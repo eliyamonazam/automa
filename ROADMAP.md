@@ -63,7 +63,7 @@
 - [x] بارگذاری Skillها (هسته): `Skill` و `SkillRegistry.from_dir` برای پوشه‌های `<name>/SKILL.md` با frontmatter محدود (`name`، `description`، `license`) بدون وابستگی YAML، شکست بسته (symlink، فایل خراب/بزرگ/غیر UTF-8، نام ناهمخوان)، و رد `allowed-tools` (Skill هیچ ابزاری نمی‌ده؛ D43)
 - [x] اتصال Skillها به نقش‌ها: فیلد `skills` در فایل نقش (حداکثر ۸)، بررسی وجود Skill در `RoleRegistry(skills=…)`، و افزودن متن Skillها به پیام سیستمی Worker بین دستورالعمل نقش و پروتکل ثابت؛ Skill گمشده یا متن بیش از ۶۰٬۰۰۰ نویسه قبل از هر فراخوانی مدل خطاست؛ Policy دست نخورد (D44)
 - [x] Skillها در CLI و workspace (بارگذاری): `load_skills(workspace)` = Skillهای داخلی (`src/automa/skills/builtin/`، فعلاً خالی) + `<workspace>/skills/`؛ نام تکراری بین دو منبع خطاست؛ `new`/`run`/`bench run` قبل از هر هزینه بارگذاری و به نقش‌ها و Worker وصل می‌کنن (D45)
-- [ ] Skillها در CLI (نمایش): `automa skills [--json]` (نام، توضیح، منبع داخلی/workspace، نقش‌هایی که استفاده می‌کنن) و نمایش Skillهای نقش در `automa status`
+- [x] Skillها در CLI (نمایش): `automa skills [--json]` (نام، توضیح، منبع داخلی/workspace، نقش‌هایی که استفاده می‌کنن) و خط `skills:` در `automa status` (و کلید `skills` در `status <id> --json`)؛ فقط‌خوندنی، بدون کلید و مدل؛ Skill خراب در `skills` کد ۲ و در `status` فقط گزارش (D46)
 - [ ] اتصال Skill به نقش‌های داخلی از تنظیمات کاربر (مثلاً `[roles.<name>] skills = [...]` در `automa.toml`؛ فقط افزودن متن، بدون تغییر ابزار/ریسک)
 - [ ] حافظه سه‌لایه (کاربر، پروژه، درس‌های عمومی) + مرحله بازبینی بعد از هر پروژه
 
