@@ -67,6 +67,7 @@ from automa.plan.models import (
     Verdict,
 )
 from automa.project.store import ProjectStatus, ProjectStore
+from automa.quality import QualityError, QualityLog, QualityRecord
 from automa.roles.registry import RoleError, RoleRegistry
 from automa.tools import RunCommand, tools_factory
 from automa.tools.base import Tool
@@ -204,6 +205,7 @@ class Orchestrator:
         settings: OrchestratorSettings | None = None,
         tools: Callable[[], list[Tool]] | None = None,
         clock: Clock = _utc_now,
+        quality: QualityLog | None = None,
     ):
         if not isinstance(store, ProjectStore):
             raise TypeError("store must be a ProjectStore")
@@ -215,6 +217,8 @@ class Orchestrator:
             raise TypeError("roles must be a RoleRegistry")
         if not isinstance(config, AutomaConfig):
             raise TypeError("config must be an AutomaConfig")
+        if quality is not None and not isinstance(quality, QualityLog):
+            raise TypeError("quality must be a QualityLog")
         self._store = store
         self._worker = worker
         self._verifier = verifier
@@ -224,6 +228,7 @@ class Orchestrator:
         # Without an explicit factory the tools follow ``[sandbox]`` in the config.
         self._tools = tools or tools_factory(config.sandbox.docker_sandbox())
         self._clock = clock
+        self._quality = quality
         self._make_tools()  # a factory that ignores a required sandbox fails here
 
     @property
@@ -510,6 +515,7 @@ class Orchestrator:
                 raise
             raise stop from e
         verdict = store.save_verdict(project_id, verdict)
+        self._record_quality(project_id, task, result, verdict)
         history = [*history[:-1], (result, verdict)]
         attempts = len(history)
 
@@ -532,6 +538,26 @@ class Orchestrator:
         self._save_state(project_id, plan, task.id, TaskStatus.PENDING, tier, None)
 
     # -- helpers -----------------------------------------------------------
+
+    def _record_quality(
+        self, project_id: str, task: Task, result: TaskResult, verdict: Verdict
+    ) -> None:
+        """Add the judged attempt to the quality log (advisory, D56).
+
+        The stored verdict is the source of truth and ``sync_project`` can always
+        re-import it, so a failing log never changes the run: it only emits
+        ``quality.record_failed``.
+        """
+        if self._quality is None:
+            return
+        try:
+            self._quality.record(QualityRecord.from_attempt(project_id, task, result, verdict))
+        except QualityError as e:
+            self._emit(
+                project_id,
+                "quality.record_failed",
+                {"task": task.id, "attempt": result.attempt, "error": _short(str(e))},
+            )
 
     def _fail(self, project_id: str, plan: Plan, task: Task, attempts: int) -> None:
         current = self._store.load_task_state(project_id, task.id)

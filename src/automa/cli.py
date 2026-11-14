@@ -114,6 +114,7 @@ from automa.orchestrator import (
 )
 from automa.plan import Plan
 from automa.project import Project, ProjectStatus, ProjectStore, ProjectStoreError
+from automa.quality import QualityError, QualityLog
 from automa.reviews import (
     MAX_REVIEWS_PER_PROJECT,
     ProposalDecision,
@@ -661,13 +662,14 @@ def run(
     except (ConfigError, RoleError, SkillError, MemoryStoreError) as e:
         raise _fail(str(e), EXIT_CONFIG) from None
     _require_sandbox(config)
+    quality = _open_quality(config)
 
     typer.echo(f"project: {pid} ({project.status.value})")
     typer.echo(f"sandbox: {config.sandbox.describe()}")
     typer.echo(f"parallel: {describe_parallel(settings.max_parallel)}")
     typer.echo(f"memory: {_describe_prompt_memory(prompt_memory)}")
     events = store.events(pid)
-    with CostLedger.for_workspace(config.workspace) as ledger:
+    with quality, CostLedger.for_workspace(config.workspace) as ledger:
         spent_before = ledger.spent_nusd(project_id=pid)
         guard = BudgetGuard(config.limits, ledger, events=events)
         gateway = LLMGateway(config, provider, guard=guard)
@@ -679,6 +681,7 @@ def run(
             config,
             settings=settings,
             tools=tools_factory(config.sandbox.docker_sandbox()),
+            quality=quality,
         )
         try:
             report = orchestrator.run(pid)
@@ -694,6 +697,14 @@ def run(
     for line in _report_lines(report):
         typer.echo(line)
     raise typer.Exit(RUN_EXIT_CODES[report.reason])
+
+
+def _open_quality(config: AutomaConfig) -> QualityLog:
+    """Open the workspace quality log before any model call (unusable = config error)."""
+    try:
+        return QualityLog.for_workspace(config.workspace)
+    except QualityError as e:
+        raise _fail(str(e), EXIT_CONFIG) from None
 
 
 _REASON_HINTS: dict[StopReason, str] = {
@@ -2001,7 +2012,8 @@ def bench_run(
     store = ProjectStore.for_workspace(config.workspace)
     typer.echo(f"benchmark: {benchmark.id} ({benchmark.kind.value}) — {benchmark.title}")
     typer.echo(f"sandbox: {config.sandbox.describe()}")
-    with CostLedger.for_workspace(config.workspace) as ledger:
+    quality = _open_quality(config)
+    with quality, CostLedger.for_workspace(config.workspace) as ledger:
         try:
             record = run_benchmark(
                 benchmark,
@@ -2011,6 +2023,7 @@ def bench_run(
                 ledger=ledger,
                 roles=roles,
                 skills=skills,
+                quality=quality,
             )
         except KeyboardInterrupt:
             typer.echo("interrupted: no result recorded (the project is kept and paused)")

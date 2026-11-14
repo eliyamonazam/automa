@@ -75,7 +75,8 @@
 - [x] مرحله بازبینی (CLI، تأیید/رد): `automa review accept <id> <n>…` و `automa review reject <id> <n>…` (پیش‌فرض آخرین بازبینی، `--review <rid>`؛ نمایش متن و تأیید قبل از نوشتن حافظه، `--yes`)، و خط `review:` در `automa status` (D55)
 
 ## M8 — Router هوشمند و Financial Controller
-- [ ] ثبت کیفیت (نتیجه Verifier) کنار هزینه هر مدل برای هر نوع وظیفه
+- [x] ثبت کیفیت (هسته): `QualityLog` در `<workspace>/quality.sqlite3` — یک ردیف برای هر تلاش داوری‌شده (پروژه، وظیفه، تلاش، نقش = نوع وظیفه، سطح، مدل، وضعیت نتیجه، حکم Verifier، هزینه Worker)، ثبت یک‌باره و idempotent، `stats` برای هر (نقش، مدل): تعداد، قبولی، نرخ قبولی، هزینه کل/میانگین/به‌ازای هر قبولی؛ ثبت زنده در `Orchestrator` (در `automa run` و `bench run`) بعد از ذخیره هر Verdict و `sync_project` برای وارد کردن دوباره از `ProjectStore`؛ خطای ثبت هیچ‌وقت اجرا را عوض نمی‌کند (D56)
+- [ ] ثبت کیفیت (CLI): `automa quality [--role R] [--json]` (فقط‌خواندنی؛ جدول نقش × مدل با نرخ قبولی و هزینه) و `automa quality sync [<project>]` (وارد کردن تلاش‌های داوری‌شده پروژه‌های قبلی)
 - [ ] Router داده‌محور: انتخاب ارزان‌ترین مدلی که برای آن نوع وظیفه نرخ قبولی کافی داره
 - [ ] Financial Controller Agent: تخمین هزینه قبل از شروع، گزارش، تشخیص مصرف غیرعادی
 

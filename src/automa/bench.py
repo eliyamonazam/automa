@@ -41,6 +41,7 @@ from automa.llm.gateway import LLMGateway
 from automa.llm.provider import Provider, ProviderError
 from automa.orchestrator import Orchestrator, OrchestratorSettings, StopReason
 from automa.project import ProjectStatus, ProjectStore
+from automa.quality import QualityLog
 from automa.roles import RoleRegistry
 from automa.skills import SkillRegistry
 
@@ -118,6 +119,7 @@ def run_benchmark(
     ledger: CostLedger,
     roles: RoleRegistry,
     skills: SkillRegistry | None = None,
+    quality: QualityLog | None = None,
     project_id: str | None = None,
     clock: Clock | None = None,
 ) -> BenchmarkRunRecord:
@@ -159,6 +161,7 @@ def run_benchmark(
             roles,
             config,
             settings=OrchestratorSettings(max_attempts=benchmark.max_attempts),
+            quality=quality,
         )
         report = orchestrator.run(pid)
         stop, detail = STOP_FOR_REASON[report.reason], report.detail
