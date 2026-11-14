@@ -4,7 +4,7 @@ Sources, from lowest to highest precedence:
 
 1. Built-in defaults (conservative, finite budget limits).
 2. ``automa.toml`` (non-secret settings: tiers, prices, limits, workspace, sandbox,
-   orchestrator, extra skills for built-in roles, memory in prompts).
+   orchestrator, extra skills for built-in roles, memory in prompts, router).
 3. ``.env`` file in the working directory.
 4. Process environment variables.
 
@@ -28,6 +28,8 @@ from pydantic import (
     Field,
     SecretStr,
     StrictBool,
+    StrictFloat,
+    StrictInt,
     ValidationError,
     field_validator,
     model_validator,
@@ -210,6 +212,30 @@ class MemoryConfig(_Strict):
     in_prompts: StrictBool = True
 
 
+class RouterConfig(_Strict):
+    """``[router]`` in automa.toml: the data router (D58).
+
+    ``enabled``: whether ``automa run`` lets the router pick a task's starting tier
+    from the quality log (off by default). A tier *qualifies* for a role when its
+    model has at least ``min_attempts`` judged attempts for that role with a pass
+    rate of at least ``min_pass_rate``. The router only changes which configured
+    tier (and so which priced model) a task starts on: every call still goes
+    through the gateway and the BudgetGuard, and escalation works as before.
+    """
+
+    enabled: StrictBool = False
+    min_attempts: StrictInt = Field(default=5, ge=1, le=100_000)
+    # A TOML integer (``1``) is accepted; booleans and strings are not.
+    min_pass_rate: StrictFloat | StrictInt = Field(default=0.8, gt=0, le=1)
+
+    @field_validator("min_pass_rate", mode="before")
+    @classmethod
+    def _no_bool(cls, v: Any) -> Any:
+        if isinstance(v, bool):
+            raise ValueError("min_pass_rate must be a number, not a boolean")
+        return v
+
+
 class AutomaConfig(_Strict):
     """Fully resolved, validated configuration."""
 
@@ -223,6 +249,7 @@ class AutomaConfig(_Strict):
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
     roles: dict[str, RoleSettings] = Field(default_factory=dict)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    router: RouterConfig = Field(default_factory=RouterConfig)
 
     @field_validator("roles")
     @classmethod

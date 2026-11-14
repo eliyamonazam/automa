@@ -67,3 +67,14 @@ max_parallel = 1
 # command, `--memory` on. automa bench run never uses memory.
 [memory]
 in_prompts = true
+
+# Data router (M8, D58): picks a task's starting tier from the quality log
+# (automa quality). A tier qualifies for a role when its model has at least
+# min_attempts judged attempts with a pass rate of at least min_pass_rate. The router
+# moves to a qualified tier only if it is not more expensive than the requested one
+# (or if the requested tier is proven weak). It never changes the budget caps; every
+# call is still checked by the BudgetGuard. Not yet used by automa run (next item).
+[router]
+enabled = false
+min_attempts = 5
+min_pass_rate = 0.8

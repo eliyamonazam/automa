@@ -77,7 +77,8 @@
 ## M8 — Router هوشمند و Financial Controller
 - [x] ثبت کیفیت (هسته): `QualityLog` در `<workspace>/quality.sqlite3` — یک ردیف برای هر تلاش داوری‌شده (پروژه، وظیفه، تلاش، نقش = نوع وظیفه، سطح، مدل، وضعیت نتیجه، حکم Verifier، هزینه Worker)، ثبت یک‌باره و idempotent، `stats` برای هر (نقش، مدل): تعداد، قبولی، نرخ قبولی، هزینه کل/میانگین/به‌ازای هر قبولی؛ ثبت زنده در `Orchestrator` (در `automa run` و `bench run`) بعد از ذخیره هر Verdict و `sync_project` برای وارد کردن دوباره از `ProjectStore`؛ خطای ثبت هیچ‌وقت اجرا را عوض نمی‌کند (D56)
 - [x] ثبت کیفیت (CLI): `automa quality [--role R] [--json]` (فقط‌خواندنی؛ جدول نقش × مدل با نرخ قبولی و هزینه) و `automa quality sync [<project>]` (وارد کردن تلاش‌های داوری‌شده پروژه‌های قبلی)
-- [ ] Router داده‌محور: انتخاب ارزان‌ترین مدلی که برای آن نوع وظیفه نرخ قبولی کافی داره
+- [x] Router داده‌محور (هسته): `Router` خالص در `automa.router` — برای هر نقش و سطح درخواستی، از آمار `QualityLog` مدل پشت هر سطح پیکربندی‌شده، ارزان‌ترین سطح «واجد شرایط» (حداقل `min_attempts` تلاش و نرخ قبولی ≥ `min_pass_rate`) را انتخاب می‌کند؛ گران‌تر از سطح درخواستی فقط وقتی که سطح درخواستی با داده «ضعیف ثابت‌شده» باشد؛ بخش `[router]` در `automa.toml` (`enabled` پیش‌فرض خاموش)؛ هیچ فراخوانی مدل، نوشتن یا تغییری در BudgetGuard/Policy (D58)
+- [ ] Router داده‌محور (اتصال): استفاده از `Router` در `Orchestrator` برای سطح شروع هر وظیفه وقتی `[router] enabled` (یا `automa run --router`)، رویداد `router.decision`، و نمایش پیش‌نمایش با `automa quality route [--role R] [--json]`
 - [ ] Financial Controller Agent: تخمین هزینه قبل از شروع، گزارش، تشخیص مصرف غیرعادی
 
 ## M9 — ابزارهای بیشتر و رابط
