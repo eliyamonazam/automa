@@ -81,7 +81,10 @@
 - [x] Router داده‌محور (اتصال به Orchestrator): `Orchestrator(router=…)` سطح شروع هر وظیفه تازه (بدون تلاش و بدون سطح ذخیره‌شده) را از `Router` می‌گیرد و در state ذخیره می‌کند (ادامه اجرا دوباره مسیریابی نمی‌کند، ارتقای سطح از همان‌جا)، رویداد `router.decision`؛ سطح درخواستی پیکربندی‌نشده ← توقف `config` قبل از هر فراخوانی (D59)
 - [x] Router داده‌محور (اتصال به `automa run`): وقتی `[router] enabled` (یا `--router`؛ `--no-router` خاموش می‌کند) Router از snapshot آمار `QualityLog` قبل از هر فراخوانی مدل ساخته و به Orchestrator داده می‌شود (خط `router:` در خروجی)؛ آمار خراب ← کد ۲ بدون فراخوانی؛ `bench run` مسیریابی نمی‌کند (D60)
 - [x] Router داده‌محور (پیش‌نمایش): `automa quality route [--role R] [--tier T] [--json]` فقط‌خواندنی — برای هر نقش، سطح انتخابی Router، دلیل و شواهد هر سطح را نشان می‌دهد (حتی وقتی `[router] enabled` خاموش است؛ بدون کلید و بدون ساخت فایل) (D61)
-- [ ] Financial Controller Agent: تخمین هزینه قبل از شروع، گزارش، تشخیص مصرف غیرعادی
+- [x] Financial Controller (تخمین، هسته): `estimate_plan` خالص در `automa.finance` — برای هر وظیفهٔ باقی‌مانده بدترین حالت قطعی (تلاش‌ها × (گام‌های Worker + فراخوانی‌های Verifier) × سقف هر فراخوانی) و هزینهٔ مورد انتظار از آمار `QualityLog` با برنامهٔ ارتقای سطح Orchestrator (بدون دادهٔ کافی ← نامعلوم)، Router اختیاری، مقایسه با بودجهٔ باقی‌مانده (`assess`)؛ بدون فراخوانی مدل، بدون نوشتن (D62)
+- [ ] Financial Controller (تخمین، CLI): `automa estimate <id> [--json]` فقط‌خواندنی (بودجهٔ باقی‌ماندهٔ پروژه از Ledger، وظایف `passed` کنار گذاشته) و خط تخمین در خروجی `automa run` قبل از اولین فراخوانی
+- [ ] Financial Controller (گزارش): `automa finance report [--json]` — خرج واقعی به تفکیک پروژه/روز/مدل/نقش از Ledger و مقایسه با تخمین
+- [ ] Financial Controller (مصرف غیرعادی): تشخیص فراخوانی/تلاش با هزینهٔ غیرعادی نسبت به سابقهٔ (نقش، مدل) و رویداد/هشدار `finance.anomaly` (فقط هشدار؛ اختیار توقف همچنان با BudgetGuard)
 
 ## M9 — ابزارهای بیشتر و رابط
 - [ ] ابزارهای GitHub، جست‌وجو و خوندن وب
