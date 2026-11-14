@@ -51,6 +51,7 @@ automa review accept <id> <n>…  # نمایش متن کامل، تأیید و �
 automa review reject <id> <n>…  # ثبت رد پیشنهادها بدون نوشتن حافظه (تصمیم نهایی است)
 automa quality [--role R]  # نرخ قبولی Verifier و هزینه هر (نقش، مدل) از لاگ کیفیت (فقط‌خوندنی؛ --json؛ بدون کلید)
 automa quality sync [<id>]  # وارد کردن تلاش‌های داوری‌شده پروژه‌های قبلی به لاگ کیفیت (idempotent؛ --json)
+automa quality route [--role R] [--tier T]  # پیش‌نمایش فقط‌خواندنی: سطحی که Router برای هر نقش انتخاب می‌کند، دلیل و شواهد هر سطح (حتی وقتی Router خاموش است؛ --json)
 automa new "<هدف>" --workflow <wf-id>  # پروژه جدید با برنامه قالب (بدون Executive، بدون کلید و هزینه)
 automa workflow create --goal "<هدف>" --plan plan.json  # قالب جدید از برنامه‌ای که خودتون نوشتید (--json)
 automa workflow show <wf-id> [--json | --plan-json]      # نمایش قالب؛ --plan-json فایل قابل ویرایش برنامه

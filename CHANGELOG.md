@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-14 — M8: Router داده‌محور (پیش‌نمایش `automa quality route`)
+- **انجام‌شده:** زیرفرمان فقط‌خواندنی `automa quality route [--role R] [--tier T] [--json]`: برای هر نقش (داخلی + نقش‌های موجود در آمار) سطحی که `Router` انتخاب می‌کند، دلیل (`requested`/`cheaper`/`replaced`) و شواهد هر سطح پیکربندی‌شده (مدل، قیمت، قبولی/تلاش، qualified/proven weak/not enough data) را نشان می‌دهد؛ با آستانه‌های `[router]` حتی وقتی `enabled` خاموش است. بدون کلید، بدون Provider، بدون ساخت یا تغییر فایل. BudgetGuard، Gateway و Policy دست نخوردند.
+- **فایل‌های اصلی:** `src/automa/cli.py` (`quality_route`، `_route_entry`، `_route_lines`)، `tests/test_cli_quality_route.py` (جدید)، `README.md`، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D61).
+- **تست‌ها:** `pytest` ← ۲۲۹۸ تست سبز، ۲ رد شده (Docker واقعی)؛ `ruff check` و `ruff format --check` سبز؛ `mypy` روی `cli.py` سبز (خطای قبلی `benchmarks/report.py:230` بی‌ربط باقی است). ۲۱ تست جدید: بدون لاگ (چیزی ساخته نمی‌شود)، خروجی متنی خاموش/روشن، سطح ارزان‌تر، هرگز گران‌تر بدون اثبات ضعف، جایگزینی سطح ضعیف، آستانه‌های تنظیمات، آمار نقش دیگر، تطابق با `Router` مستقیم، `--tier`، `--tier` نامعتبر (۱) و پیکربندی‌نشده (۲)، سطح پیش‌فرض پیکربندی‌نشده به‌صورت خطای ردیف، `--role`، نقش نامعتبر، نقش غیرداخلی، لاگ دست‌نخورده، بدون کلید، لاگ خراب و symlink (۲).
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود. وابستگی‌ها دوباره نصب شدند.
+- **قدم بعدی:** Financial Controller Agent — احتمالاً باید به بخش‌های کوچک‌تر شکسته شود (اول: تخمین هزینه قبل از شروع).
+
 ## 2026-11-14 — M8: Router داده‌محور (اتصال به `automa run`)
 - **انجام‌شده:** مورد «Router داده‌محور (CLI)» به دو بخش شکسته شد (اتصال به `automa run`؛ پیش‌نمایش `automa quality route`) و بخش اول انجام شد. `automa run` گزینه `--router/--no-router` گرفت (پیش‌فرض: `[router] enabled`، خاموش). وقتی روشن است Router از snapshot آمار `QualityLog` قبل از هر فراخوانی مدل ساخته و به Orchestrator داده می‌شود؛ آمار خراب ← کد ۲ بدون فراخوانی مدل و بدون تغییر وضعیت پروژه. خط جدید `router:` در خروجی (خاموش/روشن با آستانه‌ها). `bench run` مسیریابی نمی‌کند. BudgetGuard، Gateway و Policy دست نخوردند.
 - **فایل‌های اصلی:** `src/automa/cli.py` (`--router/--no-router`، `_run_router`، `_describe_router`)، `tests/test_cli_run_router.py` (جدید)، `README.md`، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D60).

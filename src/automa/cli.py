@@ -29,6 +29,8 @@ only ``accept`` writes memory (source: review); neither needs an API key (D55).
 ``quality`` prints the pass rate and cost of each (role, model) from the quality log,
 read-only (a missing log is empty; nothing is created); ``quality sync [<id>]`` imports
 the judged attempts of past projects into it. Neither needs an API key (D57).
+``quality route`` previews, read-only, the starting tier the data router would pick
+for each role with its reason and evidence, even when the router is off (D61).
 With ``[router] enabled = true`` or ``--router``, ``run`` hands the orchestrator a data
 router built from a snapshot of the quality log (D59, D60); ``bench run`` never routes.
 
@@ -130,7 +132,7 @@ from automa.reviews import (
     StoredReview,
 )
 from automa.roles import RoleError, RoleRegistry
-from automa.router import Router
+from automa.router import Router, RouteReason, TierEvidence
 from automa.skills import (
     Skill,
     SkillError,
@@ -2273,6 +2275,159 @@ def quality(
         )
         return
     for line in _quality_lines(stats):
+        typer.echo(line)
+
+
+_ROUTE_REASONS: dict[RouteReason, str] = {
+    RouteReason.REQUESTED: "kept the requested tier",
+    RouteReason.CHEAPER: "a cheaper qualified tier",
+    RouteReason.REPLACED: "the requested tier is proven weak; cheapest qualified tier",
+}
+
+
+def _evidence_state(e: TierEvidence) -> str:
+    if e.qualified:
+        return "qualified"
+    if e.proven_weak:
+        return "proven weak"
+    return "not enough data"
+
+
+def _evidence_json(e: TierEvidence) -> dict[str, Any]:
+    return {
+        "tier": e.tier.value,
+        "model": e.model,
+        "price_per_mtok": e.price_per_mtok,
+        "attempts": e.attempts,
+        "passed": e.passed,
+        "pass_rate": e.pass_rate,
+        "qualified": e.qualified,
+        "proven_weak": e.proven_weak,
+    }
+
+
+def _route_entry(router: Router, role: str, requested: Tier | None) -> dict[str, Any]:
+    """One role of ``automa quality route``: the decision, or why there is none."""
+    entry: dict[str, Any] = {
+        "role": role,
+        "requested": requested.value if requested is not None else None,
+        "tier": None,
+        "model": None,
+        "reason": None,
+        "changed": False,
+        "error": None,
+        "evidence": [_evidence_json(e) for e in router.evidence(role)],
+    }
+    if requested is None:
+        entry["error"] = "not a built-in role; pass --tier to preview it"
+        return entry
+    try:
+        d = router.route(role, requested)
+    except ConfigError as e:
+        entry["error"] = str(e)
+        return entry
+    entry.update(tier=d.tier.value, model=d.model, reason=d.reason.value, changed=d.changed)
+    return entry
+
+
+def _route_lines(router: Router, entries: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for entry in entries:
+        role = entry["role"]
+        if entry["error"] is not None:
+            req = entry["requested"] or "-"
+            lines.append(f"{role}  requested {req}: {_safe(entry['error'])}")
+        else:
+            model = _safe(entry["model"]).replace("\n", " ").replace("\t", " ")
+            reason = _ROUTE_REASONS[RouteReason(entry["reason"])]
+            lines.append(
+                f"{role}  requested {entry['requested']} -> {entry['tier']} ({model}): {reason}"
+            )
+        for e in router.evidence(role):
+            rate = _pct(e.pass_rate) if e.pass_rate is not None else "-"
+            model = _safe(e.model).replace("\n", " ").replace("\t", " ")
+            lines.append(
+                f"  {e.tier.value:<6}  {model}  ${e.price_per_mtok:g}/Mtok  "
+                f"{e.passed}/{e.attempts} passed ({rate})  {_evidence_state(e)}"
+            )
+    return lines
+
+
+@quality_app.command("route")
+def quality_route(
+    role: Annotated[str | None, typer.Option("--role", help="Only this task type (role).")] = None,
+    tier: Annotated[
+        str | None,
+        typer.Option("--tier", help="Requested tier to preview; default: each role's own tier."),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Preview the data router: the starting tier it would pick for each role.
+
+    Shows the chosen tier, the reason and the evidence of every configured tier, even
+    when [router] enabled is off. Read-only: no API key, no model call, no files
+    written (a missing log is empty). A broken log is exit code 2.
+    """
+    config = _load(config_path)
+    if role is not None and not re.fullmatch(ROLE_PATTERN, role):
+        raise _fail(f"invalid role {_safe(role)!r}", EXIT_USER)
+    requested: Tier | None = None
+    if tier is not None:
+        try:
+            requested = Tier(tier)
+        except ValueError:
+            choices = ", ".join(t.value for t in Tier)
+            raise _fail(f"invalid tier {_safe(tier)!r} (choose: {choices})", EXIT_USER) from None
+        if requested not in config.tiers:
+            raise _fail(f"no model configured for tier '{requested.value}'", EXIT_CONFIG)
+    try:
+        builtin = {r.name: r.tier for r in RoleRegistry.builtin(tools=default_tools())}
+    except RoleError as e:
+        raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+    path = config.workspace / QUALITY_FILE
+    stats: list[QualityStats] = []
+    if path.exists() or path.is_symlink():
+        try:
+            with QualityLog(path, read_only=True) as log:
+                stats = log.stats()
+        except QualityError as e:
+            raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+    try:
+        router = Router(config, stats)
+    except ValueError as e:
+        raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+    if role is not None:
+        roles = [role]
+    else:
+        roles = sorted(set(builtin) | {s.role for s in stats})
+    entries = [
+        _route_entry(router, r, requested if requested is not None else builtin.get(r))
+        for r in roles
+    ]
+    settings = config.router
+    if as_json:
+        out = {
+            "enabled": settings.enabled,
+            "min_attempts": settings.min_attempts,
+            "min_pass_rate": float(settings.min_pass_rate),
+            "roles": entries,
+        }
+        typer.echo(json.dumps(out, ensure_ascii=False, indent=2))
+        return
+    state = (
+        "on"
+        if settings.enabled
+        else "off (preview only; enable with --router or [router] enabled = true)"
+    )
+    typer.echo(f"router: {state}")
+    typer.echo(
+        f"qualifies with at least {settings.min_attempts} judged attempt(s) and a pass rate "
+        f"of at least {_pct(float(settings.min_pass_rate))}"
+    )
+    for line in _route_lines(router, entries):
         typer.echo(line)
 
 
