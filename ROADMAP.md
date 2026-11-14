@@ -79,7 +79,8 @@
 - [x] ثبت کیفیت (CLI): `automa quality [--role R] [--json]` (فقط‌خواندنی؛ جدول نقش × مدل با نرخ قبولی و هزینه) و `automa quality sync [<project>]` (وارد کردن تلاش‌های داوری‌شده پروژه‌های قبلی)
 - [x] Router داده‌محور (هسته): `Router` خالص در `automa.router` — برای هر نقش و سطح درخواستی، از آمار `QualityLog` مدل پشت هر سطح پیکربندی‌شده، ارزان‌ترین سطح «واجد شرایط» (حداقل `min_attempts` تلاش و نرخ قبولی ≥ `min_pass_rate`) را انتخاب می‌کند؛ گران‌تر از سطح درخواستی فقط وقتی که سطح درخواستی با داده «ضعیف ثابت‌شده» باشد؛ بخش `[router]` در `automa.toml` (`enabled` پیش‌فرض خاموش)؛ هیچ فراخوانی مدل، نوشتن یا تغییری در BudgetGuard/Policy (D58)
 - [x] Router داده‌محور (اتصال به Orchestrator): `Orchestrator(router=…)` سطح شروع هر وظیفه تازه (بدون تلاش و بدون سطح ذخیره‌شده) را از `Router` می‌گیرد و در state ذخیره می‌کند (ادامه اجرا دوباره مسیریابی نمی‌کند، ارتقای سطح از همان‌جا)، رویداد `router.decision`؛ سطح درخواستی پیکربندی‌نشده ← توقف `config` قبل از هر فراخوانی (D59)
-- [ ] Router داده‌محور (CLI): `automa run` وقتی `[router] enabled` (یا `--router`/`--no-router`) Router را از `QualityLog` می‌سازد و به Orchestrator می‌دهد (خط `router:` در خروجی)، و پیش‌نمایش فقط‌خواندنی `automa quality route [--role R] [--json]`
+- [x] Router داده‌محور (اتصال به `automa run`): وقتی `[router] enabled` (یا `--router`؛ `--no-router` خاموش می‌کند) Router از snapshot آمار `QualityLog` قبل از هر فراخوانی مدل ساخته و به Orchestrator داده می‌شود (خط `router:` در خروجی)؛ آمار خراب ← کد ۲ بدون فراخوانی؛ `bench run` مسیریابی نمی‌کند (D60)
+- [ ] Router داده‌محور (پیش‌نمایش): `automa quality route [--role R] [--tier T] [--json]` فقط‌خواندنی — برای هر نقش، سطح انتخابی Router، دلیل و شواهد هر سطح را نشان می‌دهد (حتی وقتی `[router] enabled` خاموش است؛ بدون کلید و بدون ساخت فایل)
 - [ ] Financial Controller Agent: تخمین هزینه قبل از شروع، گزارش، تشخیص مصرف غیرعادی
 
 ## M9 — ابزارهای بیشتر و رابط

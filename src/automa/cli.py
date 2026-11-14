@@ -29,6 +29,8 @@ only ``accept`` writes memory (source: review); neither needs an API key (D55).
 ``quality`` prints the pass rate and cost of each (role, model) from the quality log,
 read-only (a missing log is empty; nothing is created); ``quality sync [<id>]`` imports
 the judged attempts of past projects into it. Neither needs an API key (D57).
+With ``[router] enabled = true`` or ``--router``, ``run`` hands the orchestrator a data
+router built from a snapshot of the quality log (D59, D60); ``bench run`` never routes.
 
 Exit codes (stable, for scripts):
 
@@ -128,6 +130,7 @@ from automa.reviews import (
     StoredReview,
 )
 from automa.roles import RoleError, RoleRegistry
+from automa.router import Router
 from automa.skills import (
     Skill,
     SkillError,
@@ -637,6 +640,14 @@ def run(
             "system prompts as data; default: [memory] in_prompts in automa.toml (on).",
         ),
     ] = None,
+    use_router: Annotated[
+        bool | None,
+        typer.Option(
+            "--router/--no-router",
+            help="Let the data router pick each new task's starting tier from the "
+            "quality log; default: [router] enabled in automa.toml (off).",
+        ),
+    ] = None,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Path to automa.toml.")
     ] = None,
@@ -673,11 +684,13 @@ def run(
         raise _fail(str(e), EXIT_CONFIG) from None
     _require_sandbox(config)
     quality = _open_quality(config)
+    router = _run_router(config, quality, use_router)
 
     typer.echo(f"project: {pid} ({project.status.value})")
     typer.echo(f"sandbox: {config.sandbox.describe()}")
     typer.echo(f"parallel: {describe_parallel(settings.max_parallel)}")
     typer.echo(f"memory: {_describe_prompt_memory(prompt_memory)}")
+    typer.echo(f"router: {_describe_router(router)}")
     events = store.events(pid)
     with quality, CostLedger.for_workspace(config.workspace) as ledger:
         spent_before = ledger.spent_nusd(project_id=pid)
@@ -692,6 +705,7 @@ def run(
             settings=settings,
             tools=tools_factory(config.sandbox.docker_sandbox()),
             quality=quality,
+            router=router,
         )
         try:
             report = orchestrator.run(pid)
@@ -715,6 +729,35 @@ def _open_quality(config: AutomaConfig) -> QualityLog:
         return QualityLog.for_workspace(config.workspace)
     except QualityError as e:
         raise _fail(str(e), EXIT_CONFIG) from None
+
+
+def _run_router(config: AutomaConfig, quality: QualityLog, use: bool | None) -> Router | None:
+    """The data router for ``automa run`` (D60), or ``None`` when it is off.
+
+    ``--router``/``--no-router`` override ``[router] enabled``. The router reads a
+    snapshot of the quality log statistics now, before any model call; statistics
+    that cannot be read are a config error (the log is closed first).
+    """
+    if not (config.router.enabled if use is None else use):
+        return None
+    try:
+        return Router.from_log(config, quality)
+    except (QualityError, ValueError) as e:
+        quality.close()
+        raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+
+
+def _describe_router(router: Router | None) -> str:
+    """Human description of the router setting of one run."""
+    if router is None:
+        return "off (enable with --router or [router] enabled = true)"
+    s = router.settings
+    return (
+        f"on (a new task may start on another configured tier: a cheaper one with at "
+        f"least {s.min_attempts} judged attempt(s) and a pass rate of at least "
+        f"{_pct(float(s.min_pass_rate))}, or a better one if the requested tier is "
+        "proven weak; see router.decision in the events log)"
+    )
 
 
 _REASON_HINTS: dict[StopReason, str] = {

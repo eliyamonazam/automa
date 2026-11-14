@@ -35,6 +35,7 @@ pip install -e .          # یا با Docker (پایین‌تر)
 automa new "ایده من ..."   # سؤال‌ها + ساخت plan.json
 automa run <project-id>    # اجرا/ادامه: Worker ← Verifier ← اصلاح
 automa run <project-id> --parallel 2   # وظایف مستقل هم‌زمان (یا [orchestrator] max_parallel در automa.toml)
+automa run <project-id> --router       # سطح شروع هر وظیفه تازه با Router داده‌محور از لاگ کیفیت (یا [router] enabled؛ --no-router)
 automa status             # فهرست پروژه‌ها، هزینه و برنامه
 automa workflow save <id>  # ذخیره برنامه پروژه تموم‌شده (همه وظایف قبول) به‌عنوان قالب Workflow (--json)
 automa workflows           # فهرست قالب‌های Workflow (فقط‌خوندنی؛ --json)
