@@ -13,13 +13,17 @@ from automa.finance.estimate import (
     TaskProgress,
     estimate_plan,
 )
+from automa.finance.report import SpendGroup, SpendingReport, spending_report
 
 __all__ = [
     "BudgetFit",
     "EstimateBasis",
     "EstimateSettings",
     "PlanEstimate",
+    "SpendGroup",
+    "SpendingReport",
     "TaskEstimate",
     "TaskProgress",
     "estimate_plan",
+    "spending_report",
 ]
