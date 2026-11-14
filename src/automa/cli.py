@@ -61,6 +61,7 @@ import re
 import sqlite3
 import unicodedata
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -700,7 +701,7 @@ def run(
         raise _fail(str(e), EXIT_CONFIG) from None
     _require_sandbox(config)
     quality = _open_quality(config)
-    router = _run_router(config, quality, use_router)
+    router, stats = _run_router(config, quality, use_router)
 
     typer.echo(f"project: {pid} ({project.status.value})")
     typer.echo(f"sandbox: {config.sandbox.describe()}")
@@ -710,6 +711,10 @@ def run(
     events = store.events(pid)
     with quality, CostLedger.for_workspace(config.workspace) as ledger:
         spent_before = ledger.spent_nusd(project_id=pid)
+        typer.echo(
+            "estimate: "
+            + _run_estimate(config, store, pid, roles, settings, stats, router, spent_before)
+        )
         guard = BudgetGuard(config.limits, ledger, events=events)
         gateway = LLMGateway(config, provider, guard=guard)
         orchestrator = Orchestrator(
@@ -747,20 +752,106 @@ def _open_quality(config: AutomaConfig) -> QualityLog:
         raise _fail(str(e), EXIT_CONFIG) from None
 
 
-def _run_router(config: AutomaConfig, quality: QualityLog, use: bool | None) -> Router | None:
-    """The data router for ``automa run`` (D60), or ``None`` when it is off.
+def _run_router(
+    config: AutomaConfig, quality: QualityLog, use: bool | None
+) -> tuple[Router | None, list[QualityStats] | None]:
+    """The data router for ``automa run`` (D60) and the statistics snapshot it uses.
 
-    ``--router``/``--no-router`` override ``[router] enabled``. The router reads a
-    snapshot of the quality log statistics now, before any model call; statistics
-    that cannot be read are a config error (the log is closed first).
+    ``--router``/``--no-router`` override ``[router] enabled``. The snapshot of the
+    quality log statistics is read once, now, before any model call, and is shared
+    with the run's cost estimate (D64). With the router on, statistics that cannot
+    be read are a config error (the log is closed first); with it off they only
+    make the estimate unavailable (the snapshot is ``None``).
     """
-    if not (config.router.enabled if use is None else use):
-        return None
+    routing = config.router.enabled if use is None else use
     try:
-        return Router.from_log(config, quality)
+        stats = quality.stats()
+        return (Router(config, stats) if routing else None), stats
     except (QualityError, ValueError) as e:
+        if not routing:
+            return None, None
         quality.close()
         raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+
+
+_FIT_SHORT: dict[BudgetFit, str] = {
+    BudgetFit.WORST_FITS: "even the worst case fits",
+    BudgetFit.EXPECTED_FITS: "the expected cost fits, the worst case does not",
+    BudgetFit.UNKNOWN: "the known part fits, the expected cost is incomplete",
+    BudgetFit.EXPECTED_EXCEEDS: (
+        "the expected cost exceeds it, the run will likely stop at the project cap"
+    ),
+}
+
+
+def _run_estimate(
+    config: AutomaConfig,
+    store: ProjectStore,
+    pid: str,
+    roles: RoleRegistry,
+    run_settings: OrchestratorSettings,
+    stats: list[QualityStats] | None,
+    router: Router | None,
+    spent_nusd: int,
+) -> str:
+    """The ``estimate:`` line of ``automa run`` (D64): advisory only.
+
+    Same inputs as ``automa estimate`` — the statistics snapshot and router of this
+    run, its settings, the project budget left in the ledger — computed before any
+    model call. It never stops the run or changes its exit code: anything that
+    prevents an estimate only makes it "unavailable" (the orchestrator itself
+    reports real problems such as an unconfigured tier). The figures are also
+    saved as a ``finance.estimate`` event for later comparison with the real cost.
+    """
+    if stats is None:
+        return "unavailable (the quality log statistics cannot be read)"
+    try:
+        plan = store.load_plan(pid)
+        progress, excluded = _estimate_inputs(store, pid, plan)
+        settings = EstimateSettings.from_settings(run_settings)
+        result = estimate_plan(
+            plan,
+            config,
+            roles,
+            stats,
+            settings=settings,
+            router=router,
+            skip=set(excluded),
+            progress=progress,
+        )
+    except (ProjectStoreError, ConfigError, ValueError, KeyError) as e:
+        reason = _safe(str(e)).replace("\n", " ")
+        return f"unavailable ({reason})"
+    left = max(0, cap_to_nusd(config.limits.project_usd) - spent_nusd)
+    fit = result.assess(left)
+    try:
+        store.events(pid).emit(
+            Event(
+                ts=datetime.now(UTC),
+                type="finance.estimate",
+                project_id=pid,
+                data={
+                    "plan_version": plan.version,
+                    "tasks": [t.task_id for t in result.tasks],
+                    "excluded": sorted(excluded),
+                    "router": router is not None,
+                    "expected_nusd": result.expected_nusd,
+                    "expected_complete": result.complete,
+                    "unknown": list(result.unknown),
+                    "worst_nusd": result.worst_nusd,
+                    "project_remaining_nusd": left,
+                    "assessment": fit.value,
+                },
+            )
+        )
+    except (OSError, ValueError):
+        pass  # advisory: an unwritable event never changes the run
+    unknown = f" + {len(result.unknown)} task(s) unknown" if result.unknown else ""
+    return (
+        f"{len(result.tasks)} task(s) to run; expected {_usd(result.expected_nusd)}"
+        f"{unknown}; worst {_usd(result.worst_nusd)}; project budget left {_usd(left)}: "
+        f"{_FIT_SHORT[fit]} (advisory; details: automa estimate {pid})"
+    )
 
 
 def _describe_router(router: Router | None) -> str:

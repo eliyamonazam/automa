@@ -33,7 +33,7 @@ cp .env.example .env      # کلید API و آدرس درگاه رو اینجا 
 cp automa.toml.example automa.toml
 pip install -e .          # یا با Docker (پایین‌تر)
 automa new "ایده من ..."   # سؤال‌ها + ساخت plan.json
-automa run <project-id>    # اجرا/ادامه: Worker ← Verifier ← اصلاح
+automa run <project-id>    # اجرا/ادامه: Worker ← Verifier ← اصلاح (قبل از اولین فراخوانی مدل خط مشورتی estimate: با تخمین هزینه در برابر بودجه)
 automa run <project-id> --parallel 2   # وظایف مستقل هم‌زمان (یا [orchestrator] max_parallel در automa.toml)
 automa run <project-id> --router       # سطح شروع هر وظیفه تازه با Router داده‌محور از لاگ کیفیت (یا [router] enabled؛ --no-router)
 automa status             # فهرست پروژه‌ها، هزینه و برنامه
