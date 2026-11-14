@@ -27,6 +27,11 @@ Shared ``files/`` (D37): tasks whose acceptance checks name overlapping paths ar
 never scheduled at the same time, and a worker write to a path another running
 task has written fails (``PathClaims``), so two parallel tasks never write one file.
 
+Data router (D59): with ``router=``, a task's *first* attempt starts at the tier the
+``Router`` picks from quality statistics (event ``router.decision``); the choice is
+saved in the task state like any tier, so resuming never routes again and
+escalation continues from it. Without a router nothing changes.
+
 What the orchestrator never does:
 
 - mark a task passed by itself: only a stored ``pass`` verdict can (enforced by the
@@ -69,6 +74,7 @@ from automa.plan.models import (
 from automa.project.store import ProjectStatus, ProjectStore
 from automa.quality import QualityError, QualityLog, QualityRecord
 from automa.roles.registry import RoleError, RoleRegistry
+from automa.router import RouteDecision, Router
 from automa.tools import RunCommand, tools_factory
 from automa.tools.base import Tool
 from automa.tools.claims import PathClaims, paths_overlap
@@ -206,6 +212,7 @@ class Orchestrator:
         tools: Callable[[], list[Tool]] | None = None,
         clock: Clock = _utc_now,
         quality: QualityLog | None = None,
+        router: Router | None = None,
     ):
         if not isinstance(store, ProjectStore):
             raise TypeError("store must be a ProjectStore")
@@ -219,6 +226,12 @@ class Orchestrator:
             raise TypeError("config must be an AutomaConfig")
         if quality is not None and not isinstance(quality, QualityLog):
             raise TypeError("quality must be a QualityLog")
+        if router is not None:
+            if not isinstance(router, Router):
+                raise TypeError("router must be a Router")
+            if router.config != config:
+                # Its tiers/prices must be the ones the gateway uses (D59).
+                raise ValueError("router was built from a different configuration")
         self._store = store
         self._worker = worker
         self._verifier = verifier
@@ -229,6 +242,7 @@ class Orchestrator:
         self._tools = tools or tools_factory(config.sandbox.docker_sandbox())
         self._clock = clock
         self._quality = quality
+        self._router = router
         self._make_tools()  # a factory that ignores a required sandbox fails here
 
     @property
@@ -453,7 +467,13 @@ class Orchestrator:
             self._fail(project_id, plan, task, len(history))
             return 0
 
-        tier = state.tier or task.tier or role.tier
+        requested = task.tier or role.tier
+        if state.tier is not None:
+            tier = state.tier  # already chosen (routed or escalated): never re-route
+        elif self._router is not None and not history:
+            tier = self._route(self._router, project_id, task, requested)
+        else:
+            tier = requested
         attempt = len(history) + 1
         feedback: list[Issue] = list(last_verdict.issues) if last_verdict is not None else []
         self._save_state(project_id, plan, task.id, TaskStatus.RUNNING, tier, None)
@@ -485,6 +505,34 @@ class Orchestrator:
         stored = store.save_task_result(project_id, result)
         self._verify(project_id, plan, task, stored, [*history, (stored, None)])
         return 1
+
+    def _route(self, router: Router, project_id: str, task: Task, requested: Tier) -> Tier:
+        """Starting tier of a fresh task from the data router (D59).
+
+        Only the *starting* tier changes; escalation, the gateway and the
+        BudgetGuard work exactly as without a router. The choice is saved in the
+        task state by the caller, so a resumed run never routes the task again.
+        """
+        try:
+            decision: RouteDecision = router.route(task.role, requested)
+        except ConfigError as e:
+            raise _Stop(StopReason.CONFIG, str(e), task.id) from e
+        best = next(e for e in decision.evidence if e.tier is decision.tier)
+        self._emit(
+            project_id,
+            "router.decision",
+            {
+                "task": task.id,
+                "role": task.role,
+                "requested": decision.requested.value,
+                "tier": decision.tier.value,
+                "model": decision.model,
+                "reason": decision.reason.value,
+                "attempts": best.attempts,
+                "passed": best.passed,
+            },
+        )
+        return decision.tier
 
     def _verify(
         self,

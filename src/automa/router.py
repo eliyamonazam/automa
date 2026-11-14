@@ -109,6 +109,10 @@ class Router:
     def settings(self) -> RouterConfig:
         return self._settings
 
+    @property
+    def config(self) -> AutomaConfig:
+        return self._config
+
     def evidence(self, role: str) -> list[TierEvidence]:
         """Evidence for every configured tier (lowest tier first)."""
         if not _ROLE_RE.fullmatch(role):
