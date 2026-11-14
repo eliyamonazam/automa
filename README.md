@@ -46,6 +46,8 @@ automa memory forget <id>  # حذف یک مورد بعد از نمایش و تأ
 # خاموش کردن: --no-memory یا [memory] in_prompts = false در automa.toml. bench run حافظه نمی‌خواند.
 automa review run <id>     # بازبینی پروژه done/failed با مدل (کلید و بودجه؛ هزینه به حساب پروژه) و ذخیره پیشنهادهای حافظه — هنوز حافظه نیستند (--again، --json)
 automa review show <id>    # پیشنهادهای آخرین بازبینی با شماره و وضعیت تصمیم (فقط‌خوندنی؛ --review <rid>، --json)
+automa review accept <id> <n>…  # نمایش متن کامل، تأیید و نوشتن پیشنهادها در حافظه (source=review؛ --review <rid>، --yes)
+automa review reject <id> <n>…  # ثبت رد پیشنهادها بدون نوشتن حافظه (تصمیم نهایی است)
 automa new "<هدف>" --workflow <wf-id>  # پروژه جدید با برنامه قالب (بدون Executive، بدون کلید و هزینه)
 automa workflow create --goal "<هدف>" --plan plan.json  # قالب جدید از برنامه‌ای که خودتون نوشتید (--json)
 automa workflow show <wf-id> [--json | --plan-json]      # نمایش قالب؛ --plan-json فایل قابل ویرایش برنامه

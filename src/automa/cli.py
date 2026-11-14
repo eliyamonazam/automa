@@ -1,6 +1,7 @@
 """Command-line interface: ``automa new``, ``run``, ``status``, ``approvals``,
 ``approve``/``reject``, ``workflow save|create|edit|show``/``workflows`` and
-``skills``, ``memory list|add|forget``, ``review run|show`` and ``bench list|run|report``.
+``skills``, ``memory list|add|forget``, ``review run|show|accept|reject`` and
+``bench list|run|report``.
 
 Every model call goes through ``LLMGateway`` + ``BudgetGuard`` (never a bare provider).
 ``status`` and ``approvals`` are read-only: they need no API key, make no model call
@@ -22,7 +23,9 @@ false`` turns it off; a broken memory is a configuration error); ``bench run`` n
 reads memory (D51). ``review run`` reviews a finished (done/failed) project with the
 ``ReviewAgent`` (API key + guarded gateway; the cost counts toward the project) and
 stores the proposals; nothing becomes memory until accepted. ``review show`` prints the
-stored proposals and their decisions, read-only (D54).
+stored proposals and their decisions, read-only (D54). ``review accept``/``reject``
+show the chosen proposals in full and, after confirmation, record a final decision;
+only ``accept`` writes memory (source: review); neither needs an API key (D55).
 
 Exit codes (stable, for scripts):
 
@@ -58,6 +61,7 @@ from automa.agents import (
     ExecutiveAgent,
     ExecutiveSettings,
     PlanningFailed,
+    Proposal,
     ReviewAgent,
     ReviewError,
     ReviewFailed,
@@ -99,6 +103,8 @@ from automa.memory import (
     MemoryStore,
     MemoryStoreError,
 )
+from automa.memory.models import normalize_text
+from automa.memory.store import MAX_ENTRIES_PER_LAYER
 from automa.orchestrator import (
     Orchestrator,
     OrchestratorError,
@@ -805,6 +811,7 @@ def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_j
     pending = _pending_approvals(store, project_id)
     skills_line, skills_json = _skills_status(config)
     memory_line, memory_json = _memory_status(config, project.id)
+    review_line, review_json = _review_status(store, config, project)
     if as_json:
         data: dict[str, Any] = {
             "id": project.id,
@@ -820,6 +827,7 @@ def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_j
             "max_parallel": config.orchestrator.max_parallel,
             "skills": skills_json,
             "memory": memory_json,
+            "review": review_json,
         }
         typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
         return
@@ -833,6 +841,7 @@ def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_j
     typer.echo(f"parallel: {config.orchestrator.describe()}")
     typer.echo(f"skills: {skills_line}")
     typer.echo(f"memory: {memory_line}")
+    typer.echo(f"review: {review_line}")
     if pending:
         typer.echo(f"pending approvals: {len(pending)}")
         for r in pending:
@@ -1529,6 +1538,202 @@ def review_show(
         typer.echo(f"reviews: {len(all_reviews)} (others: {others})")
     for line in _review_lines(review, decisions):
         typer.echo(line)
+
+
+_REVIEW_OPTION = typer.Option("--review", help="Review id; default: the latest.")
+_REVIEW_CONFIG_OPTION = typer.Option("--config", help="Path to automa.toml.")
+_NUMBERS_ARGUMENT = typer.Argument(
+    help="Proposal number(s), as shown by: automa review show <id>.", show_default=False
+)
+
+
+def _review_target(
+    config: AutomaConfig, project_id: str, review_id: str | None, numbers: list[int]
+) -> tuple[ReviewStore, str, StoredReview]:
+    """The review to decide on, after every free check: project and review exist,
+    the numbers are valid, distinct and all still pending. Nothing is written."""
+    store = ProjectStore.for_workspace(config.workspace)
+    reviews = _review_store(config, store)
+    try:
+        pid = store.load(project_id).id
+        if review_id is not None:
+            review: StoredReview | None = reviews.get(pid, review_id)
+        else:
+            review = reviews.latest(pid)
+        if review is None:
+            raise _fail(
+                f"project {pid} has no reviews; run one with: automa review run {pid}",
+                EXIT_USER,
+            )
+        decisions = reviews.decisions(pid, review.id)
+    except (ProjectStoreError, ReviewStoreError) as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    count = len(review.proposals)
+    if not numbers:
+        raise _fail("give at least one proposal number", EXIT_USER)
+    if len(set(numbers)) != len(numbers):
+        raise _fail("each proposal number may be given only once; nothing was changed", EXIT_USER)
+    bad = [n for n in numbers if not 1 <= n <= count]
+    if bad:
+        has = f"proposals 1..{count}" if count else "no proposals"
+        raise _fail(
+            f"review {review.id} has {has}; no proposal {', '.join(map(str, bad))}; "
+            "nothing was changed",
+            EXIT_USER,
+        )
+    decided = [n for n in numbers if n in decisions]
+    if decided:
+        states = ", ".join(f"{n} is {decisions[n].status.value}" for n in decided)
+        raise _fail(
+            f"already decided (a decision is final): proposal {states}; nothing was changed",
+            EXIT_USER,
+        )
+    return reviews, pid, review
+
+
+def _check_memory_room(config: AutomaConfig, pid: str, proposals: list[Proposal]) -> None:
+    """Fail before writing anything if memory is broken or a layer has no room for the
+    new (not already remembered) entries. A config error, like a broken memory in run."""
+    try:
+        context = _memory_store(config).context(pid)
+    except MemoryStoreError as e:
+        raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+    layers = {
+        MemoryScope.PROJECT: context.project,
+        MemoryScope.LESSON: context.lessons,
+    }
+    for scope, entries in layers.items():
+        known = {normalize_text(e.text) for e in entries}
+        new = {normalize_text(p.text) for p in proposals if p.memory_scope is scope} - known
+        if len(entries) + len(new) > MAX_ENTRIES_PER_LAYER:
+            raise _fail(
+                f"{scope.value} memory has room for {MAX_ENTRIES_PER_LAYER - len(entries)} more "
+                f"entries, but {len(new)} would be added; forget some first "
+                "(automa memory list / forget); nothing was changed",
+                EXIT_USER,
+            )
+
+
+def _decision_preview(pid: str, review: StoredReview, numbers: list[int]) -> list[str]:
+    """Every chosen proposal with its full text (escaped) and where it would go."""
+    lines = [f"review: {review.id} (project {pid})"]
+    for n in numbers:
+        proposal = review.proposal(n)
+        target = (
+            f"project memory of {pid}"
+            if proposal.scope == "project"
+            else "lessons (used by all future projects)"
+        )
+        lines.append(f"  {n}. [{proposal.scope}] -> {target}")
+        lines += [f"     {line}" for line in _safe(proposal.text).split("\n")]
+    return lines
+
+
+def _review_decide(
+    project_id: str,
+    numbers: list[int],
+    *,
+    accept: bool,
+    review_id: str | None,
+    yes: bool,
+    config_path: Path | None,
+) -> None:
+    config = _load(config_path)
+    reviews, pid, review = _review_target(config, project_id, review_id, numbers)
+    if accept:
+        _check_memory_room(config, pid, [review.proposal(n) for n in numbers])
+    for line in _decision_preview(pid, review, numbers):
+        typer.echo(line)
+    count = len(numbers)
+    question = (
+        f"Add {'this proposal' if count == 1 else f'these {count} proposals'} to memory? "
+        "They will be included in future prompts"
+        if accept
+        else f"Reject {'this proposal' if count == 1 else f'these {count} proposals'}? "
+        "A decision is final"
+    )
+    if not yes and not typer.confirm(question, default=False):
+        verb = "accepted" if accept else "rejected"
+        raise _fail(f"not {verb}; nothing was changed", EXIT_USER)
+    for i, n in enumerate(numbers):
+        try:
+            if accept:
+                decision = reviews.accept(pid, review.id, n)
+            else:
+                decision = reviews.reject(pid, review.id, n)
+        except (ReviewStoreError, ProjectStoreError) as e:
+            rest = numbers[i:]
+            raise _fail(
+                f"proposal {n}: {_safe(str(e))}\nnot decided: {', '.join(map(str, rest))}",
+                EXIT_USER,
+            ) from None
+        typer.echo(f"{n}: {_decision_state(decision)}")
+    if accept:
+        typer.echo("accepted memory is used in prompts on the next automa new/run")
+
+
+@review_app.command("accept")
+def review_accept(
+    project_id: Annotated[str, typer.Argument(help="Project of the review.")],
+    numbers: Annotated[list[int], _NUMBERS_ARGUMENT],
+    review_id: Annotated[str | None, _REVIEW_OPTION] = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
+    config_path: Annotated[Path | None, _REVIEW_CONFIG_OPTION] = None,
+) -> None:
+    """Accept proposals: each is written to memory (source: review) after you see its
+    full text and confirm. A decision is final. No API key, no model call."""
+    _review_decide(
+        project_id, numbers, accept=True, review_id=review_id, yes=yes, config_path=config_path
+    )
+
+
+@review_app.command("reject")
+def review_reject(
+    project_id: Annotated[str, typer.Argument(help="Project of the review.")],
+    numbers: Annotated[list[int], _NUMBERS_ARGUMENT],
+    review_id: Annotated[str | None, _REVIEW_OPTION] = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
+    config_path: Annotated[Path | None, _REVIEW_CONFIG_OPTION] = None,
+) -> None:
+    """Reject proposals: the decision is recorded and nothing is written to memory.
+    A decision is final. No API key, no model call."""
+    _review_decide(
+        project_id, numbers, accept=False, review_id=review_id, yes=yes, config_path=config_path
+    )
+
+
+def _review_status(store: ProjectStore, config: AutomaConfig, project: Project) -> tuple[str, Any]:
+    """The review line for ``automa status``. Read-only and diagnostic: broken review
+    files are reported (with the reason) instead of failing."""
+    pid = project.id
+    try:
+        reviews = _review_store(config, store)
+        all_reviews = reviews.all(pid)
+        latest = all_reviews[-1] if all_reviews else None
+        pending = reviews.pending(pid, latest.id) if latest is not None else []
+    except (ReviewStoreError, ProjectStoreError) as e:
+        reason = _safe(str(e))
+        return f"error: {reason}", {"count": 0, "latest": None, "pending": [], "error": reason}
+    data = {
+        "count": len(all_reviews),
+        "latest": latest.id if latest is not None else None,
+        "proposals": len(latest.proposals) if latest is not None else 0,
+        "pending": pending,
+        "error": None,
+    }
+    if latest is None:
+        hint = (
+            f" (run one with: automa review run {pid})"
+            if project.status in (ProjectStatus.DONE, ProjectStatus.FAILED)
+            else ""
+        )
+        return f"none{hint}", data
+    line = f"{latest.id}: {len(latest.proposals)} proposal(s), {len(pending)} pending"
+    if len(all_reviews) > 1:
+        line += f" ({len(all_reviews)} reviews)"
+    if pending:
+        line += f"; decide with: automa review accept|reject {pid} <n>..."
+    return line, data
 
 
 # -- Approval Gate -------------------------------------------------------------
