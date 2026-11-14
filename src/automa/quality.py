@@ -164,19 +164,34 @@ _TIER_ORDER = {t: i for i, t in enumerate(Tier)}
 class QualityLog:
     """Durable record of judged attempts backed by SQLite (thread-safe).
 
-    ``path`` may be ``":memory:"`` (tests).
+    ``path`` may be ``":memory:"`` (tests). With ``read_only=True`` the file must
+    already exist and is opened read-only: nothing is created, migrated or written
+    (``record`` raises), so read-only commands never change the workspace.
     """
 
-    def __init__(self, path: Path | str):
+    def __init__(self, path: Path | str, *, read_only: bool = False):
         self._path = str(path)
-        if self._path != ":memory:":
+        self._read_only = read_only
+        self._empty = False  # read-only open of a file without the schema yet
+        target = self._path
+        uri = False
+        if self._path == ":memory:":
+            if read_only:
+                raise QualityError("an in-memory quality log cannot be opened read-only")
+        else:
             p = Path(self._path)
             if p.is_symlink():
                 raise QualityError(f"{p}: refusing to open a symlinked quality log")
-            p.parent.mkdir(parents=True, exist_ok=True)
+            if read_only:
+                if not p.is_file():
+                    raise QualityError(f"{p}: no quality log to read")
+                target = p.resolve().as_uri() + "?mode=ro"
+                uri = True
+            else:
+                p.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         try:
-            self._conn = sqlite3.connect(self._path, check_same_thread=False)
+            self._conn = sqlite3.connect(target, check_same_thread=False, uri=uri)
         except sqlite3.Error as e:
             raise QualityError(f"cannot open quality log {self._path}: {e}") from e
         try:
@@ -189,9 +204,13 @@ class QualityLog:
             raise
 
     @classmethod
-    def for_workspace(cls, workspace: Path) -> QualityLog:
+    def for_workspace(cls, workspace: Path, *, read_only: bool = False) -> QualityLog:
         """Open the log at ``<workspace>/quality.sqlite3``."""
-        return cls(Path(workspace) / QUALITY_FILE)
+        return cls(Path(workspace) / QUALITY_FILE, read_only=read_only)
+
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
 
     def _init_schema(self) -> None:
         (version,) = self._conn.execute("PRAGMA user_version").fetchone()
@@ -203,6 +222,9 @@ class QualityLog:
             ).fetchall()
             if tables:
                 raise QualityError("database is not an Automa quality log (unexpected tables)")
+        if self._read_only:
+            self._empty = version == 0
+            return
         with self._conn:
             self._conn.executescript(_SCHEMA)
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -227,27 +249,42 @@ class QualityLog:
         """
         if not isinstance(rec, QualityRecord):
             raise TypeError("rec must be a QualityRecord")
+        if self._read_only:
+            raise QualityError("quality log is open read-only")
         rec = QualityRecord.model_validate(rec.model_dump())
         row = _to_row(rec)
         with self._lock:
             try:
                 existing = self._get_row(rec.project_id, rec.task_id, rec.attempt)
                 if existing is not None:
-                    if _row_to_record(existing) != rec:
-                        raise QualityError(
-                            f"attempt {rec.attempt} of {rec.project_id}/{rec.task_id} is "
-                            "already recorded with different data"
-                        )
+                    self._check_same(existing, rec)
                     return False
-                with self._conn:
-                    self._conn.execute(
-                        f"INSERT INTO attempts ({', '.join(_COLUMNS)})"  # noqa: S608
-                        f" VALUES ({', '.join('?' * len(_COLUMNS))})",
-                        row,
-                    )
+                try:
+                    with self._conn:
+                        self._conn.execute(
+                            f"INSERT INTO attempts ({', '.join(_COLUMNS)})"  # noqa: S608
+                            f" VALUES ({', '.join('?' * len(_COLUMNS))})",
+                            row,
+                        )
+                except sqlite3.IntegrityError:
+                    # Another process (e.g. ``automa quality sync`` next to a run)
+                    # recorded the attempt in between: identical = no-op, else conflict.
+                    existing = self._get_row(rec.project_id, rec.task_id, rec.attempt)
+                    if existing is None:
+                        raise
+                    self._check_same(existing, rec)
+                    return False
             except sqlite3.Error as e:
                 raise QualityError(f"cannot write quality log: {e}") from e
         return True
+
+    @staticmethod
+    def _check_same(existing: tuple[object, ...], rec: QualityRecord) -> None:
+        if _row_to_record(existing) != rec:
+            raise QualityError(
+                f"attempt {rec.attempt} of {rec.project_id}/{rec.task_id} is "
+                "already recorded with different data"
+            )
 
     # -- reading -------------------------------------------------------------
 
@@ -274,6 +311,8 @@ class QualityLog:
                 clauses.append(f"{column} = ?")
                 params.append(value)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        if self._empty:
+            return []
         with self._lock:
             try:
                 rows = self._conn.execute(

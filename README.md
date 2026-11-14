@@ -48,6 +48,8 @@ automa review run <id>     # بازبینی پروژه done/failed با مدل (
 automa review show <id>    # پیشنهادهای آخرین بازبینی با شماره و وضعیت تصمیم (فقط‌خوندنی؛ --review <rid>، --json)
 automa review accept <id> <n>…  # نمایش متن کامل، تأیید و نوشتن پیشنهادها در حافظه (source=review؛ --review <rid>، --yes)
 automa review reject <id> <n>…  # ثبت رد پیشنهادها بدون نوشتن حافظه (تصمیم نهایی است)
+automa quality [--role R]  # نرخ قبولی Verifier و هزینه هر (نقش، مدل) از لاگ کیفیت (فقط‌خوندنی؛ --json؛ بدون کلید)
+automa quality sync [<id>]  # وارد کردن تلاش‌های داوری‌شده پروژه‌های قبلی به لاگ کیفیت (idempotent؛ --json)
 automa new "<هدف>" --workflow <wf-id>  # پروژه جدید با برنامه قالب (بدون Executive، بدون کلید و هزینه)
 automa workflow create --goal "<هدف>" --plan plan.json  # قالب جدید از برنامه‌ای که خودتون نوشتید (--json)
 automa workflow show <wf-id> [--json | --plan-json]      # نمایش قالب؛ --plan-json فایل قابل ویرایش برنامه

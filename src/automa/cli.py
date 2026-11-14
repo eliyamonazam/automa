@@ -26,6 +26,9 @@ stores the proposals; nothing becomes memory until accepted. ``review show`` pri
 stored proposals and their decisions, read-only (D54). ``review accept``/``reject``
 show the chosen proposals in full and, after confirmation, record a final decision;
 only ``accept`` writes memory (source: review); neither needs an API key (D55).
+``quality`` prints the pass rate and cost of each (role, model) from the quality log,
+read-only (a missing log is empty; nothing is created); ``quality sync [<id>]`` imports
+the judged attempts of past projects into it. Neither needs an API key (D57).
 
 Exit codes (stable, for scripts):
 
@@ -47,6 +50,7 @@ Exit codes (stable, for scripts):
 from __future__ import annotations
 
 import json
+import re
 import unicodedata
 from collections.abc import Callable
 from pathlib import Path
@@ -113,8 +117,9 @@ from automa.orchestrator import (
     StopReason,
 )
 from automa.plan import Plan
+from automa.plan.models import ROLE_PATTERN
 from automa.project import Project, ProjectStatus, ProjectStore, ProjectStoreError
-from automa.quality import QualityError, QualityLog
+from automa.quality import QUALITY_FILE, QualityError, QualityLog, QualityStats, sync_project
 from automa.reviews import (
     MAX_REVIEWS_PER_PROJECT,
     ProposalDecision,
@@ -201,6 +206,11 @@ review_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(review_app, name="review")
+quality_app = typer.Typer(
+    help="Quality log: verifier pass rate and cost per task type (role) and model.",
+    invoke_without_command=True,
+)
+app.add_typer(quality_app, name="quality")
 
 DEFAULT_SUITE_DIR = Path("benchmarks")
 RESULTS_DIRNAME = "results"
@@ -2131,6 +2141,150 @@ def bench_report(
         for line in _bench_report_lines(report):
             typer.echo(line)
     raise typer.Exit(EXIT_USER if report.problems else EXIT_OK)
+
+
+# -- quality log -----------------------------------------------------------------
+
+
+def _pct(rate: float) -> str:
+    return f"{rate * 100:.1f}%"
+
+
+def _quality_json(s: QualityStats) -> dict[str, Any]:
+    per_pass = s.cost_per_pass_nusd
+    return {
+        "role": s.role,
+        "model": s.model,
+        "tiers": [t.value for t in s.tiers],
+        "attempts": s.attempts,
+        "passed": s.passed,
+        "failed": s.failed,
+        "pass_rate": s.pass_rate,
+        "cost_nusd": s.cost_nusd,
+        "cost_usd": nusd_to_usd(s.cost_nusd),
+        "avg_cost_nusd": s.avg_cost_nusd,
+        "avg_cost_usd": nusd_to_usd(s.avg_cost_nusd),
+        "cost_per_pass_nusd": per_pass,
+        "cost_per_pass_usd": nusd_to_usd(per_pass) if per_pass is not None else None,
+    }
+
+
+def _quality_lines(stats: list[QualityStats]) -> list[str]:
+    rows = [
+        (
+            s.role,
+            _safe(s.model).replace("\n", " ").replace("\t", " "),
+            ",".join(t.value for t in s.tiers),
+            str(s.attempts),
+            str(s.passed),
+            _pct(s.pass_rate),
+            _usd(s.cost_nusd),
+            _usd(s.avg_cost_nusd),
+            _usd(s.cost_per_pass_nusd) if s.cost_per_pass_nusd is not None else "-",
+        )
+        for s in stats
+    ]
+    header = ("role", "model", "tiers", "tries", "pass", "rate", "cost", "avg", "per pass")
+    widths = [max(len(r[i]) for r in [header, *rows]) for i in range(len(header))]
+    return [
+        "  ".join(c.ljust(w) for c, w in zip(r, widths, strict=True)).rstrip()
+        for r in [header, *rows]
+    ]
+
+
+@quality_app.callback(invoke_without_command=True)
+def quality(
+    ctx: typer.Context,
+    role: Annotated[str | None, typer.Option("--role", help="Only this task type (role).")] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Pass rate and cost of every (role, model) pair from the quality log.
+
+    Read-only: no API key, no model call, no files written (a missing log is empty).
+    A broken log is exit code 2. Import past projects with: automa quality sync.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    config = _load(config_path)
+    if role is not None and not re.fullmatch(ROLE_PATTERN, role):
+        raise _fail(f"invalid role {_safe(role)!r}", EXIT_USER)
+    path = config.workspace / QUALITY_FILE
+    stats: list[QualityStats] = []
+    if path.exists() or path.is_symlink():
+        try:
+            with QualityLog(path, read_only=True) as log:
+                stats = log.stats(role=role)
+        except QualityError as e:
+            raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+    if as_json:
+        typer.echo(json.dumps([_quality_json(s) for s in stats], ensure_ascii=False, indent=2))
+        return
+    if not stats:
+        where = f" for role {role}" if role is not None else ""
+        typer.echo(
+            f"no quality data yet{where}; it is recorded by automa run, "
+            "or import past projects with: automa quality sync"
+        )
+        return
+    for line in _quality_lines(stats):
+        typer.echo(line)
+
+
+@quality_app.command("sync")
+def quality_sync(
+    project_id: Annotated[
+        str | None, typer.Argument(help="Project to import; default: every project.")
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Import the judged attempts of past projects into the quality log.
+
+    Idempotent (rows already recorded are left as they are); no API key, no model
+    call. An unknown project is exit code 1 and creates nothing; a log that cannot be
+    opened is exit code 2; a project that could not be imported is reported, the
+    others are still imported, and the exit code is 1.
+    """
+    config = _load(config_path)
+    store = ProjectStore.for_workspace(config.workspace)
+    if project_id is not None:
+        try:
+            ids = [store.load(project_id).id]
+        except ProjectStoreError as e:
+            raise _fail(_safe(str(e)), EXIT_USER) from None
+    else:
+        ids = store.list_ids()
+    results: list[dict[str, Any]] = []
+    if ids:
+        with _open_quality(config) as log:
+            for pid in ids:
+                try:
+                    results.append(
+                        {"id": pid, "added": sync_project(log, store, pid), "error": None}
+                    )
+                except (ProjectStoreError, QualityError) as e:
+                    results.append({"id": pid, "added": 0, "error": _safe(str(e))})
+    failed = sum(1 for r in results if r["error"] is not None)
+    added = sum(r["added"] for r in results)
+    if as_json:
+        out = {"projects": results, "added": added, "failed": failed}
+        typer.echo(json.dumps(out, ensure_ascii=False, indent=2))
+    elif not ids:
+        typer.echo("no projects yet; nothing to import")
+    else:
+        for r in results:
+            state = f"error: {r['error']}" if r["error"] is not None else f"{r['added']} new"
+            typer.echo(f"{r['id']}  {state}")
+        typer.echo(
+            f"imported {added} new row(s) from {len(ids) - failed} project(s)"
+            + (f"; {failed} failed" if failed else "")
+        )
+    raise typer.Exit(EXIT_USER if failed else EXIT_OK)
 
 
 def main() -> None:
