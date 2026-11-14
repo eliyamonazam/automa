@@ -53,6 +53,7 @@ automa quality [--role R]  # نرخ قبولی Verifier و هزینه هر (نق
 automa quality sync [<id>]  # وارد کردن تلاش‌های داوری‌شده پروژه‌های قبلی به لاگ کیفیت (idempotent؛ --json)
 automa quality route [--role R] [--tier T]  # پیش‌نمایش فقط‌خواندنی: سطحی که Router برای هر نقش انتخاب می‌کند، دلیل و شواهد هر سطح (حتی وقتی Router خاموش است؛ --json)
 automa estimate <id> [--max-attempts N] [--router]  # تخمین فقط‌خواندنی هزینهٔ وظایف باقی‌مانده: بدترین حالت قطعی و (با سابقهٔ کافی) مورد انتظار، در برابر بودجهٔ باقی‌ماندهٔ پروژه (--json)
+automa finance report [--project ID] [--since D] [--until D]  # خرج واقعی فقط‌خواندنی از Ledger به تفکیک پروژه/روز UTC/مدل/نقش (--json)
 automa new "<هدف>" --workflow <wf-id>  # پروژه جدید با برنامه قالب (بدون Executive، بدون کلید و هزینه)
 automa workflow create --goal "<هدف>" --plan plan.json  # قالب جدید از برنامه‌ای که خودتون نوشتید (--json)
 automa workflow show <wf-id> [--json | --plan-json]      # نمایش قالب؛ --plan-json فایل قابل ویرایش برنامه

@@ -61,7 +61,7 @@ import re
 import sqlite3
 import unicodedata
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -95,7 +95,7 @@ from automa.benchmarks import (
     write_result,
 )
 from automa.budget.guard import BudgetError, BudgetExceeded, BudgetGuard, cap_to_nusd
-from automa.budget.ledger import CostLedger, LedgerError, nusd_to_usd
+from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError, nusd_to_usd
 from automa.config import (
     MAX_PARALLEL,
     AutomaConfig,
@@ -110,9 +110,12 @@ from automa.finance import (
     EstimateBasis,
     EstimateSettings,
     PlanEstimate,
+    SpendGroup,
+    SpendingReport,
     TaskEstimate,
     TaskProgress,
     estimate_plan,
+    spending_report,
 )
 from automa.llm.factory import provider_from_config
 from automa.llm.gateway import LLMGateway
@@ -231,6 +234,11 @@ quality_app = typer.Typer(
     invoke_without_command=True,
 )
 app.add_typer(quality_app, name="quality")
+finance_app = typer.Typer(
+    help="Financial Controller: where the money went (read-only reports).",
+    no_args_is_help=True,
+)
+app.add_typer(finance_app, name="finance")
 
 DEFAULT_SUITE_DIR = Path("benchmarks")
 RESULTS_DIRNAME = "results"
@@ -1270,6 +1278,179 @@ def estimate(
     )
     typer.echo(f"assessment: {_FIT_TEXT[fit]}")
     typer.echo("advisory only: the budget guard still bounds every call and stops at the caps")
+
+
+# -- Financial Controller: spending report ------------------------------------------
+
+
+def _report_day(value: str | None, option: str) -> date | None:
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise _fail(
+            f"{option} must be a day as YYYY-MM-DD, got {_safe(value)!r}", EXIT_USER
+        ) from None
+
+
+def _report_roles(
+    store: ProjectStore, project_ids: list[str]
+) -> tuple[dict[tuple[str, str], str], list[str]]:
+    """``(project, task) -> role`` from the projects' plans, and a warning for each
+    plan that could not be read (its calls then count as ``unknown_role``)."""
+    roles: dict[tuple[str, str], str] = {}
+    warnings: list[str] = []
+    for pid in project_ids:
+        try:
+            if not store.has_plan(pid):
+                continue
+            plan = store.load_plan(pid)
+        except (ProjectStoreError, OSError, ValueError) as e:
+            warnings.append(f"plan of {pid} is unreadable ({e}); its calls count as unknown role")
+            continue
+        for task in plan.tasks:
+            roles[(pid, task.id)] = task.role
+    return roles, warnings
+
+
+def _ledger_entries(config: AutomaConfig) -> list[LedgerEntry]:
+    """Every ledger row; a missing ledger is empty and is not created. An unreadable
+    ledger is a configuration error."""
+    path = config.workspace / LEDGER_FILENAME
+    if not (path.exists() or path.is_symlink()):
+        return []
+    try:
+        with CostLedger(path, read_only=True) as ledger:
+            return ledger.entries()
+    except (LedgerError, sqlite3.Error, OSError, ValidationError) as e:
+        raise _fail(f"cannot read the cost ledger: {_safe(str(e))}", EXIT_CONFIG) from None
+
+
+def _group_json(g: SpendGroup) -> dict[str, Any]:
+    return {
+        "key": g.key,
+        "calls": g.calls,
+        "input_tokens": g.input_tokens,
+        "output_tokens": g.output_tokens,
+        "cost_usd": nusd_to_usd(g.cost_nusd),
+        "cost_nusd": g.cost_nusd,
+        "reserved_usd": nusd_to_usd(g.reserved_nusd),
+        "reserved_nusd": g.reserved_nusd,
+    }
+
+
+def _report_json(r: SpendingReport, warnings: list[str]) -> dict[str, Any]:
+    return {
+        "project": r.project_id,
+        "since": r.since.isoformat() if r.since is not None else None,
+        "until": r.until.isoformat() if r.until is not None else None,
+        "first_ts": r.first_ts.isoformat() if r.first_ts is not None else None,
+        "last_ts": r.last_ts.isoformat() if r.last_ts is not None else None,
+        "total": _group_json(r.total),
+        "by_project": [_group_json(g) for g in r.by_project],
+        "no_project": _group_json(r.no_project),
+        "by_day": [_group_json(g) for g in r.by_day],
+        "by_model": [_group_json(g) for g in r.by_model],
+        "by_role": [_group_json(g) for g in r.by_role],
+        "no_task": _group_json(r.no_task),
+        "unknown_role": _group_json(r.unknown_role),
+        "warnings": warnings,
+    }
+
+
+def _group_line(label: str, g: SpendGroup) -> str:
+    name = _safe(label).replace("\n", " ").replace("\t", " ")
+    return (
+        f"  {name}  {_usd(g.cost_nusd)}  {g.calls} call(s)  "
+        f"{g.input_tokens}+{g.output_tokens} tok  reserved {_usd(g.reserved_nusd)}"
+    )
+
+
+def _spending_lines(r: SpendingReport) -> list[str]:
+    lines: list[str] = []
+    scope = f"project {r.project_id}" if r.project_id is not None else "all projects"
+    days = ""
+    if r.since is not None or r.until is not None:
+        days = f", days {r.since or '...'} to {r.until or '...'} (UTC)"
+    lines.append(f"spending report: {scope}{days}")
+    t = r.total
+    if t.calls == 0:
+        lines.append("no recorded calls (the ledger is written by automa run, new and review)")
+        return lines
+    lines.append(
+        f"total: {_usd(t.cost_nusd)} in {t.calls} call(s), "
+        f"{t.input_tokens}+{t.output_tokens} tokens; reserved {_usd(t.reserved_nusd)} "
+        f"(per-call worst cases checked by the budget guard)"
+    )
+    if r.first_ts is not None and r.last_ts is not None:
+        lines.append(f"from {r.first_ts.isoformat()} to {r.last_ts.isoformat()}")
+    sections: list[tuple[str, list[tuple[str, SpendGroup]]]] = [
+        (
+            "by project:",
+            [(g.key or "", g) for g in r.by_project] + [("(no project)", r.no_project)],
+        ),
+        ("by day (UTC):", [(g.key or "", g) for g in r.by_day]),
+        ("by model:", [(g.key or "", g) for g in r.by_model]),
+        (
+            "by role (of the task; verifier calls count to their task):",
+            [(g.key or "", g) for g in r.by_role]
+            + [("(no task: planning/review)", r.no_task), ("(unknown role)", r.unknown_role)],
+        ),
+    ]
+    for title, rows in sections:
+        lines.append(title)
+        for label, g in rows:
+            if g.calls or g.key is not None:
+                lines.append(_group_line(label, g))
+    return lines
+
+
+@finance_app.command("report")
+def finance_report(
+    project_id: Annotated[str | None, typer.Option("--project", help="Only this project.")] = None,
+    since: Annotated[
+        str | None, typer.Option("--since", help="First UTC day, YYYY-MM-DD (inclusive).")
+    ] = None,
+    until: Annotated[
+        str | None, typer.Option("--until", help="Last UTC day, YYYY-MM-DD (inclusive).")
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Actual spending from the cost ledger by project, UTC day, model and role.
+
+    Read-only: no API key, no model call, nothing created or written (a missing
+    ledger is an empty report). Roles come from the projects' plans. A broken ledger
+    is exit code 2.
+    """
+    config = _load(config_path)
+    first = _report_day(since, "--since")
+    last = _report_day(until, "--until")
+    if first is not None and last is not None and first > last:
+        raise _fail("--since must not be after --until", EXIT_USER)
+    store = ProjectStore.for_workspace(config.workspace)
+    if project_id is not None:
+        try:
+            project_id = store.load(project_id).id
+        except ProjectStoreError as e:
+            raise _fail(_safe(str(e)), EXIT_USER) from None
+        ids = [project_id]
+    else:
+        ids = store.list_ids()
+    entries = _ledger_entries(config)
+    roles, warnings = _report_roles(store, ids)
+    report = spending_report(entries, roles=roles, project_id=project_id, since=first, until=last)
+    if as_json:
+        typer.echo(json.dumps(_report_json(report, warnings), ensure_ascii=False, indent=2))
+        return
+    for w in warnings:
+        typer.echo(f"warning: {_safe(w)}")
+    for line in _spending_lines(report):
+        typer.echo(line)
+    typer.echo("read-only: nothing was changed; the budget guard alone decides spending")
 
 
 # -- Workflow templates ----------------------------------------------------------
