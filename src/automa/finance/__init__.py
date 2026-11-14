@@ -10,6 +10,7 @@ from automa.finance.estimate import (
     EstimateSettings,
     PlanEstimate,
     TaskEstimate,
+    TaskProgress,
     estimate_plan,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "EstimateSettings",
     "PlanEstimate",
     "TaskEstimate",
+    "TaskProgress",
     "estimate_plan",
 ]

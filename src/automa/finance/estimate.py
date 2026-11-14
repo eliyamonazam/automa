@@ -22,10 +22,10 @@ Whatever it says, every call still goes through the gateway and the
 from __future__ import annotations
 
 import math
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Mapping
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from automa.agents.verifier import VerifierSettings
 from automa.agents.worker import WorkerSettings
@@ -76,6 +76,33 @@ class EstimateSettings(_Frozen):
         )
 
 
+class TaskProgress(_Frozen):
+    """What a task has already done (a resumed run continues from it, D63).
+
+    ``attempts`` stored results (the last one unjudged if ``unjudged``), ``tier`` the
+    saved tier of the next attempt (``TaskState.tier``) and ``at_tier`` the
+    consecutive rejections at ``tier`` before it (``rejections_at_tier``).
+    """
+
+    attempts: int = Field(default=0, ge=0, le=MAX_TASK_ATTEMPTS)
+    tier: Tier | None = None
+    at_tier: int = Field(default=0, ge=0, le=MAX_TASK_ATTEMPTS)
+    unjudged: bool = False
+
+    @model_validator(mode="after")
+    def _consistent(self) -> TaskProgress:
+        if self.unjudged and (self.attempts < 1 or self.tier is None):
+            raise ValueError("an unjudged attempt needs attempts >= 1 and its tier")
+        if self.at_tier > self.attempts:
+            raise ValueError("at_tier must not exceed attempts")
+        return self
+
+    @property
+    def fresh(self) -> bool:
+        """Nothing done yet: the router may still pick the starting tier."""
+        return self.attempts == 0 and self.tier is None
+
+
 class EstimateBasis(StrEnum):
     """Where a task's expected cost comes from."""
 
@@ -100,6 +127,8 @@ class TaskEstimate(_Frozen):
     expected_nusd: int | None = Field(default=None, ge=0)
     max_calls: int = Field(ge=0)
     worst_nusd: int = Field(ge=0)
+    done_attempts: int = Field(default=0, ge=0)  # attempts already stored (resume)
+    reverify: bool = False  # the last stored attempt still has to be judged
 
 
 class BudgetFit(StrEnum):
@@ -140,11 +169,16 @@ class PlanEstimate(_Frozen):
         return BudgetFit.EXPECTED_FITS if self.complete else BudgetFit.UNKNOWN
 
 
-def _tier_schedule(start: Tier, available: set[Tier], s: EstimateSettings) -> list[Tier]:
+_FRESH = TaskProgress()
+
+
+def _tier_schedule(
+    start: Tier, available: set[Tier], s: EstimateSettings, *, length: int, at_tier: int = 0
+) -> list[Tier]:
     """The tier of every attempt if all of them are rejected (the orchestrator's rule)."""
     out: list[Tier] = []
-    tier, at_tier = start, 0
-    for _ in range(s.max_attempts):
+    tier = start
+    for _ in range(length):
         out.append(tier)
         at_tier += 1
         if at_tier >= s.escalate_after:
@@ -160,19 +194,26 @@ def _expected(
     config: AutomaConfig,
     stats: dict[tuple[str, str], QualityStats],
     min_samples: int,
+    *,
+    first_done: bool = False,
 ) -> tuple[float, int] | None:
-    """(expected attempts, expected worker cost) or ``None`` if history is missing."""
+    """(expected attempts, expected worker cost) or ``None`` if history is missing.
+
+    With ``first_done`` the first entry is an attempt whose work is already stored
+    (only its verdict is pending): it costs no worker call but may still pass.
+    """
     reach = 1.0  # probability that this attempt happens
     attempts = 0.0
     cost = 0.0
-    for tier in schedule:
+    for i, tier in enumerate(schedule):
         if reach <= 0.0:
             break
         st = stats.get((role, config.model_for(tier)))
         if st is None or st.attempts < min_samples:
             return None
-        attempts += reach
-        cost += reach * (st.cost_nusd / st.attempts)
+        if not (first_done and i == 0):
+            attempts += reach
+            cost += reach * (st.cost_nusd / st.attempts)
         reach *= 1.0 - st.pass_rate
     return attempts, math.ceil(cost - 1e-6) if cost > 0 else 0
 
@@ -186,12 +227,18 @@ def estimate_plan(
     settings: EstimateSettings | None = None,
     router: Router | None = None,
     skip: Collection[str] = (),
+    progress: Mapping[str, TaskProgress] | None = None,
 ) -> PlanEstimate:
     """Estimate the cost of running ``plan`` (tasks in ``skip`` are left out).
 
+    ``progress`` describes tasks that already ran (resume, D63): they continue with
+    the attempts that are left, from their saved tier and escalation count, are
+    never routed again, and an unjudged last attempt only costs its verification.
+
     Raises ``ConfigError`` if a task's requested tier has no configured model
     (the orchestrator would stop before any call), ``ValueError`` for duplicate
-    statistics, unknown ids in ``skip`` or a router built from another config.
+    statistics, unknown ids in ``skip``/``progress`` or a router built from
+    another config.
     """
     s = settings if settings is not None else EstimateSettings()
     if router is not None and router.config is not config and router.config != config:
@@ -206,6 +253,10 @@ def estimate_plan(
     bad = sorted(set(skip) - known_ids)
     if bad:
         raise ValueError(f"unknown task id(s) in skip: {', '.join(bad)}")
+    done = dict(progress) if progress is not None else {}
+    bad = sorted(set(done) - known_ids)
+    if bad:
+        raise ValueError(f"unknown task id(s) in progress: {', '.join(bad)}")
 
     cap = cap_to_nusd(config.limits.per_call_usd)
     available = set(config.tiers)
@@ -235,12 +286,30 @@ def estimate_plan(
         requested = task.tier or role.tier
         if requested not in available:
             raise ConfigError(f"no model configured for tier '{requested.value}'")
-        start = router.route(task.role, requested).tier if router is not None else requested
+        prog = done.get(task.id, _FRESH)
+        if prog.tier is not None and prog.tier not in available:
+            raise ConfigError(f"no model configured for tier '{prog.tier.value}'")
+        if not prog.fresh:
+            start = prog.tier if prog.tier is not None else requested
+        elif router is not None:
+            start = router.route(task.role, requested).tier
+        else:
+            start = requested
         model = config.model_for(start)
         st = by_key.get((task.role, model))
-        calls = s.max_attempts * (min(role.max_steps, s.worker_max_steps) + s.verifier_calls)
-        schedule = _tier_schedule(start, available, s)
-        exp = _expected(schedule, task.role, config, by_key, s.min_samples)
+        left = max(0, s.max_attempts - prog.attempts)
+        per_attempt = min(role.max_steps, s.worker_max_steps) + s.verifier_calls
+        calls = left * per_attempt + (s.verifier_calls if prog.unjudged else 0)
+        schedule = _tier_schedule(
+            start,
+            available,
+            s,
+            length=left + (1 if prog.unjudged else 0),
+            at_tier=prog.at_tier,
+        )
+        exp = _expected(
+            schedule, task.role, config, by_key, s.min_samples, first_done=prog.unjudged
+        )
         out.append(
             TaskEstimate(
                 task_id=task.id,
@@ -248,7 +317,7 @@ def estimate_plan(
                 requested=requested,
                 tier=start,
                 model=model,
-                routed=start is not requested,
+                routed=start is not requested and prog.fresh,
                 basis=EstimateBasis.HISTORY if exp is not None else EstimateBasis.NO_DATA,
                 samples=st.attempts if st is not None else 0,
                 pass_rate=st.pass_rate if st is not None else None,
@@ -256,6 +325,8 @@ def estimate_plan(
                 expected_nusd=exp[1] if exp is not None else None,
                 max_calls=calls,
                 worst_nusd=calls * cap,
+                done_attempts=prog.attempts,
+                reverify=prog.unjudged,
             )
         )
     skipped = [t.id for t in plan.tasks if t.id in skip]

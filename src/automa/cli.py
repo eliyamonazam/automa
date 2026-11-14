@@ -31,6 +31,9 @@ read-only (a missing log is empty; nothing is created); ``quality sync [<id>]`` 
 the judged attempts of past projects into it. Neither needs an API key (D57).
 ``quality route`` previews, read-only, the starting tier the data router would pick
 for each role with its reason and evidence, even when the router is off (D61).
+``estimate <id>`` estimates, read-only, the cost of the project's remaining tasks (a hard
+worst case and, with enough quality history, the expected cost) against the project
+budget left in the ledger; it is advisory and never authorizes spending (D63).
 With ``[router] enabled = true`` or ``--router``, ``run`` hands the orchestrator a data
 router built from a snapshot of the quality log (D59, D60); ``bench run`` never routes.
 
@@ -55,6 +58,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import unicodedata
 from collections.abc import Callable
 from pathlib import Path
@@ -89,8 +93,8 @@ from automa.benchmarks import (
     scan_results,
     write_result,
 )
-from automa.budget.guard import BudgetError, BudgetExceeded, BudgetGuard
-from automa.budget.ledger import CostLedger, nusd_to_usd
+from automa.budget.guard import BudgetError, BudgetExceeded, BudgetGuard, cap_to_nusd
+from automa.budget.ledger import CostLedger, LedgerError, nusd_to_usd
 from automa.config import (
     MAX_PARALLEL,
     AutomaConfig,
@@ -100,6 +104,15 @@ from automa.config import (
     load_config,
 )
 from automa.events import Event
+from automa.finance import (
+    BudgetFit,
+    EstimateBasis,
+    EstimateSettings,
+    PlanEstimate,
+    TaskEstimate,
+    TaskProgress,
+    estimate_plan,
+)
 from automa.llm.factory import provider_from_config
 from automa.llm.gateway import LLMGateway
 from automa.llm.provider import Provider, ProviderError
@@ -119,8 +132,9 @@ from automa.orchestrator import (
     OrchestratorSettings,
     RunReport,
     StopReason,
+    rejections_at_tier,
 )
-from automa.plan import Plan
+from automa.plan import Plan, TaskStatus
 from automa.plan.models import ROLE_PATTERN
 from automa.project import Project, ProjectStatus, ProjectStore, ProjectStoreError
 from automa.quality import QUALITY_FILE, QualityError, QualityLog, QualityStats, sync_project
@@ -923,6 +937,248 @@ def _status_one(store: ProjectStore, config: AutomaConfig, project_id: str, as_j
     else:
         for line in _plan_lines(plan):
             typer.echo(line)
+
+
+# -- Cost estimate (Financial Controller, D63) --------------------------------------
+
+_FIT_TEXT: dict[BudgetFit, str] = {
+    BudgetFit.WORST_FITS: "even the worst case fits in the project budget left",
+    BudgetFit.EXPECTED_FITS: (
+        "the expected cost fits in the project budget left; the worst case does not "
+        "(the budget guard stops the run at the cap)"
+    ),
+    BudgetFit.UNKNOWN: (
+        "the known part fits in the project budget left, but the expected cost is "
+        "incomplete (tasks without enough quality history)"
+    ),
+    BudgetFit.EXPECTED_EXCEEDS: (
+        "the expected cost exceeds the project budget left: the run would likely stop "
+        "at the cap (raise [limits] project_usd in automa.toml)"
+    ),
+}
+
+
+def _estimate_inputs(
+    store: ProjectStore, project_id: str, plan: Plan
+) -> tuple[dict[str, TaskProgress], dict[str, str]]:
+    """Progress of the tasks that will still run, and why the others will not.
+
+    Mirrors the orchestrator: passed/failed/blocked tasks never run again, a task
+    whose dependency failed (directly or not) will be blocked, a started task
+    continues from its saved tier, escalation count and attempts (D63).
+    """
+    states = store.task_states(project_id)
+    excluded: dict[str, str] = {}
+    progress: dict[str, TaskProgress] = {}
+    for task in plan.topological_order():
+        state = states[task.id]
+        if state.status in (TaskStatus.PASSED, TaskStatus.FAILED, TaskStatus.BLOCKED):
+            excluded[task.id] = state.status.value
+            continue
+        dead = next((d for d in task.depends_on if excluded.get(d, "passed") != "passed"), None)
+        if dead is not None:
+            excluded[task.id] = f"will be blocked (dependency {dead} will not pass)"
+            continue
+        history = store.task_history(project_id, task.id)
+        if not history and state.tier is None:
+            continue
+        unjudged = bool(history) and history[-1][1] is None
+        tier = state.tier
+        if tier is None and unjudged:
+            tier = history[-1][0].tier
+        judged = history[:-1] if unjudged else history
+        progress[task.id] = TaskProgress(
+            attempts=len(history),
+            tier=tier,
+            at_tier=rejections_at_tier(judged, tier) if tier is not None else 0,
+            unjudged=unjudged,
+        )
+    return progress, excluded
+
+
+def _ledger_spending(config: AutomaConfig, project_id: str) -> tuple[int, int]:
+    """(spent by the project, spent today) from the ledger; a missing ledger is 0, 0
+    and is not created. An unreadable ledger is a configuration error."""
+    path = config.workspace / LEDGER_FILENAME
+    if not (path.exists() or path.is_symlink()):
+        return 0, 0
+    try:
+        with CostLedger(path, read_only=True) as ledger:
+            return ledger.spent_nusd(project_id=project_id), ledger.spent_nusd(day=ledger.today())
+    except (LedgerError, sqlite3.Error, OSError) as e:
+        raise _fail(f"cannot read the cost ledger: {_safe(str(e))}", EXIT_CONFIG) from None
+
+
+def _estimate_task_json(t: TaskEstimate) -> dict[str, Any]:
+    return {
+        "task_id": t.task_id,
+        "role": t.role,
+        "requested": t.requested.value if t.requested is not None else None,
+        "tier": t.tier.value if t.tier is not None else None,
+        "model": t.model,
+        "routed": t.routed,
+        "basis": t.basis.value,
+        "samples": t.samples,
+        "pass_rate": t.pass_rate,
+        "done_attempts": t.done_attempts,
+        "reverify": t.reverify,
+        "expected_attempts": t.expected_attempts,
+        "expected_usd": nusd_to_usd(t.expected_nusd) if t.expected_nusd is not None else None,
+        "max_calls": t.max_calls,
+        "worst_usd": nusd_to_usd(t.worst_nusd),
+    }
+
+
+def _estimate_task_line(t: TaskEstimate, s: EstimateSettings) -> str:
+    if t.basis is EstimateBasis.UNKNOWN_ROLE:
+        return f"  {t.task_id} [{_safe(t.role)}]: unknown role, fails without any model call"
+    model = _safe(t.model or "").replace("\n", " ").replace("\t", " ")
+    tier = t.tier.value if t.tier is not None else "-"
+    where = f"{tier} ({model})"
+    if t.routed and t.requested is not None:
+        where += f", routed from {t.requested.value}"
+    if t.done_attempts:
+        where += f", {t.done_attempts} attempt(s) done"
+    if t.reverify:
+        where += ", last one to be judged"
+    if t.expected_nusd is not None and t.expected_attempts is not None:
+        expected = f"expected {_usd(t.expected_nusd)} (~{t.expected_attempts:.2f} attempt(s))"
+    else:
+        expected = (
+            f"expected unknown (needs {s.min_samples}+ judged attempts of {_safe(t.role)} "
+            "on every tier it may reach)"
+        )
+    return (
+        f"  {t.task_id} [{_safe(t.role)}] {where}: {expected}; "
+        f"worst {_usd(t.worst_nusd)} ({t.max_calls} call(s))"
+    )
+
+
+@app.command()
+def estimate(
+    project_id: Annotated[str, typer.Argument(help="Project to estimate.")],
+    max_attempts: Annotated[
+        int | None,
+        typer.Option("--max-attempts", help="Attempts per task, as for automa run (1-50)."),
+    ] = None,
+    use_router: Annotated[
+        bool | None,
+        typer.Option(
+            "--router/--no-router",
+            help="Assume the data router picks new tasks' starting tiers, as for "
+            "automa run; default: [router] enabled in automa.toml (off).",
+        ),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Estimate what running (or resuming) a project may still cost.
+
+    Per remaining task: a hard worst case from the enforced limits and, when the
+    quality log has enough history, the expected cost; compared with the project
+    budget left in the ledger. Advisory and read-only: no API key, no model call,
+    nothing written. Every call of a real run is still bounded by the budget guard.
+    """
+    config = _load(config_path)
+    store = ProjectStore.for_workspace(config.workspace)
+    try:
+        project = store.load(project_id)
+    except ProjectStoreError as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    pid = project.id
+    if not store.has_plan(pid):
+        raise _fail(
+            f'project {pid} has no plan yet; create one with: automa new "<goal>"', EXIT_USER
+        )
+    run_settings = _run_settings(config, max_attempts=max_attempts, parallel=None)
+    settings = EstimateSettings.from_settings(run_settings)
+    try:
+        roles, _ = _roles_and_skills(config)
+    except (RoleError, SkillError) as e:
+        raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+    try:
+        plan = store.load_plan(pid)
+        progress, excluded = _estimate_inputs(store, pid, plan)
+    except ProjectStoreError as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    path = config.workspace / QUALITY_FILE
+    stats: list[QualityStats] = []
+    if path.exists() or path.is_symlink():
+        try:
+            with QualityLog(path, read_only=True) as log:
+                stats = log.stats()
+        except QualityError as e:
+            raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+    routing = config.router.enabled if use_router is None else use_router
+    try:
+        router = Router(config, stats) if routing else None
+        result: PlanEstimate = estimate_plan(
+            plan,
+            config,
+            roles,
+            stats,
+            settings=settings,
+            router=router,
+            skip=set(excluded),
+            progress=progress,
+        )
+    except (ConfigError, ValueError) as e:
+        raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+    spent, today = _ledger_spending(config, pid)
+    project_cap = cap_to_nusd(config.limits.project_usd)
+    daily_cap = cap_to_nusd(config.limits.daily_usd)
+    left = max(0, project_cap - spent)
+    fit = result.assess(left)
+    if as_json:
+        out: dict[str, Any] = {
+            "project": pid,
+            "status": project.status.value,
+            "plan_version": plan.version,
+            "router": routing,
+            "settings": settings.model_dump(),
+            "per_call_cap_usd": nusd_to_usd(result.per_call_cap_nusd),
+            "tasks": [_estimate_task_json(t) for t in result.tasks],
+            "excluded": [{"task_id": k, "reason": v} for k, v in excluded.items()],
+            "expected_usd": nusd_to_usd(result.expected_nusd),
+            "expected_complete": result.complete,
+            "unknown": result.unknown,
+            "worst_usd": nusd_to_usd(result.worst_nusd),
+            "budget": {
+                "project_cap_usd": nusd_to_usd(project_cap),
+                "project_spent_usd": nusd_to_usd(spent),
+                "project_remaining_usd": nusd_to_usd(left),
+                "daily_cap_usd": nusd_to_usd(daily_cap),
+                "daily_spent_usd": nusd_to_usd(today),
+                "daily_remaining_usd": nusd_to_usd(max(0, daily_cap - today)),
+            },
+            "assessment": fit.value,
+        }
+        typer.echo(json.dumps(out, ensure_ascii=False, indent=2))
+        return
+    typer.echo(f"project: {pid} ({project.status.value})")
+    typer.echo(f"plan v{plan.version}: {len(plan.tasks)} task(s), {len(result.tasks)} to run")
+    for tid, reason in excluded.items():
+        typer.echo(f"  {tid}: {reason}, not counted")
+    typer.echo(
+        f"assumes: up to {settings.max_attempts} attempt(s) per task, escalation after "
+        f"{settings.escalate_after} rejection(s), at most {_usd(result.per_call_cap_nusd)} "
+        "per call; worker cost only in the expected figure"
+    )
+    typer.echo(f"router: {'on' if routing else 'off'}")
+    for t in result.tasks:
+        typer.echo(_estimate_task_line(t, settings))
+    unknown = f" + {len(result.unknown)} task(s) unknown" if result.unknown else ""
+    typer.echo(
+        f"total: expected {_usd(result.expected_nusd)}{unknown}; worst {_usd(result.worst_nusd)}"
+    )
+    typer.echo(
+        f"budget: project {_usd(spent)} spent of {_usd(project_cap)}, {_usd(left)} left; "
+        f"today {_usd(today)} of {_usd(daily_cap)} (resets at 00:00 UTC)"
+    )
+    typer.echo(f"assessment: {_FIT_TEXT[fit]}")
+    typer.echo("advisory only: the budget guard still bounds every call and stops at the caps")
 
 
 # -- Workflow templates ----------------------------------------------------------

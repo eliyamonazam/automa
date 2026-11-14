@@ -100,21 +100,53 @@ class CostLedger:
 
     ``path`` may be ``":memory:"`` (tests). ``record`` matches the ``record`` half
     of ``CallGuard`` so the budget guard can delegate to it.
+
+    With ``read_only=True`` (for advisory readers such as ``automa estimate``, D63)
+    the file must already exist and is opened with SQLite ``mode=ro``: nothing is
+    created, migrated or written, and ``record`` raises. A read-only ledger is never
+    given to the ``BudgetGuard``.
     """
 
-    def __init__(self, path: Path | str, *, clock: Clock = _utc_now):
+    def __init__(self, path: Path | str, *, clock: Clock = _utc_now, read_only: bool = False):
         self._path = str(path)
-        if self._path != ":memory:":
+        self._read_only = read_only
+        self._empty = False  # read-only open of a file without the schema yet
+        target, uri = self._path, False
+        if self._path == ":memory:":
+            if read_only:
+                raise LedgerError("an in-memory ledger cannot be opened read-only")
+        elif read_only:
+            p = Path(self._path)
+            if p.is_symlink():
+                raise LedgerError(f"{p}: refusing to open a symlinked ledger")
+            if not p.is_file():
+                raise LedgerError(f"{p}: no ledger to read")
+            target, uri = p.resolve().as_uri() + "?mode=ro", True
+        else:
             Path(self._path).parent.mkdir(parents=True, exist_ok=True)
         self._clock = clock
         # One connection shared across threads, serialized by ``_lock``.
         self._lock = threading.RLock()
-        self._conn = sqlite3.connect(self._path, check_same_thread=False)
+        try:
+            self._conn = sqlite3.connect(target, check_same_thread=False, uri=uri)
+        except sqlite3.Error as e:
+            if not read_only:
+                raise
+            raise LedgerError(f"cannot open ledger {self._path}: {e}") from e
         try:
             self._init_schema()
+        except sqlite3.Error as e:
+            self._conn.close()
+            if not read_only:
+                raise
+            raise LedgerError(f"{self._path}: not a usable ledger ({e})") from e
         except BaseException:
             self._conn.close()
             raise
+
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
 
     @classmethod
     def for_workspace(cls, workspace: Path, *, clock: Clock = _utc_now) -> CostLedger:
@@ -131,6 +163,9 @@ class CostLedger:
             ).fetchall()
             if tables:
                 raise LedgerError("database is not an Automa ledger (unexpected tables)")
+        if self._read_only:
+            self._empty = version == 0
+            return
         with self._conn:
             self._conn.executescript(_SCHEMA)
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -161,6 +196,8 @@ class CostLedger:
 
     def record(self, estimate: CallEstimate, result: LLMResult) -> LedgerEntry:
         """Persist one completed call. Raises on any failure (fail closed)."""
+        if self._read_only:
+            raise LedgerError("ledger is open read-only")
         if result.tier is not estimate.tier:
             raise LedgerError("result tier does not match estimate tier")
         now = self._now()
@@ -194,6 +231,8 @@ class CostLedger:
         return self.get(entry_id)
 
     def get(self, entry_id: int) -> LedgerEntry:
+        if self._empty:
+            raise KeyError(entry_id)
         with self._lock:
             row = self._conn.execute(
                 f"SELECT {_COLUMNS} FROM calls WHERE id = ?",  # noqa: S608 - constant columns
@@ -207,6 +246,8 @@ class CostLedger:
         self, *, project_id: str | None = None, day: date | None = None
     ) -> list[LedgerEntry]:
         """All entries in insertion order, optionally filtered by project and/or UTC day."""
+        if self._empty:
+            return []
         where, params = _filters(project_id, day)
         with self._lock:
             rows = self._conn.execute(
@@ -217,6 +258,8 @@ class CostLedger:
 
     def spent_nusd(self, *, project_id: str | None = None, day: date | None = None) -> int:
         """Exact total spending in nano-USD for the given filters."""
+        if self._empty:
+            return 0
         where, params = _filters(project_id, day)
         with self._lock:
             (total,) = self._conn.execute(
