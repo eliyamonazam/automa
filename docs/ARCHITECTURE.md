@@ -161,6 +161,9 @@ Skillها با قالب استاندارد `SKILL.md` (frontmatter + دستور�
 - **نمایش در CLI:** `SkillOverview` در `cli.py` Skillها رو دقیقاً مثل `automa run` بارگذاری می‌کنه (داخلی + workspace، ادغام، بررسی با نقش‌ها) و منبع هر Skill و نقش‌های استفاده‌کننده رو نگه می‌داره. `automa skills [--json]` (نام، منبع، نقش‌ها، توضیح؛ JSON با `license` و `body_chars`) فقط‌خوندنیه و خطاش کد ۲ داره. `automa status` یک خط `skills:` نشون می‌ده و `status <id> --json` کلید `skills` (`available`، `roles`، `error`) داره؛ اینجا خطای Skill فرمان رو شکست نمی‌ده و فقط گزارش می‌شه (D46).
 - **Skill برای نقش‌های داخلی از تنظیمات کاربر:** بخش `[roles.<name>]` در `automa.toml` فقط کلید `skills` (فهرست نام) رو قبول می‌کنه (`RoleSettings`، `extra="forbid"`؛ `tools`، `max_risk`، `tier`، `max_steps`، `instructions` و هر کلید دیگه خطای تنظیماته). `AutomaConfig.role_skills()` به `RoleRegistry(..., extra_skills=…)` (و `from_dir`/`builtin`) داده می‌شه که قبل از بررسی ابزار و Skill، نام‌ها رو به انتهای `skills` نقش اضافه می‌کنه و نقش رو دوباره با همه قوانین `Role` اعتبارسنجی می‌کنه (سقف ۸، نام معتبر، بدون تکرار). نقش ناشناخته (حتی با فهرست خالی) یا Skillی که نقش خودش داره خطاست؛ برابری `policy()` قبل و بعد دوباره بررسی می‌شه. `automa new`/`run`/`bench run`، `automa skills` و `automa status` همه از همین مسیر استفاده می‌کنن (D47).
 
+### رابط وب (`src/automa/webui/`، D77)
+فقط‌خواندنی. `views.py` مدل‌های نمای pydantic (`Overview`/`ProjectRow`، `ProjectView`/`TaskRow`/`ApprovalView`) را از فایل‌های `ProjectStore` می‌سازد و خرج را از فراخواننده می‌گیرد؛ دادهٔ خراب به‌صورت خط خطا نشان داده می‌شود. `render.py` HTML خالص می‌سازد: همهٔ متن ثبت‌شده با `text()` (نمایش آشکار کاراکترهای کنترلی/bidi و escape HTML)، بدون اسکریپت/فرم/منبع بیرونی، با CSP سخت. تصمیم دربارهٔ تأییدها فقط از CLI. سرور محلی (`automa web`) قدم بعدی است.
+
 ## فناوری‌ها
 
 | بخش | انتخاب | دلیل |

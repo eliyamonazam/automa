@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-15 — M9: رابط وب (هسته، نما و رندر فقط‌خواندنی)
+- **انجام‌شده:** مورد «رابط وب ساده» به سه بخش شکسته شد (هسته؛ سرور فقط‌خواندنی `automa web`؛ تأیید/رد از مرورگر با `[!]`) و بخش اول انجام شد: بستهٔ جدید `automa.webui` با مدل‌های نمای فهرست پروژه‌ها (وضعیت، هدف کوتاه‌شده، خرج، تعداد تأییدهای در انتظار) و صفحهٔ هر پروژه (هدف، وضعیت، خرج، پلن با شمار و نتیجهٔ آخرین تلاش هر وظیفه، تأییدهای در انتظار با آرگومان‌ها و نمای مقصد `fetch_url`/`github_read`)، و رندر HTML امن: escape همهٔ متن‌ها، نمایش آشکار کاراکترهای کنترلی/bidi، بدون اسکریپت/فرم/منبع بیرونی، CSP سخت. دادهٔ خراب فقط خط خطا. تأیید همچنان فقط از CLI.
+- **فایل‌های اصلی:** `src/automa/webui/__init__.py`، `src/automa/webui/views.py`، `src/automa/webui/render.py` (همه جدید)، `tests/test_webui.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D77).
+- **تست‌ها:** `pytest` ← ۲۹۳۶ تست سبز، ۲ رد شده (Docker واقعی)؛ `ruff check`، `ruff format --check` و `mypy` روی `automa.webui` سبز. ۲۲ تست جدید بدون شبکه و بدون مدل.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود (HEAD جدا، به `origin/main` برگردانده شد). وابستگی‌ها دوباره نصب شدند.
+- **قدم بعدی:** رابط وب (سرور فقط‌خواندنی): `automa web` روی `127.0.0.1` با بررسی `Host` و سرتیترهای امنیتی.
+
 ## 2026-11-15 — M9: ابزارهای GitHub (اتصال به `researcher` و نمای تأیید)
 - **انجام‌شده:** `github_read` حالا در `default_tools()` است و فقط نقش `researcher` آن را دارد؛ هر فراخوانی همچنان تأیید کاربر می‌خواهد و نقش‌های دیگر `deny` می‌گیرند. `automa approvals` و `automa approve` برای درخواست‌های `github_read` بخش «GitHub request:» نشان می‌دهند: نوع و مخزن، نشانی دقیق API (`GET https://api.github.com/...`)، شماره/مسیر/ref و هشدارها (بدون ref ← شاخهٔ پیش‌فرض در زمان اجرا؛ ریشهٔ مخزن)؛ `--json` کلید `github_request` دارد. آرگومان دست‌کاری‌شده «invalid» نشان داده می‌شود. دستور نقش پژوهشگر به‌روز شد. Policy، Approval Gate و BudgetGuard دست نخوردند.
 - **فایل‌های اصلی:** `src/automa/tools/github.py` (`describe_github_request`، `GitHubRequestView`)، `src/automa/tools/__init__.py`، `src/automa/roles/builtin/researcher.toml`، `src/automa/cli.py` (`_github_request_lines`، `_approval_json`)، `tests/test_github_connect.py` (جدید)، `tests/test_github_read.py`، `tests/test_tools.py`، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D76).
