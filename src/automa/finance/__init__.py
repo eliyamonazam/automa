@@ -4,6 +4,12 @@ Nothing here calls a model, writes anything or authorizes spending: the
 ``BudgetGuard`` remains the only authority over money.
 """
 
+from automa.finance.compare import (
+    ComparisonOutcome,
+    EstimateComparison,
+    EstimateRecord,
+    compare_estimate,
+)
 from automa.finance.estimate import (
     BudgetFit,
     EstimateBasis,
@@ -17,6 +23,9 @@ from automa.finance.report import SpendGroup, SpendingReport, spending_report
 
 __all__ = [
     "BudgetFit",
+    "ComparisonOutcome",
+    "EstimateComparison",
+    "EstimateRecord",
     "EstimateBasis",
     "EstimateSettings",
     "PlanEstimate",
@@ -24,6 +33,7 @@ __all__ = [
     "SpendingReport",
     "TaskEstimate",
     "TaskProgress",
+    "compare_estimate",
     "estimate_plan",
     "spending_report",
 ]

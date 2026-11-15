@@ -282,3 +282,20 @@ def test_estimate_writes_nothing_but_the_event(env: cr.Env) -> None:
     env.run(cr.PID)
     assert (env.ws / QUALITY_FILE).exists()
     assert len(estimate_events(env)) == 1
+
+
+def test_saved_estimate_compares_with_the_run(env: cr.Env) -> None:
+    """The finance.estimate event of a real (fake-provider) run parses and its
+    tasks' ledger spending since then is within the worst case (D67)."""
+    from automa.finance import ComparisonOutcome, compare_estimate
+
+    env.project(cr.task_dict("a"))
+    env.script(*cr.write("a"))
+    assert env.run(cr.PID).exit_code == cli.EXIT_OK
+    with CostLedger(env.ws / cli.LEDGER_FILENAME, read_only=True) as ledger:
+        entries = ledger.entries()
+    c = compare_estimate(cr.PID, env.store.events(cr.PID).read(), entries)
+    assert c.estimate is not None and c.estimate.tasks == ("a",)
+    assert c.tasks.calls >= 1
+    assert c.tasks.cost_nusd == sum(e.cost_nusd for e in entries if e.task_id == "a")
+    assert c.outcome is not ComparisonOutcome.ABOVE_WORST
