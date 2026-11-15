@@ -184,6 +184,7 @@ from automa.tools.approvals import (
     ApprovalStatus,
     ApprovalStore,
 )
+from automa.tools.github import GitHubRead, describe_github_request
 from automa.tools.web import FetchUrl, describe_fetch_request
 from automa.workflows import (
     WorkflowError,
@@ -2778,6 +2779,8 @@ def _approval_json(store: ProjectStore, req: ApprovalRequest) -> dict[str, Any]:
         data["web_request"] = describe_fetch_request(req.arguments.get("url")).model_dump(
             mode="json"
         )
+    if req.tool == GitHubRead.name:
+        data["github_request"] = describe_github_request(req.arguments).model_dump(mode="json")
     return data
 
 
@@ -2804,6 +2807,32 @@ def _web_request_lines(req: ApprovalRequest) -> list[str]:
     return lines
 
 
+def _github_request_lines(req: ApprovalRequest) -> list[str]:
+    """A readable view of a ``github_read`` request: the exact API URL and parts (D76)."""
+    if req.tool != GitHubRead.name:
+        return []
+    view = describe_github_request(req.arguments)
+    lines = ["  GitHub request:"]
+    if not view.valid:
+        lines.append(
+            f"    invalid arguments ({_safe(view.error or '')}); the tool will refuse them"
+        )
+        return lines
+    lines += [
+        f"    {view.kind} in {_safe(view.repo or '')} (anonymous, read-only)",
+        f"    GET {_safe(view.api_url or '')}",
+    ]
+    if view.number is not None:
+        lines.append(f"    number: {view.number}")
+    if view.path is not None:
+        lines.append(f"    path: {_safe(view.path or '/')}")
+    if view.ref is not None:
+        lines.append(f"    ref: {_safe(view.ref)}")
+    lines.extend(f"    ! {_safe(w)}" for w in view.warnings)
+    lines.append("    the GitHub content goes to the model as untrusted data")
+    return lines
+
+
 def _approval_lines(
     approvals: ApprovalStore, req: ApprovalRequest, *, full: bool = False
 ) -> list[str]:
@@ -2820,6 +2849,7 @@ def _approval_lines(
     if req.note:
         lines.append(f"  note: {_safe(req.note)}")
     lines.extend(_web_request_lines(req))
+    lines.extend(_github_request_lines(req))
     args = _arguments_text(req)
     truncated = not full and len(args) > ARGUMENTS_PREVIEW_CHARS
     if truncated:

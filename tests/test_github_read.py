@@ -122,10 +122,11 @@ def test_tool_is_external_and_reversible() -> None:
     assert "approval" in GitHubRead.description and "untrusted" in GitHubRead.description
 
 
-def test_not_in_default_tools_and_no_role_lists_it() -> None:
-    assert "github_read" not in {t.name for t in default_tools()}
-    reg = RoleRegistry.builtin(tools=[*default_tools(), GitHubRead()])
-    assert [r.name for r in reg if "github_read" in r.tools] == []
+def test_in_default_tools_and_only_the_researcher_lists_it() -> None:
+    # D76: wired to the researcher only; every call still needs approval.
+    assert "github_read" in {t.name for t in default_tools()}
+    reg = RoleRegistry.builtin(tools=default_tools())
+    assert [r.name for r in reg if "github_read" in r.tools] == ["researcher"]
 
 
 def test_spec_describes_the_arguments() -> None:

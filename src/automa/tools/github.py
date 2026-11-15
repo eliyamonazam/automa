@@ -12,8 +12,9 @@ point it anywhere else. It reuses the guards of ``fetch_url`` (D72):
 * the body is read up to ``MAX_GITHUB_BYTES``; binary files are not returned;
 * the output is marked as untrusted data; control and bidi characters are removed.
 
-Every call goes through the Approval Gate. In this first part the tool is not in
-``default_tools()`` and no role lists it (wiring is a later roadmap item).
+Every call goes through the Approval Gate. The tool is in ``default_tools()`` and
+only the ``researcher`` role lists it (D76); ``describe_github_request`` gives
+``automa approvals`` a readable view of a recorded request.
 Tests pass an ``httpx.MockTransport`` and a fake ``resolver``: no network.
 """
 
@@ -28,7 +29,14 @@ from typing import Any, ClassVar, Literal
 from urllib.parse import quote, urljoin, urlsplit
 
 import httpx
-from pydantic import Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from automa.tools.base import MAX_TOOL_OUTPUT_CHARS, RiskLevel, Tool, ToolArgs, ToolError
 from automa.tools.search import clean_text
@@ -402,3 +410,60 @@ class GitHubRead(Tool):
         lines = self._header(args, f"file {where}")
         lines += [f"Size: {len(raw)} bytes", f"SHA: {_line(data, 'sha', 64)}"]
         return "\n".join(lines) + "\n\n" + clean_body(text, args.max_chars)
+
+
+class GitHubRequestView(BaseModel):
+    """What an approved ``github_read`` call would request, for ``automa approvals`` (D76).
+
+    Pure: no resolving, no network. ``api_url`` is the exact URL the tool builds;
+    ``warnings`` point at things a reviewer may want to check.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    valid: bool
+    error: str | None = None
+    kind: str | None = None
+    repo: str | None = None
+    number: int | None = None
+    path: str | None = None
+    ref: str | None = None
+    api_url: str | None = None
+    warnings: tuple[str, ...] = ()
+
+
+def _validation_error(e: ValidationError) -> str:
+    parts = []
+    for err in e.errors()[:3]:
+        loc = ".".join(str(p) for p in err["loc"]) or "(arguments)"
+        parts.append(f"{loc}: {err['msg']}")
+    return "; ".join(parts) or "invalid arguments"
+
+
+def describe_github_request(arguments: object) -> GitHubRequestView:
+    """Describe recorded ``github_read`` arguments for the user who decides on them."""
+    if not isinstance(arguments, dict):
+        return GitHubRequestView(valid=False, error="arguments are not an object")
+    try:
+        args = GitHubReadArgs.model_validate(arguments)
+    except ValidationError as e:
+        return GitHubRequestView(valid=False, error=_validation_error(e))
+    warnings: list[str] = []
+    if args.kind == "file":
+        if args.ref is None:
+            warnings.append(
+                "no ref: reads the default branch as it is when the task runs, "
+                "which may differ from now"
+            )
+        if args.path == "":
+            warnings.append("path is the repository root: a directory listing")
+    return GitHubRequestView(
+        valid=True,
+        kind=args.kind,
+        repo=f"{args.owner}/{args.repo}",
+        number=args.number,
+        path=args.path,
+        ref=args.ref,
+        api_url=github_api_url(args),
+        warnings=tuple(warnings),
+    )

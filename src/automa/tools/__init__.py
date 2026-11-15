@@ -13,7 +13,13 @@ from automa.tools.base import (
 from automa.tools.command import RunCommand, RunCommandArgs, check_docker, clean_env
 from automa.tools.executor import ApprovalRequired, ToolExecutor, ToolLayerError
 from automa.tools.files import FILE_TOOLS, DeleteFile, ListDir, ReadFile, WriteFile
-from automa.tools.github import GitHubRead, GitHubReadArgs, github_api_url
+from automa.tools.github import (
+    GitHubRead,
+    GitHubReadArgs,
+    GitHubRequestView,
+    describe_github_request,
+    github_api_url,
+)
 from automa.tools.policy import Decision, PermissionPolicy, PolicyDecision
 from automa.tools.sandbox import DockerSandbox, SandboxError, SandboxMode
 from automa.tools.search import (
@@ -34,10 +40,15 @@ def default_tools(sandbox: DockerSandbox | None = None) -> list[Tool]:
     With ``sandbox``, ``run_command`` runs every call in that Docker sandbox (D32, D33).
     ``fetch_url`` is ``external``: only the ``researcher`` role lists it and every
     call needs the user's approval (D72, D73). ``web_search`` is not included: no
-    real search service is chosen yet (D74). ``github_read`` is not included
-    either: it is wired to a role in a later item (D75).
+    real search service is chosen yet (D74). ``github_read`` is ``external`` too:
+    only the ``researcher`` role lists it and every call needs approval (D75, D76).
     """
-    return [*(cls() for cls in FILE_TOOLS), RunCommand(sandbox=sandbox), FetchUrl()]
+    return [
+        *(cls() for cls in FILE_TOOLS),
+        RunCommand(sandbox=sandbox),
+        FetchUrl(),
+        GitHubRead(),
+    ]
 
 
 def tools_factory(sandbox: DockerSandbox | None = None) -> Callable[[], list[Tool]]:
@@ -63,6 +74,7 @@ __all__ = [
     "FakeSearchProvider",
     "GitHubRead",
     "GitHubReadArgs",
+    "GitHubRequestView",
     "ListDir",
     "PermissionPolicy",
     "PolicyDecision",
@@ -90,6 +102,7 @@ __all__ = [
     "clean_env",
     "default_tools",
     "describe_fetch_request",
+    "describe_github_request",
     "github_api_url",
     "tools_factory",
 ]
