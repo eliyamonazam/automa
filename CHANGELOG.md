@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-15 — M8: Financial Controller (مصرف غیرعادی، گزارش)
+- **انجام‌شده:** مورد «مصرف غیرعادی، اتصال» به دو بخش شکسته شد (گزارش؛ `automa run`) و بخش اول انجام شد: `automa finance report` حالا بخش «unusual spending» دارد (متن، و کلید `anomalies` در `--json`). تشخیص روی کل تاریخچهٔ Ledger و `QualityLog` همهٔ پروژه‌ها اجرا می‌شود و فقط نمایش با `--project`/`--since`/`--until` محدود می‌شود؛ فراخوانی‌های بدون نقش وظیفه شمرده می‌شوند؛ لاگ کیفیت ناموجود ساخته نمی‌شود و خراب/symlink فقط هشدار است. فقط‌خواندنی و مشورتی؛ BudgetGuard، Ledger، Gateway و Policy دست نخوردند.
+- **فایل‌های اصلی:** `src/automa/cli.py`، `tests/test_cli_finance_anomaly.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D70).
+- **تست‌ها:** `pytest` ← ۲۶۱۴ تست سبز، ۲ رد شده (Docker واقعی)؛ `ruff check`، `ruff format --check` و `mypy` روی `cli.py` سبز. ۱۷ تست جدید (بدون Provider): بدون Ledger/لاگ کیفیت، خروجی متنی، جهش فراخوانی، تاریخچهٔ ناکافی، فراخوانی‌های بدون نقش، تاریخچهٔ مشترک بین پروژه‌ها و فیلتر پروژه، نقش پروژه‌های دیگر با `--project`، فیلتر روز بدون تغییر خط پایه، تاریخچهٔ جدا برای نقش‌ها، هشدار پلن ناخوانای پروژهٔ دیگر، جهش تلاش داوری‌شده، عدم تغییر workspace، لاگ کیفیت خراب و symlink، escape نویسه‌های کنترلی، بدون کلید API.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود (HEAD جدا، به `origin/main` برگردانده شد). وابستگی‌ها دوباره نصب شدند.
+- **قدم بعدی:** Financial Controller (مصرف غیرعادی، `automa run`): رویداد `finance.anomaly` و خط هشدار برای فراخوانی‌ها/تلاش‌های همان اجرا.
+
 ## 2026-11-15 — M8: Financial Controller (مصرف غیرعادی، هسته)
 - **انجام‌شده:** مورد «مصرف غیرعادی» به دو بخش شکسته شد (هسته؛ اتصال به `automa finance report` و `automa run`) و بخش اول انجام شد. ماژول خالص جدید `automa.finance.anomaly`: `call_samples` (ردیف‌های Ledger با نقش از نقشهٔ پلن؛ برنامه‌ریزی/بازبینی/وظیفهٔ ناشناخته کنار و شمرده)، `attempt_samples` (تلاش‌های داوری‌شدهٔ `QualityLog`) و `detect_anomalies`: هر نمونه در برابر `median_low` نمونه‌های قبلی همان (نوع، نقش، مدل)؛ با حداقل ۵ نمونهٔ قبلی، هزینه > ۳ × میانه و ≥ $0.001 ← ناهنجاری (قابل تنظیم با `AnomalySettings`). `Anomaly.event_data()` برای رویداد `finance.anomaly`. بدون فراخوانی مدل، بدون نوشتن، بدون توقف؛ BudgetGuard، Ledger، Gateway و Policy دست نخوردند.
 - **فایل‌های اصلی:** `src/automa/finance/anomaly.py` (جدید)، `src/automa/finance/__init__.py`، `tests/test_finance_anomaly.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D69).

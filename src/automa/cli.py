@@ -106,6 +106,8 @@ from automa.config import (
 )
 from automa.events import Event
 from automa.finance import (
+    Anomaly,
+    AnomalyReport,
     BudgetFit,
     ComparisonOutcome,
     EstimateBasis,
@@ -116,7 +118,10 @@ from automa.finance import (
     SpendingReport,
     TaskEstimate,
     TaskProgress,
+    attempt_samples,
+    call_samples,
     compare_estimate,
+    detect_anomalies,
     estimate_plan,
     spending_report,
 )
@@ -144,7 +149,14 @@ from automa.orchestrator import (
 from automa.plan import Plan, TaskStatus
 from automa.plan.models import ROLE_PATTERN
 from automa.project import Project, ProjectStatus, ProjectStore, ProjectStoreError
-from automa.quality import QUALITY_FILE, QualityError, QualityLog, QualityStats, sync_project
+from automa.quality import (
+    QUALITY_FILE,
+    QualityError,
+    QualityLog,
+    QualityRecord,
+    QualityStats,
+    sync_project,
+)
 from automa.reviews import (
     MAX_REVIEWS_PER_PROJECT,
     ProposalDecision,
@@ -1537,6 +1549,135 @@ def _comparison_lines(comparisons: list[EstimateComparison], single: bool) -> li
     return lines
 
 
+class _AnomalyView:
+    """Anomalies of the whole history, narrowed to the report's filters (D70)."""
+
+    def __init__(
+        self,
+        report: AnomalyReport,
+        shown: list[Anomaly],
+        left_out_calls: int,
+        attempts_read: bool,
+    ):
+        self.report = report
+        self.shown = shown
+        self.left_out_calls = left_out_calls
+        self.attempts_read = attempts_read
+
+
+def _quality_records(config: AutomaConfig) -> tuple[list[QualityRecord], bool, list[str]]:
+    """Judged attempts from the quality log, read-only. A missing log is empty (not
+    created); an unreadable or symlinked one is a warning, never fatal: the
+    anomaly check then covers ledger calls only."""
+    path = config.workspace / QUALITY_FILE
+    if not (path.exists() or path.is_symlink()):
+        return [], True, []
+    try:
+        with QualityLog(path, read_only=True) as log:
+            return log.records(), True, []
+    except (QualityError, sqlite3.Error, OSError, ValidationError) as e:
+        return (
+            [],
+            False,
+            [f"quality log is unreadable ({e}); unusual spending checks ledger calls only"],
+        )
+
+
+def _sample_day(a: Anomaly) -> date:
+    ts = a.sample.ts
+    return (ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts.astimezone(UTC)).date()
+
+
+def _report_anomalies(
+    config: AutomaConfig,
+    roles: dict[tuple[str, str], str],
+    entries: list[LedgerEntry],
+    *,
+    project_id: str | None,
+    since: date | None,
+    until: date | None,
+) -> tuple[_AnomalyView, list[str]]:
+    """Unusual spending (D69) over the full history of every project, so the
+    baselines do not depend on the filters; only the anomalies shown are narrowed
+    to ``--project``/``--since``/``--until``."""
+    calls, left_out = call_samples(entries, roles)
+    records, attempts_read, warnings = _quality_records(config)
+    report = detect_anomalies([*calls, *attempt_samples(records)])
+    shown = [
+        a
+        for a in report.anomalies
+        if (project_id is None or a.sample.project_id == project_id)
+        and (since is None or _sample_day(a) >= since)
+        and (until is None or _sample_day(a) <= until)
+    ]
+    return _AnomalyView(report, shown, left_out, attempts_read), warnings
+
+
+def _anomaly_json(a: Anomaly) -> dict[str, Any]:
+    data = a.event_data()
+    data["project"] = a.sample.project_id
+    data["cost_usd"] = nusd_to_usd(a.sample.cost_nusd)
+    data["baseline_usd"] = nusd_to_usd(a.baseline_nusd)
+    data["threshold_usd"] = nusd_to_usd(a.threshold_nusd)
+    data["ratio"] = a.ratio
+    return data
+
+
+def _anomalies_json(v: _AnomalyView) -> dict[str, Any]:
+    cfg = v.report.settings
+    return {
+        "settings": {
+            "factor": cfg.factor,
+            "min_samples": cfg.min_samples,
+            "min_cost_nusd": cfg.min_cost_nusd,
+            "min_cost_usd": nusd_to_usd(cfg.min_cost_nusd),
+        },
+        "history": "all projects, all days",
+        "checked": v.report.checked,
+        "without_history": v.report.without_history,
+        "left_out_calls": v.left_out_calls,
+        "attempts_checked": v.attempts_read,
+        "total": len(v.report.anomalies),
+        "anomalies": [_anomaly_json(a) for a in v.shown],
+    }
+
+
+def _anomaly_lines(v: _AnomalyView, filtered: bool) -> list[str]:
+    cfg = v.report.settings
+    lines = [
+        f"unusual spending (each call and judged attempt against the median of at least "
+        f"{cfg.min_samples} earlier ones of the same kind, role and model, all projects; "
+        f"flagged above {cfg.factor:g}x and at least {_usd(cfg.min_cost_nusd)}):"
+    ]
+    for a in v.shown:
+        s = a.sample
+        what = f"call #{s.call_id}" if s.call_id is not None else f"attempt {s.attempt}"
+        ratio = f"{a.ratio:.1f}x" if a.ratio is not None else "baseline $0"
+        name = _safe(f"{s.project_id}/{s.task_id}  {s.role}  {s.model}")
+        lines.append(
+            f"  {s.ts.isoformat()}  {s.kind.value} {what}  "
+            + name.replace("\n", " ").replace("\t", " ")
+            + f"  {_usd(s.cost_nusd)} vs median {_usd(a.baseline_nusd)} ({ratio}, "
+            f"{a.history} earlier)"
+        )
+    if not v.shown:
+        scope = " in the selected project/days" if filtered and v.report.anomalies else ""
+        lines.append(f"  none{scope}")
+    lines.append(
+        f"  {v.report.checked} sample(s) checked, {v.report.without_history} with too little "
+        f"history yet"
+        + (
+            f"; {v.left_out_calls} call(s) without a task role not checked"
+            if v.left_out_calls
+            else ""
+        )
+    )
+    if not v.attempts_read:
+        lines.append("  judged attempts not checked (quality log unreadable)")
+    lines.append("  advisory only: nothing was stopped; the budget guard alone stops spending")
+    return lines
+
+
 @finance_app.command("report")
 def finance_report(
     project_id: Annotated[str | None, typer.Option("--project", help="Only this project.")] = None,
@@ -1577,9 +1718,20 @@ def finance_report(
     report = spending_report(entries, roles=roles, project_id=project_id, since=first, until=last)
     comparisons, event_warnings = _report_comparisons(store, ids, entries)
     warnings += event_warnings
+    history_roles = roles
+    if project_id is not None:  # baselines come from every project (D70)
+        others = [i for i in store.list_ids() if i != project_id]
+        other_roles, other_warnings = _report_roles(store, others)
+        history_roles = {**other_roles, **roles}
+        warnings += [f"{w} (anomaly history only)" for w in other_warnings]
+    anomalies, anomaly_warnings = _report_anomalies(
+        config, history_roles, entries, project_id=project_id, since=first, until=last
+    )
+    warnings += anomaly_warnings
     if as_json:
         data = _report_json(report, warnings)
         data["estimate_vs_actual"] = [_comparison_json(c) for c in comparisons]
+        data["anomalies"] = _anomalies_json(anomalies)
         typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
         return
     for w in warnings:
@@ -1587,6 +1739,9 @@ def finance_report(
     for line in _spending_lines(report):
         typer.echo(line)
     for line in _comparison_lines(comparisons, single=project_id is not None):
+        typer.echo(line)
+    filtered = project_id is not None or first is not None or last is not None
+    for line in _anomaly_lines(anomalies, filtered):
         typer.echo(line)
     typer.echo("read-only: nothing was changed; the budget guard alone decides spending")
 
