@@ -106,6 +106,7 @@ from automa.config import (
 )
 from automa.events import Event
 from automa.finance import (
+    ANOMALY_EVENT,
     Anomaly,
     AnomalyReport,
     BudgetFit,
@@ -738,6 +739,7 @@ def run(
             "estimate: "
             + _run_estimate(config, store, pid, roles, settings, stats, router, spent_before)
         )
+        marks = _RunMarks.take(ledger, quality, pid)
         guard = BudgetGuard(config.limits, ledger, events=events)
         gateway = LLMGateway(config, provider, guard=guard)
         orchestrator = Orchestrator(
@@ -762,6 +764,8 @@ def run(
         finally:
             spent = ledger.spent_nusd(project_id=pid)
             typer.echo(f"cost: {_usd(spent - spent_before)} this run, {_usd(spent)} total")
+            for line in _run_anomalies(store, pid, ledger, quality, marks):
+                typer.echo(line)
     for line in _report_lines(report):
         typer.echo(line)
     raise typer.Exit(RUN_EXIT_CODES[report.reason])
@@ -875,6 +879,114 @@ def _run_estimate(
         f"{unknown}; worst {_usd(result.worst_nusd)}; project budget left {_usd(left)}: "
         f"{_FIT_SHORT[fit]} (advisory; details: automa estimate {pid})"
     )
+
+
+class _RunMarks:
+    """Where this run starts in the ledger and the quality log (D71), so that the
+    unusual-spending check after the run looks at this run's samples only."""
+
+    def __init__(self, last_call_id: int | None, judged: frozenset[tuple[str, int]] | None):
+        self.last_call_id = last_call_id  # None: the ledger could not be read
+        self.judged = judged  # None: the quality log could not be read
+
+    @classmethod
+    def take(cls, ledger: CostLedger, quality: QualityLog, pid: str) -> _RunMarks:
+        """Read before the first model call of the run; never fails (advisory)."""
+        last: int | None
+        judged: frozenset[tuple[str, int]] | None
+        try:
+            last = max((e.id for e in ledger.entries(project_id=pid)), default=0)
+        except (LedgerError, sqlite3.Error, OSError, ValidationError):
+            last = None
+        try:
+            judged = frozenset((r.task_id, r.attempt) for r in quality.records(project_id=pid))
+        except (QualityError, sqlite3.Error, OSError, ValidationError):
+            judged = None
+        return cls(last, judged)
+
+    def of_this_run(self, a: Anomaly, pid: str) -> bool:
+        s = a.sample
+        if s.project_id != pid:
+            return False
+        if s.call_id is not None:
+            return self.last_call_id is not None and s.call_id > self.last_call_id
+        return (
+            self.judged is not None
+            and s.attempt is not None
+            and (s.task_id, s.attempt) not in self.judged
+        )
+
+
+def _run_anomalies(
+    store: ProjectStore,
+    pid: str,
+    ledger: CostLedger,
+    quality: QualityLog,
+    marks: _RunMarks,
+) -> list[str]:
+    """The ``unusual spending:`` lines after ``automa run`` (D71): advisory only.
+
+    The same check as ``automa finance report`` (D69, D70) — every ledger call and
+    judged attempt of every project, roles from every plan, default settings — so a
+    sample flagged here is the one the report shows. Only this run's samples (calls
+    added and attempts judged since ``marks``) are reported, each saved as a
+    ``finance.anomaly`` event. Nothing is stopped and the exit code never changes;
+    anything that prevents the check only makes it "unavailable".
+    """
+    if marks.last_call_id is None and marks.judged is None:
+        return ["unusual spending: unavailable (the ledger and quality log cannot be read)"]
+    try:
+        entries = ledger.entries()
+        roles, _ = _report_roles(store, store.list_ids())
+        calls, _ = call_samples(entries, roles)
+        records = quality.records() if marks.judged is not None else []
+        report = detect_anomalies([*calls, *attempt_samples(records)])
+    except (
+        LedgerError,
+        QualityError,
+        ProjectStoreError,
+        sqlite3.Error,
+        OSError,
+        ValueError,
+        TypeError,
+    ) as e:
+        reason = _safe(str(e)).replace("\n", " ")
+        return [f"unusual spending: unavailable ({reason})"]
+    found = [a for a in report.anomalies if marks.of_this_run(a, pid)]
+    events = store.events(pid)
+    for a in found:
+        try:
+            events.emit(
+                Event(
+                    ts=datetime.now(UTC),
+                    type=ANOMALY_EVENT,
+                    project_id=pid,
+                    data=a.event_data(),
+                )
+            )
+        except (OSError, ValueError):
+            pass  # advisory: an unwritable event never changes the run
+    unchecked = ""
+    if marks.last_call_id is None:
+        unchecked = " (calls not checked: the ledger could not be read before the run)"
+    elif marks.judged is None:
+        unchecked = " (judged attempts not checked: the quality log is unreadable)"
+    if not found:
+        return [f"unusual spending: none this run{unchecked}"]
+    lines = [
+        f"unusual spending: {len(found)} this run{unchecked} (advisory: nothing was "
+        f"stopped; details: automa finance report --project {pid})"
+    ]
+    for a in found:
+        s = a.sample
+        what = f"call #{s.call_id}" if s.call_id is not None else f"attempt {s.attempt}"
+        ratio = f"{a.ratio:.1f}x" if a.ratio is not None else "baseline $0"
+        name = _safe(f"{s.task_id}  {s.role}  {s.model}").replace("\n", " ").replace("\t", " ")
+        lines.append(
+            f"  {what}  {name}  {_usd(s.cost_nusd)} vs median {_usd(a.baseline_nusd)} "
+            f"({ratio}, {a.history} earlier)"
+        )
+    return lines
 
 
 def _describe_router(router: Router | None) -> str:

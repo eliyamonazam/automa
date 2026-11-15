@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-15 — M8: Financial Controller (مصرف غیرعادی، `automa run`)
+- **انجام‌شده:** `automa run` بعد از اجرا (بعد از خط `cost:`؛ حتی بعد از توقف بودجه/Provider یا Ctrl+C) خط `unusual spending:` چاپ می‌کند و برای هر ناهنجاری **همان اجرا** رویداد `finance.anomaly` ثبت می‌کند. «همان اجرا» با علامت‌هایی که قبل از اولین فراخوانی مدل گرفته می‌شود (بزرگ‌ترین شناسهٔ Ledger پروژه و تلاش‌های داوری‌شدهٔ قبلی) تعیین می‌شود، پس ادامهٔ اجرا چیزی را دوباره ثبت نمی‌کند. خط پایه همان تاریخچهٔ کامل گزارش است (D70) و نتیجه با `automa finance report --project` یکی است. فقط هشدار؛ BudgetGuard، Ledger، Gateway، Policy و Orchestrator دست نخوردند.
+- **فایل‌های اصلی:** `src/automa/cli.py` (`_RunMarks`، `_run_anomalies`)، `tests/test_cli_run_anomaly.py` (جدید)، `README.md`، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D71).
+- **تست‌ها:** `pytest` ← ۲۶۳۳ تست سبز، ۲ رد شده (Docker واقعی)؛ `ruff check` و `ruff format --check` سبز؛ `mypy` روی `cli.py` سبز (یک خطای قدیمی در `benchmarks/report.py` بی‌ارتباط با این تغییر باقی است). ۱۹ تست جدید با `FakeProvider`: بدون تاریخچه، ترتیب خطوط، تاریخچهٔ ناکافی، مدل دیگر، هزینهٔ مشابه، جهش فراخوانی (Worker و Verifier) و رویدادها، `project_id` رویداد، ناهنجاری قدیمی پروژهٔ دیگر، عدم ثبت دوباره در ادامهٔ اجرا (فراخوانی و تلاش)، Ctrl+C، جهش تلاش داوری‌شده، برابری با `finance report`، لاگ کیفیت ناخوانا، شکست بررسی، شکست نوشتن رویداد، پلن ناخوانای پروژهٔ دیگر، نبود فراخوانی مدل اضافه.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود (HEAD جدا، به `origin/main` برگردانده شد). وابستگی‌ها دوباره نصب شدند.
+- **قدم بعدی:** ابزارهای GitHub، جست‌وجو و خوندن وب (احتمالاً به چند بخش شکسته می‌شود).
+
 ## 2026-11-15 — M8: Financial Controller (مصرف غیرعادی، گزارش)
 - **انجام‌شده:** مورد «مصرف غیرعادی، اتصال» به دو بخش شکسته شد (گزارش؛ `automa run`) و بخش اول انجام شد: `automa finance report` حالا بخش «unusual spending» دارد (متن، و کلید `anomalies` در `--json`). تشخیص روی کل تاریخچهٔ Ledger و `QualityLog` همهٔ پروژه‌ها اجرا می‌شود و فقط نمایش با `--project`/`--since`/`--until` محدود می‌شود؛ فراخوانی‌های بدون نقش وظیفه شمرده می‌شوند؛ لاگ کیفیت ناموجود ساخته نمی‌شود و خراب/symlink فقط هشدار است. فقط‌خواندنی و مشورتی؛ BudgetGuard، Ledger، Gateway و Policy دست نخوردند.
 - **فایل‌های اصلی:** `src/automa/cli.py`، `tests/test_cli_finance_anomaly.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D70).

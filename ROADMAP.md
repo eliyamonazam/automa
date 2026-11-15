@@ -90,7 +90,7 @@
 - [x] Financial Controller (مقایسه با تخمین، CLI): بخش «estimate vs actual» در `automa finance report` (متن و `--json` با کلید `estimate_vs_actual`) برای هر پروژه (یا فقط `--project`)، مستقل از `--since`/`--until`؛ لاگ رویداد ناخوانا/symlink فقط هشدار (D68)
 - [x] Financial Controller (مصرف غیرعادی، هسته): `detect_anomalies` خالص در `automa.finance.anomaly` — هر نمونه (فراخوانی از Ledger یا تلاش داوری‌شده از `QualityLog`) در برابر میانهٔ نمونه‌های **قبلی** همان (نوع، نقش، مدل)؛ با حداقل `min_samples` (پیش‌فرض ۵) و هزینه > `factor` (پیش‌فرض ۳) × میانه و ≥ `min_cost_nusd` (پیش‌فرض $0.001) ← ناهنجاری؛ مقایسهٔ دقیق صحیح، `event_data()` برای رویداد `finance.anomaly`؛ بدون فراخوانی مدل، بدون نوشتن، بدون توقف (D69)
 - [x] Financial Controller (مصرف غیرعادی، گزارش): بخش «unusual spending» در `automa finance report` (متن و کلید `anomalies` در `--json`) — تشخیص روی کل تاریخچهٔ Ledger و `QualityLog` همهٔ پروژه‌ها، فقط نمایش با `--project`/`--since`/`--until` محدود می‌شود؛ لاگ کیفیت ناموجود ساخته نمی‌شود، خراب/symlink فقط هشدار؛ فقط‌خواندنی (D70)
-- [ ] Financial Controller (مصرف غیرعادی، `automa run`): رویداد `finance.anomaly` و خط هشدار برای فراخوانی‌ها/تلاش‌های همان اجرا، با همان خط پایهٔ تاریخچهٔ کامل (فقط هشدار؛ اختیار توقف همچنان با BudgetGuard)
+- [x] Financial Controller (مصرف غیرعادی، `automa run`): رویداد `finance.anomaly` و خط هشدار برای فراخوانی‌ها/تلاش‌های همان اجرا، با همان خط پایهٔ تاریخچهٔ کامل (فقط هشدار؛ اختیار توقف همچنان با BudgetGuard) — بعد از اجرا (حتی توقف یا Ctrl+C) خط `unusual spending:` و رویداد `finance.anomaly` فقط برای نمونه‌های تازهٔ همان اجرا؛ شکست بررسی ← «unavailable» بدون تغییر کد خروج (D71)
 
 ## M9 — ابزارهای بیشتر و رابط
 - [ ] ابزارهای GitHub، جست‌وجو و خوندن وب
