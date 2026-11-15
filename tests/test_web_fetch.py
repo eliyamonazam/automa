@@ -89,9 +89,10 @@ def test_tool_is_external_and_reversible() -> None:
     assert spec["name"] == "fetch_url" and spec["parameters"]["additionalProperties"] is False
 
 
-def test_no_builtin_role_has_fetch_url() -> None:
+def test_only_the_researcher_has_fetch_url() -> None:
+    # D73: the researcher lists it (still needs approval per call); no other role.
     reg = RoleRegistry.builtin(tools=default_tools())
-    assert all("fetch_url" not in r.tools for r in reg) and len(reg) > 0
+    assert {r.name for r in reg if "fetch_url" in r.tools} == {"researcher"}
 
 
 def test_timeout_is_bounded() -> None:

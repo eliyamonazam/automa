@@ -184,6 +184,7 @@ from automa.tools.approvals import (
     ApprovalStatus,
     ApprovalStore,
 )
+from automa.tools.web import FetchUrl, describe_fetch_request
 from automa.workflows import (
     WorkflowError,
     WorkflowIncompatible,
@@ -2773,12 +2774,34 @@ def _approval_json(store: ProjectStore, req: ApprovalRequest) -> dict[str, Any]:
     data = req.model_dump(mode="json")
     data["used"] = req.decided and approvals.is_used(req.id)
     data["path"] = str(approvals.directory / f"{req.id}.json")
+    if req.tool == FetchUrl.name:
+        data["web_request"] = describe_fetch_request(req.arguments.get("url")).model_dump(
+            mode="json"
+        )
     return data
 
 
 def _approval_summary(req: ApprovalRequest) -> str:
     task = _safe(req.task_id or "-")
     return f"{req.id}  {req.status.value:<8}  task {task}  {req.tool} ({req.risk.value})"
+
+
+def _web_request_lines(req: ApprovalRequest) -> list[str]:
+    """A readable view of a ``fetch_url`` request: where it goes and what to check (D73)."""
+    if req.tool != FetchUrl.name:
+        return []
+    view = describe_fetch_request(req.arguments.get("url"))
+    lines = ["  web request:"]
+    if not view.valid:
+        lines.append(f"    invalid URL ({_safe(view.error or '')}); the tool will refuse it")
+        return lines
+    lines += [
+        f"    host: {_safe(view.host or '')} (port {view.port}, {view.scheme})",
+        f"    path: {_safe(_preview(view.path or '/', 200))}",
+    ]
+    lines.extend(f"    ! {_safe(w)}" for w in view.warnings)
+    lines.append("    the page text goes to the model as untrusted data")
+    return lines
 
 
 def _approval_lines(
@@ -2796,6 +2819,7 @@ def _approval_lines(
         lines.append(f"  decided: {req.decided_at.isoformat(timespec='seconds')}")
     if req.note:
         lines.append(f"  note: {_safe(req.note)}")
+    lines.extend(_web_request_lines(req))
     args = _arguments_text(req)
     truncated = not full and len(args) > ARGUMENTS_PREVIEW_CHARS
     if truncated:

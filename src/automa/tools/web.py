@@ -24,7 +24,7 @@ from typing import ClassVar
 from urllib.parse import urljoin, urlsplit
 
 import httpx
-from pydantic import Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from automa.tools.base import MAX_TOOL_OUTPUT_CHARS, RiskLevel, Tool, ToolArgs, ToolError
 from automa.tools.workspace import Workspace
@@ -302,3 +302,76 @@ class FetchUrl(Tool):
         if title:
             header.append(f"Title: {title[:300]}")
         return "\n".join(header) + "\n\n" + text
+
+
+class FetchRequestView(BaseModel):
+    """What an approved ``fetch_url`` call would send, for ``automa approvals`` (D73).
+
+    Pure: no resolving, no network. ``warnings`` point at things a reviewer can miss in
+    a long URL (where data would go, and whether the host is what it looks like).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    url: str
+    valid: bool
+    error: str | None = None
+    scheme: str | None = None
+    host: str | None = None
+    port: int | None = None
+    path: str | None = None
+    query_parameters: int = 0
+    warnings: tuple[str, ...] = ()
+
+
+def _ascii_host(host: str) -> str:
+    """``host`` as it goes on the wire (IDNA/punycode), or escaped if it can't be."""
+    try:
+        return host.encode("idna").decode("ascii")
+    except UnicodeError:
+        return host.encode("ascii", "backslashreplace").decode("ascii")
+
+
+def describe_fetch_request(url: object) -> FetchRequestView:
+    """Describe a recorded ``fetch_url`` URL for the user who decides on it."""
+    if not isinstance(url, str):
+        return FetchRequestView(url=repr(url), valid=False, error="URL is not a string")
+    try:
+        host, port = check_url(url)
+    except ToolError as e:
+        return FetchRequestView(url=url, valid=False, error=str(e))
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    wire_host = _ascii_host(host)
+    warnings: list[str] = []
+    if scheme == "http":
+        warnings.append("not encrypted (http): anyone on the network can read or change it")
+    try:
+        ipaddress.ip_address(host)
+        warnings.append("the host is an IP address, not a name")
+    except ValueError:
+        pass
+    if not host.isascii():
+        warnings.append(f"non-ASCII host name; it is sent as {wire_host}")
+    elif any(label.startswith("xn--") for label in host.split(".")):
+        warnings.append("punycode host name (xn--): it may look like another name")
+    if parts.port is not None and parts.port != (443 if scheme == "https" else 80):
+        warnings.append(f"non-default port {parts.port}")
+    params = [p for p in parts.query.split("&") if p] if parts.query else []
+    if parts.query:
+        warnings.append(
+            f"the query string ({len(params)} parameter(s)) is sent to {wire_host}: "
+            "check it carries no secrets or project data"
+        )
+    elif len(parts.path) > 200:
+        warnings.append("very long path: check it carries no project data")
+    return FetchRequestView(
+        url=url,
+        valid=True,
+        scheme=scheme,
+        host=wire_host,
+        port=port,
+        path=parts.path or "/",
+        query_parameters=len(params),
+        warnings=tuple(warnings),
+    )
