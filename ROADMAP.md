@@ -87,7 +87,7 @@
 - [x] Financial Controller (گزارش، هسته): `spending_report` خالص در `automa.finance.report` — خرج واقعی از ردیف‌های Ledger به تفکیک پروژه/روز UTC/مدل/نقش (نقش از نقشهٔ `(پروژه، وظیفه) → نقش`)، سطل‌های `no_project`/`no_task`/`unknown_role`، فیلتر پروژه و بازهٔ روز، هر تفکیک دقیقاً برابر جمع کل؛ بدون فراخوانی مدل و بدون نوشتن (D65)
 - [x] Financial Controller (گزارش، CLI): `automa finance report [--json] [--project ID] [--since D] [--until D]` فقط‌خواندنی — Ledger با `read_only=True`، نقشهٔ نقش از پلن پروژه‌ها، بدون کلید؛ پلن ناخوانا فقط هشدار، پروژهٔ ناموجود/روز نامعتبر کد ۱، Ledger خراب کد ۲ (D66)
 - [x] Financial Controller (مقایسه با تخمین، هسته): `compare_estimate` خالص در `automa.finance.compare` — آخرین رویداد `finance.estimate` پروژه (اعتبارسنجی‌شده؛ رویداد خراب ← `invalid_estimate` بدون برگشت به تخمین قدیمی‌تر) در برابر خرج Ledger از همان لحظه: وظایف تحت پوشش در برابر بدترین حالت، وظایف با مورد انتظار معلوم در برابر مورد انتظار، بقیهٔ فراخوانی‌ها جدا؛ هفت نتیجه؛ بدون فراخوانی مدل و بدون نوشتن (D67)
-- [ ] Financial Controller (مقایسه با تخمین، CLI): بخش «estimate vs actual» در `automa finance report` (متن و `--json`) برای هر پروژه (یا فقط `--project`)؛ لاگ رویداد ناخوانا فقط هشدار
+- [x] Financial Controller (مقایسه با تخمین، CLI): بخش «estimate vs actual» در `automa finance report` (متن و `--json` با کلید `estimate_vs_actual`) برای هر پروژه (یا فقط `--project`)، مستقل از `--since`/`--until`؛ لاگ رویداد ناخوانا/symlink فقط هشدار (D68)
 - [ ] Financial Controller (مصرف غیرعادی): تشخیص فراخوانی/تلاش با هزینهٔ غیرعادی نسبت به سابقهٔ (نقش، مدل) و رویداد/هشدار `finance.anomaly` (فقط هشدار؛ اختیار توقف همچنان با BudgetGuard)
 
 ## M9 — ابزارهای بیشتر و رابط

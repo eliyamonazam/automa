@@ -107,13 +107,16 @@ from automa.config import (
 from automa.events import Event
 from automa.finance import (
     BudgetFit,
+    ComparisonOutcome,
     EstimateBasis,
+    EstimateComparison,
     EstimateSettings,
     PlanEstimate,
     SpendGroup,
     SpendingReport,
     TaskEstimate,
     TaskProgress,
+    compare_estimate,
     estimate_plan,
     spending_report,
 )
@@ -1406,6 +1409,134 @@ def _spending_lines(r: SpendingReport) -> list[str]:
     return lines
 
 
+def _report_comparisons(
+    store: ProjectStore, project_ids: list[str], entries: list[LedgerEntry]
+) -> tuple[list[EstimateComparison], list[str]]:
+    """Latest estimate vs actual spending of each project (D68). A project whose
+    event log cannot be read (corrupt line, symlink, missing project) is left out
+    with a warning; the rest of the report is not affected."""
+    out: list[EstimateComparison] = []
+    warnings: list[str] = []
+    for pid in project_ids:
+        try:
+            log = store.events(pid)
+            if log.path.is_symlink():
+                raise ValueError("events.jsonl is a symlink")
+            events = log.read()
+        except (ProjectStoreError, OSError, ValueError) as e:
+            warnings.append(
+                f"event log of {pid} is unreadable ({e}); no estimate comparison for it"
+            )
+            continue
+        out.append(compare_estimate(pid, events, entries))
+    return out, warnings
+
+
+def _comparison_json(c: EstimateComparison) -> dict[str, Any]:
+    est: dict[str, Any] | None = None
+    if c.estimate is not None:
+        e = c.estimate
+        est = {
+            "ts": e.ts.isoformat(),
+            "plan_version": e.plan_version,
+            "tasks": list(e.tasks),
+            "excluded": list(e.excluded),
+            "unknown": list(e.unknown),
+            "router": e.router,
+            "expected_usd": nusd_to_usd(e.expected_nusd),
+            "expected_nusd": e.expected_nusd,
+            "expected_complete": e.expected_complete,
+            "worst_usd": nusd_to_usd(e.worst_nusd),
+            "worst_nusd": e.worst_nusd,
+            "project_remaining_usd": nusd_to_usd(e.project_remaining_nusd),
+            "project_remaining_nusd": e.project_remaining_nusd,
+            "assessment": e.assessment.value,
+        }
+    delta = c.expected_delta_nusd
+    return {
+        "project": c.project_id,
+        "outcome": c.outcome.value,
+        "estimates": c.estimates,
+        "invalid_reason": c.invalid_reason,
+        "estimate": est,
+        "tasks": _group_json(c.tasks),
+        "known": _group_json(c.known),
+        "other": _group_json(c.other),
+        "total": _group_json(c.total),
+        "expected_delta_nusd": delta,
+        "expected_delta_usd": nusd_to_usd(delta) if delta is not None else None,
+    }
+
+
+def _signed_usd(nusd: int) -> str:
+    return f"+{_usd(nusd)}" if nusd >= 0 else f"-{_usd(-nusd)}"
+
+
+_OUTCOME_TEXT = {
+    ComparisonOutcome.NO_SPENDING: "no spending on the estimated tasks yet",
+    ComparisonOutcome.WITHIN_EXPECTED: "within the expected cost",
+    ComparisonOutcome.ABOVE_EXPECTED: "above the expected cost, within the worst case",
+    ComparisonOutcome.EXPECTED_UNKNOWN: "only tasks without an expected cost spent; "
+    "within the worst case",
+    ComparisonOutcome.ABOVE_WORST: "ABOVE THE WORST CASE: the estimate's bound did not hold",
+}
+
+
+def _comparison_lines(comparisons: list[EstimateComparison], single: bool) -> list[str]:
+    lines = [
+        "estimate vs actual (latest estimate of each project and its spending since then; "
+        "not limited by --since/--until):"
+    ]
+    missing = [c for c in comparisons if c.outcome is ComparisonOutcome.NO_ESTIMATE]
+    shown = [c for c in comparisons if c.outcome is not ComparisonOutcome.NO_ESTIMATE]
+    for c in shown:
+        pid = _safe(c.project_id)
+        if c.outcome is ComparisonOutcome.INVALID_ESTIMATE:
+            lines.append(
+                f"  {pid}  invalid_estimate: the latest of {c.estimates} estimate(s) cannot "
+                f"be read ({_safe(c.invalid_reason or '')}); no comparison"
+            )
+            continue
+        e = c.estimate
+        if e is None:  # unreachable: the model ties an estimate to these outcomes
+            continue
+        expected = _usd(e.expected_nusd)
+        if not e.expected_complete:
+            expected += f" for {len(e.tasks) - len(e.unknown)} task(s), {len(e.unknown)} unknown"
+        lines.append(f"  {pid}  {c.outcome.value}: {_OUTCOME_TEXT[c.outcome]}")
+        lines.append(
+            f"    estimate {e.ts.isoformat()} (plan v{e.plan_version}, {len(e.tasks)} task(s)): "
+            f"expected {expected}, worst case {_usd(e.worst_nusd)}"
+        )
+        lines.append(
+            f"    estimated tasks spent {_usd(c.tasks.cost_nusd)} in {c.tasks.calls} call(s) "
+            f"(worst case {_usd(e.worst_nusd)})"
+        )
+        if c.known.calls:
+            lines.append(
+                f"    tasks with a known expectation spent {_usd(c.known.cost_nusd)} vs expected "
+                f"{_usd(e.expected_nusd)} ({_signed_usd(c.expected_delta_nusd or 0)})"
+            )
+        if c.other.calls:
+            lines.append(
+                f"    other calls since (planning, review, other tasks): "
+                f"{_usd(c.other.cost_nusd)} in {c.other.calls} call(s), not compared"
+            )
+    if missing:
+        if single:
+            lines.append(f"  {_safe(missing[0].project_id)}  no estimate yet (made by automa run)")
+        else:
+            lines.append(f"  {len(missing)} project(s) without an estimate (made by automa run)")
+    if not comparisons:
+        lines.append("  no projects")
+    if shown and any(c.estimate is not None for c in shown):
+        lines.append(
+            "  note: the expected cost covers worker calls only, the actual includes verifier "
+            "calls, so above_expected leans high"
+        )
+    return lines
+
+
 @finance_app.command("report")
 def finance_report(
     project_id: Annotated[str | None, typer.Option("--project", help="Only this project.")] = None,
@@ -1420,7 +1551,8 @@ def finance_report(
         Path | None, typer.Option("--config", help="Path to automa.toml.")
     ] = None,
 ) -> None:
-    """Actual spending from the cost ledger by project, UTC day, model and role.
+    """Actual spending from the cost ledger by project, UTC day, model and role,
+    and each project's latest estimate (from automa run) against what it spent since.
 
     Read-only: no API key, no model call, nothing created or written (a missing
     ledger is an empty report). Roles come from the projects' plans. A broken ledger
@@ -1443,12 +1575,18 @@ def finance_report(
     entries = _ledger_entries(config)
     roles, warnings = _report_roles(store, ids)
     report = spending_report(entries, roles=roles, project_id=project_id, since=first, until=last)
+    comparisons, event_warnings = _report_comparisons(store, ids, entries)
+    warnings += event_warnings
     if as_json:
-        typer.echo(json.dumps(_report_json(report, warnings), ensure_ascii=False, indent=2))
+        data = _report_json(report, warnings)
+        data["estimate_vs_actual"] = [_comparison_json(c) for c in comparisons]
+        typer.echo(json.dumps(data, ensure_ascii=False, indent=2))
         return
     for w in warnings:
         typer.echo(f"warning: {_safe(w)}")
     for line in _spending_lines(report):
+        typer.echo(line)
+    for line in _comparison_lines(comparisons, single=project_id is not None):
         typer.echo(line)
     typer.echo("read-only: nothing was changed; the budget guard alone decides spending")
 

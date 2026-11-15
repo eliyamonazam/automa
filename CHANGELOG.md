@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-15 — M8: Financial Controller (مقایسهٔ تخمین با خرج واقعی، CLI)
+- **انجام‌شده:** `automa finance report` حالا بخش «estimate vs actual» دارد: برای هر پروژه (یا فقط `--project`) آخرین رویداد `finance.estimate` با خرج Ledger از همان لحظه مقایسه می‌شود (`compare_estimate`، D67). متن: نتیجه، تخمین (مورد انتظار/جزئی/بدترین حالت)، خرج وظایف تحت پوشش، اختلاف با مورد انتظار، تماس‌های دیگر جدا، و یادداشت سوگیری Verifier؛ JSON: کلید `estimate_vs_actual`. مقایسه مستقل از `--since`/`--until` است. لاگ رویداد خراب/غیر UTF-8/symlink فقط هشدار. بدون کلید، بدون Provider، بدون نوشتن؛ BudgetGuard، Ledger، Gateway و Policy دست نخوردند.
+- **فایل‌های اصلی:** `src/automa/cli.py` (`_report_comparisons`، `_comparison_json`، `_comparison_lines`)، `tests/test_cli_finance_compare.py` (جدید)، `README.md`، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D68).
+- **تست‌ها:** `pytest` ← ۲۵۴۵ تست سبز، ۲ رد شده (Docker واقعی)؛ `ruff check`، `ruff format --check` و `mypy` سبز. ۲۸ تست جدید: همهٔ نتیجه‌ها در JSON و متن، آخرین تخمین، تخمین خراب بدون برگشت، جدا بودن پروژه‌ها، `--project`، مستقل بودن از روزها، Ledger ناموجود/خراب، لاگ رویداد خراب/غیر UTF-8/symlink، فقط‌خواندنی بودن کل workspace و نساختن Provider، و یک تست انتها‌به‌انتها با `FakeProvider` روی `automa run`.
+- **مشکلات:** ندارد.
+- **قدم بعدی:** Financial Controller (مصرف غیرعادی): تشخیص فراخوانی/تلاش با هزینهٔ غیرعادی و رویداد/هشدار `finance.anomaly` (احتمالاً به هسته و اتصال شکسته می‌شود).
+
 ## 2026-11-15 — M8: Financial Controller (مقایسهٔ تخمین با خرج واقعی، هسته)
 - **انجام‌شده:** مورد «گزارش، مقایسه با تخمین» به دو بخش شکسته شد (هسته؛ CLI در `automa finance report`) و بخش اول انجام شد. ماژول خالص جدید `automa.finance.compare`: `EstimateRecord.from_event` رویداد `finance.estimate` (D64) را سخت‌گیرانه اعتبارسنجی می‌کند و `compare_estimate(project_id, events, entries)` آخرین تخمین پروژه را با خرج Ledger از همان لحظه مقایسه می‌کند: `tasks` (وظایف تحت پوشش) در برابر بدترین حالت، `known` (وظایف با مورد انتظار معلوم) در برابر مورد انتظار، `other` (برنامه‌ریزی/بازبینی/وظایف دیگر) جدا؛ نتیجه‌ها: `no_estimate`، `invalid_estimate`، `no_spending`، `within_expected`، `above_expected`، `expected_unknown`، `above_worst`. بدون فراخوانی مدل، بدون نوشتن؛ BudgetGuard، Ledger، Gateway و Policy دست نخوردند.
 - **فایل‌های اصلی:** `src/automa/finance/compare.py` (جدید)، `src/automa/finance/__init__.py`، `tests/test_finance_compare.py` (جدید)، `tests/test_cli_run_estimate.py`، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D67).
