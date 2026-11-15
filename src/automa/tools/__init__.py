@@ -15,6 +15,14 @@ from automa.tools.executor import ApprovalRequired, ToolExecutor, ToolLayerError
 from automa.tools.files import FILE_TOOLS, DeleteFile, ListDir, ReadFile, WriteFile
 from automa.tools.policy import Decision, PermissionPolicy, PolicyDecision
 from automa.tools.sandbox import DockerSandbox, SandboxError, SandboxMode
+from automa.tools.search import (
+    FakeSearchProvider,
+    SearchHit,
+    SearchProvider,
+    SearchProviderError,
+    WebSearch,
+    WebSearchArgs,
+)
 from automa.tools.web import FetchRequestView, FetchUrl, FetchUrlArgs, describe_fetch_request
 from automa.tools.workspace import DirEntry, Workspace, WorkspaceError
 
@@ -24,7 +32,8 @@ def default_tools(sandbox: DockerSandbox | None = None) -> list[Tool]:
 
     With ``sandbox``, ``run_command`` runs every call in that Docker sandbox (D32, D33).
     ``fetch_url`` is ``external``: only the ``researcher`` role lists it and every
-    call needs the user's approval (D72, D73).
+    call needs the user's approval (D72, D73). ``web_search`` is not included: no
+    real search service is chosen yet (D74).
     """
     return [*(cls() for cls in FILE_TOOLS), RunCommand(sandbox=sandbox), FetchUrl()]
 
@@ -49,6 +58,7 @@ __all__ = [
     "FetchRequestView",
     "FetchUrl",
     "FetchUrlArgs",
+    "FakeSearchProvider",
     "ListDir",
     "PermissionPolicy",
     "PolicyDecision",
@@ -58,12 +68,17 @@ __all__ = [
     "RiskLevel",
     "SandboxError",
     "SandboxMode",
+    "SearchHit",
+    "SearchProvider",
+    "SearchProviderError",
     "Tool",
     "ToolArgs",
     "ToolError",
     "ToolExecutor",
     "ToolLayerError",
     "ToolResult",
+    "WebSearch",
+    "WebSearchArgs",
     "Workspace",
     "WorkspaceError",
     "WriteFile",
