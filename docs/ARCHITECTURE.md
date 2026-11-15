@@ -161,8 +161,10 @@ Skillها با قالب استاندارد `SKILL.md` (frontmatter + دستور�
 - **نمایش در CLI:** `SkillOverview` در `cli.py` Skillها رو دقیقاً مثل `automa run` بارگذاری می‌کنه (داخلی + workspace، ادغام، بررسی با نقش‌ها) و منبع هر Skill و نقش‌های استفاده‌کننده رو نگه می‌داره. `automa skills [--json]` (نام، منبع، نقش‌ها، توضیح؛ JSON با `license` و `body_chars`) فقط‌خوندنیه و خطاش کد ۲ داره. `automa status` یک خط `skills:` نشون می‌ده و `status <id> --json` کلید `skills` (`available`، `roles`، `error`) داره؛ اینجا خطای Skill فرمان رو شکست نمی‌ده و فقط گزارش می‌شه (D46).
 - **Skill برای نقش‌های داخلی از تنظیمات کاربر:** بخش `[roles.<name>]` در `automa.toml` فقط کلید `skills` (فهرست نام) رو قبول می‌کنه (`RoleSettings`، `extra="forbid"`؛ `tools`، `max_risk`، `tier`، `max_steps`، `instructions` و هر کلید دیگه خطای تنظیماته). `AutomaConfig.role_skills()` به `RoleRegistry(..., extra_skills=…)` (و `from_dir`/`builtin`) داده می‌شه که قبل از بررسی ابزار و Skill، نام‌ها رو به انتهای `skills` نقش اضافه می‌کنه و نقش رو دوباره با همه قوانین `Role` اعتبارسنجی می‌کنه (سقف ۸، نام معتبر، بدون تکرار). نقش ناشناخته (حتی با فهرست خالی) یا Skillی که نقش خودش داره خطاست؛ برابری `policy()` قبل و بعد دوباره بررسی می‌شه. `automa new`/`run`/`bench run`، `automa skills` و `automa status` همه از همین مسیر استفاده می‌کنن (D47).
 
-### رابط وب (`src/automa/webui/`، D77)
-فقط‌خواندنی. `views.py` مدل‌های نمای pydantic (`Overview`/`ProjectRow`، `ProjectView`/`TaskRow`/`ApprovalView`) را از فایل‌های `ProjectStore` می‌سازد و خرج را از فراخواننده می‌گیرد؛ دادهٔ خراب به‌صورت خط خطا نشان داده می‌شود. `render.py` HTML خالص می‌سازد: همهٔ متن ثبت‌شده با `text()` (نمایش آشکار کاراکترهای کنترلی/bidi و escape HTML)، بدون اسکریپت/فرم/منبع بیرونی، با CSP سخت. تصمیم دربارهٔ تأییدها فقط از CLI. سرور محلی (`automa web`) قدم بعدی است.
+### رابط وب (`src/automa/webui/`، D77، D78)
+فقط‌خواندنی. `views.py` مدل‌های نمای pydantic (`Overview`/`ProjectRow`، `ProjectView`/`TaskRow`/`ApprovalView`) را از فایل‌های `ProjectStore` می‌سازد و خرج را از فراخواننده می‌گیرد؛ دادهٔ خراب به‌صورت خط خطا نشان داده می‌شود. `render.py` HTML خالص می‌سازد: همهٔ متن ثبت‌شده با `text()` (نمایش آشکار کاراکترهای کنترلی/bidi و escape HTML)، بدون اسکریپت/فرم/منبع بیرونی، با CSP سخت. تصمیم دربارهٔ تأییدها فقط از CLI.
+
+`server.py` (D78) سرور محلی `automa web [--host] [--port]` با `http.server` (`ThreadingHTTPServer`): فقط روی IP loopback (پیش‌فرض `127.0.0.1:8765`؛ نام میزبان، حتی `localhost`، و نشانی غیر loopback قبل از bind رد)، فقط `GET`/`HEAD` (هر روش دیگر `405` با `Allow`)، سرتیتر `Host` باید دقیقاً `127.0.0.1:<port>` یا `localhost:<port>` باشد وگرنه `421` (محافظ DNS rebinding)، و روی هر پاسخ CSP با `frame-ancestors 'none'`، `X-Frame-Options: DENY`، `nosniff`، `no-store`، `no-referrer`. مسیرها: `/` و `/projects/<id>` (شناسهٔ نامعتبر یا ناموجود ← `404`، پروژهٔ خراب ← `500`). منطق در `WebApp.handle` بدون سوکت قابل‌تست است. خرج در هر درخواست از Ledger با `read_only=True` خوانده می‌شود؛ نبود Ledger = صفر (ساخته نمی‌شود) و Ledger خراب/symlink خط خطا. خطوط لاگ با `visible()` روی stderr.
 
 ## فناوری‌ها
 
@@ -172,7 +174,7 @@ Skillها با قالب استاندارد `SKILL.md` (frontmatter + دستور�
 | کلاینت مدل | `httpx` با API سازگار OpenAI | بدون وابستگی به SDK یک شرکت |
 | ذخیره‌سازی | فایل JSON + SQLite | بدون سرور جدا، قابل خوندن |
 | مدل داده | `pydantic` | اعتبارسنجی خروجی‌های JSON مدل‌ها |
-| رابط | CLI با `typer` | ساده؛ رابط وب در مراحل بعد |
+| رابط | CLI با `typer` + صفحهٔ وب محلی فقط‌خواندنی با `http.server` | ساده؛ بدون وابستگی تازه |
 | تست | `pytest` + FakeProvider | توسعه بدون هزینه API؛ `tests/test_e2e.py` چرخه کامل `new` ← `status` ← `run` ← `status` رو فقط از راه CLI با پشته واقعی اجرا می‌کنه (D25) |
 | استقرار | Docker / docker compose | انتقال آسان به سرور؛ `Dockerfile` (چندمرحله‌ای، ساخت wheel ← نصب در `python:3.12-slim`، کاربر `1000:1000`، `WORKDIR /data`، `AUTOMA_WORKSPACE=/data/workspace`، `ENTRYPOINT ["automa"]`، بدون کلاینت docker) و `docker-compose.yml` (سرویس `automa`: `env_file: .env` اجباری، `read_only`، tmpfs `/tmp`، `cap_drop: ALL`، `no-new-privileges`، سقف pids/حافظه، bind mount صریح `workspace/`، `automa.toml` فقط‌خوندنی و `benchmarks/`، بدون socket داکر و بدون پورت). داخل کانتینر sandbox حالت `local` می‌مونه و خود کانتینر مرز ایزوله‌سازیه؛ `tests/test_container.py` این ویژگی‌ها رو ثابت نگه می‌داره (D34) |
 

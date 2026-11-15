@@ -186,6 +186,7 @@ from automa.tools.approvals import (
 )
 from automa.tools.github import GitHubRead, describe_github_request
 from automa.tools.web import FetchUrl, describe_fetch_request
+from automa.webui import server as webui_server
 from automa.workflows import (
     WorkflowError,
     WorkflowIncompatible,
@@ -2987,6 +2988,40 @@ def reject(
 ) -> None:
     """Reject one pending request: the call never runs; the model is told why."""
     _decide(project_id, approval_id, approve=False, note=note, yes=True, config_path=config_path)
+
+
+@app.command()
+def web(
+    port: Annotated[
+        int, typer.Option("--port", min=1, max=65535, help="Port on the loopback address.")
+    ] = webui_server.DEFAULT_PORT,
+    host: Annotated[
+        str, typer.Option("--host", help="Loopback IP to listen on (non-loopback is refused).")
+    ] = webui_server.DEFAULT_HOST,
+    config_path: Annotated[Path | None, _CONFIG_OPTION] = None,
+) -> None:
+    """Serve a read-only status page on this computer. Approvals stay in the terminal."""
+    config = _load(config_path)
+    try:
+        server = webui_server.create_server(
+            config.workspace,
+            config.workspace / LEDGER_FILENAME,
+            host=host,
+            port=port,
+            log=webui_server.stderr_log,
+        )
+    except webui_server.WebServerError as e:
+        raise _fail(str(e), EXIT_USER) from None
+    except OSError as e:
+        raise _fail(f"cannot listen on {host}:{port}: {e}", EXIT_USER) from None
+    typer.echo(f"automa web (read-only): {webui_server.server_url(server)}  (Ctrl+C to stop)")
+    typer.echo("approve or reject only in the terminal: automa approvals")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        typer.echo("stopped")
+    finally:
+        server.server_close()
 
 
 def _suite(suite_dir: Path) -> BenchmarkSuite:
