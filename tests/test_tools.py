@@ -433,6 +433,7 @@ class TestToolDefinition:
             "list_dir": RiskLevel.READ,
             "run_command": RiskLevel.EXECUTE,
             "delete_file": RiskLevel.WRITE,
+            "fetch_url": RiskLevel.EXTERNAL,
         }
         irreversible = {t.name for t in default_tools() if t.irreversible}
         assert irreversible == {"delete_file"}

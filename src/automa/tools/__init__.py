@@ -15,6 +15,7 @@ from automa.tools.executor import ApprovalRequired, ToolExecutor, ToolLayerError
 from automa.tools.files import FILE_TOOLS, DeleteFile, ListDir, ReadFile, WriteFile
 from automa.tools.policy import Decision, PermissionPolicy, PolicyDecision
 from automa.tools.sandbox import DockerSandbox, SandboxError, SandboxMode
+from automa.tools.web import FetchUrl, FetchUrlArgs
 from automa.tools.workspace import DirEntry, Workspace, WorkspaceError
 
 
@@ -22,8 +23,10 @@ def default_tools(sandbox: DockerSandbox | None = None) -> list[Tool]:
     """Fresh instances of the built-in tools.
 
     With ``sandbox``, ``run_command`` runs every call in that Docker sandbox (D32, D33).
+    ``fetch_url`` is ``external``: no built-in role has it and every call needs the
+    user's approval (D72).
     """
-    return [*(cls() for cls in FILE_TOOLS), RunCommand(sandbox=sandbox)]
+    return [*(cls() for cls in FILE_TOOLS), RunCommand(sandbox=sandbox), FetchUrl()]
 
 
 def tools_factory(sandbox: DockerSandbox | None = None) -> Callable[[], list[Tool]]:
@@ -43,6 +46,8 @@ __all__ = [
     "DeleteFile",
     "DirEntry",
     "DockerSandbox",
+    "FetchUrl",
+    "FetchUrlArgs",
     "ListDir",
     "PermissionPolicy",
     "PolicyDecision",
