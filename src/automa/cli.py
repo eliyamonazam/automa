@@ -36,6 +36,9 @@ worst case and, with enough quality history, the expected cost) against the proj
 budget left in the ledger; it is advisory and never authorizes spending (D63).
 With ``[router] enabled = true`` or ``--router``, ``run`` hands the orchestrator a data
 router built from a snapshot of the quality log (D59, D60); ``bench run`` never routes.
+``self next`` shows, read-only, the next open item of Automa's own ``ROADMAP.md``, the
+``[!]`` items waiting for the owner and the goal text built for it; it needs no config
+or API key, makes no model call and creates nothing (D81).
 
 Exit codes (stable, for scripts):
 
@@ -51,6 +54,9 @@ Exit codes (stable, for scripts):
   tool layer failure); fix the cause, then ``automa run`` again
 * 8 — ``automa bench run``: the benchmark ran and was recorded, but its success
   criteria were not all met
+* 9 — ``automa self next``: the roadmap has no open item (``[ ]``/``[~]``) left;
+  items waiting for the owner (``[!]``) are listed
+* 10 — ``automa self next``: the roadmap is missing, unreadable or ambiguous
 * 130 — interrupted (Ctrl+C); the project is ``paused`` and can be resumed
 """
 
@@ -167,6 +173,15 @@ from automa.reviews import (
 )
 from automa.roles import RoleError, RoleRegistry
 from automa.router import Router, RouteReason, TierEvidence
+from automa.selfdev import (
+    ItemStatus,
+    RoadmapError,
+    RoadmapItem,
+    build_goal,
+    next_item,
+    read_roadmap,
+    visible,
+)
 from automa.skills import (
     Skill,
     SkillError,
@@ -206,6 +221,8 @@ EXIT_PROVIDER = 5
 EXIT_TASKS_FAILED = 6
 EXIT_PAUSED = 7
 EXIT_BENCH_FAILED = 8
+EXIT_SELF_NOTHING_OPEN = 9
+EXIT_ROADMAP_INVALID = 10
 EXIT_INTERRUPTED = 130
 
 # Exit code of each way a run can end (see the module docstring).
@@ -258,6 +275,11 @@ finance_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(finance_app, name="finance")
+self_app = typer.Typer(
+    help="Self-development: Automa's own ROADMAP.md as a project (read-only for now).",
+    no_args_is_help=True,
+)
+app.add_typer(self_app, name="self")
 
 DEFAULT_SUITE_DIR = Path("benchmarks")
 RESULTS_DIRNAME = "results"
@@ -3505,6 +3527,70 @@ def quality_sync(
             + (f"; {failed} failed" if failed else "")
         )
     raise typer.Exit(EXIT_USER if failed else EXIT_OK)
+
+
+# -- self-development ------------------------------------------------------------
+
+DEFAULT_ROADMAP = Path("ROADMAP.md")
+WAITING_PREVIEW_CHARS = 100
+
+
+def _roadmap_item_json(item: RoadmapItem) -> dict[str, object]:
+    return {
+        "line": item.line,
+        "milestone": visible(item.milestone),
+        "status": item.status.name.lower(),
+        "text": visible(item.text),
+    }
+
+
+@self_app.command("next")
+def self_next(
+    roadmap_path: Annotated[
+        Path, typer.Option("--roadmap", help="The roadmap file (default: ./ROADMAP.md).")
+    ] = DEFAULT_ROADMAP,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+) -> None:
+    """Show the next roadmap item (first [ ] or [~]; [!] skipped) and its goal text.
+
+    Read-only: needs no config or API key, makes no model call, creates nothing.
+    Exits 9 when no open item is left and 10 when the roadmap is missing or ambiguous.
+    """
+    try:
+        roadmap = read_roadmap(roadmap_path)
+        item = next_item(roadmap)
+        goal = build_goal(item) if item is not None else None
+    except RoadmapError as e:
+        raise _fail(f"roadmap: {_safe(str(e))}", EXIT_ROADMAP_INVALID) from None
+    waiting = roadmap.by_status(ItemStatus.WAITING)
+    counts = {s.name.lower(): len(roadmap.by_status(s)) for s in ItemStatus}
+    if as_json:
+        out = {
+            "next": _roadmap_item_json(item) if item is not None else None,
+            "goal": goal,
+            "waiting": [_roadmap_item_json(w) for w in waiting],
+            "counts": counts,
+        }
+        typer.echo(json.dumps(out, ensure_ascii=False, indent=2))
+    else:
+        typer.echo(
+            "items: "
+            + ", ".join(f"{name} {n}" for name, n in counts.items())
+            + f" ({len(roadmap.items)} total)"
+        )
+        if item is None:
+            typer.echo("no open item left ([ ] or [~])")
+        else:
+            typer.echo(f"next: line {item.line} [{item.status.value}] {visible(item.milestone)}")
+            typer.echo(f"  {visible(item.text)}")
+        if waiting:
+            typer.echo(f"waiting for the owner ([!]): {len(waiting)}")
+            for w in waiting:
+                typer.echo(f"  line {w.line}: {_preview(visible(w.text), WAITING_PREVIEW_CHARS)}")
+        if goal is not None:
+            typer.echo("goal:")
+            typer.echo(goal)
+    raise typer.Exit(EXIT_OK if item is not None else EXIT_SELF_NOTHING_OPEN)
 
 
 def main() -> None:

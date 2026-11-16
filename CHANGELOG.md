@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-16 — M10: خودتوسعه (CLI فقط‌خواندنی)
+- **انجام‌شده:** فرمان `automa self next [--roadmap PATH] [--json]`: مورد بعدی ROADMAP (اولین `[ ]`/`[~]`، رد `[!]`)، فهرست موردهای `[!]` منتظر صاحب مخزن، شمارش وضعیت‌ها و متن هدف ساخته‌شده با `build_goal`. بدون config، کلید API، مدل یا ساخت فایل. کد خروج ۹ = موردی باز نمانده، ۱۰ = ROADMAP ناموجود/خراب (پیام فقط روی stderr). متن‌های ROADMAP در متن و JSON با escape کاراکترهای کنترلی/bidi. روی `ROADMAP.md` واقعی: ۴ باز، ۷۷ انجام‌شده، ۷ منتظر صاحب مخزن.
+- **فایل‌های اصلی:** `src/automa/cli.py`، `tests/test_cli_self.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D81).
+- **تست‌ها:** `pytest` ← ۳۱۱۷ تست سبز، ۲ رد شده (Docker واقعی)؛ `ruff check`، `ruff format --check` و `mypy` روی `cli.py` سبز. ۲۱ تست جدید: خروجی متن/JSON، رد `[!]`، کد ۹ با و بدون `--json`، ROADMAP خالی، ۴ حالت مبهم و ناموجود/symlink/غیر UTF-8 ← کد ۱۰، escape کنترلی/bidi و حفظ نیم‌فاصله، پیش‌نمایش موارد بلند، نبود provider و نبود فایل تازه، ROADMAP واقعی و یکتایی کدهای خروج.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و به `origin/main` برگردانده شد.
+- **قدم بعدی:** خودتوسعه (ساخت پروژه): `automa self new [--roadmap PATH]` روی یک کپی/worktree جدا.
+
 ## 2026-11-16 — M10: خودتوسعه (هسته)
 - **انجام‌شده:** مورد «Automa روی مخزن خودش به‌عنوان یک پروژه کار کنه» به پنج بخش شکسته شد (هسته؛ CLI فقط‌خواندنی `automa self next`؛ ساخت پروژه `automa self new`؛ پیشنهاد مورد تازه؛ اجرای واقعی با `[!]`) و بخش اول انجام شد: ماژول `automa.selfdev` با `parse_roadmap`/`read_roadmap` (فهرست checkbox زیر سرتیترهای milestone؛ هر حالت مبهم خطاست)، `next_item` (همان قانون `CLAUDE.md`: اولین `[ ]`/`[~]`، رد `[!]`) و `build_goal` (متن هدف پروژه برای همان یک مورد + ۸ قانون قطعی مخزن؛ متن مورد به‌عنوان داده با کاراکترهای کنترلی/bidi آشکار، زیر سقف ۱۰٬۰۰۰ نویسهٔ هدف). روی `ROADMAP.md` واقعی ۸۴ مورد خوانده می‌شود.
 - **فایل‌های اصلی:** `src/automa/selfdev.py` (جدید)، `tests/test_selfdev.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D80).
