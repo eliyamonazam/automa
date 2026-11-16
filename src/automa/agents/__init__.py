@@ -11,6 +11,14 @@ from automa.agents.executive import (
     parse_questions,
     plan_project,
 )
+from automa.agents.proposer import (
+    ProposalAgent,
+    ProposalError,
+    ProposalFailed,
+    ProposalRun,
+    ProposalSettings,
+    proposal_digest,
+)
 from automa.agents.reviewer import (
     Proposal,
     Review,
@@ -35,6 +43,12 @@ from automa.agents.verifier import (
 from automa.agents.worker import WorkerAgent, WorkerSettings, task_message
 
 __all__ = [
+    "proposal_digest",
+    "ProposalSettings",
+    "ProposalRun",
+    "ProposalFailed",
+    "ProposalError",
+    "ProposalAgent",
     "Clarification",
     "Evaluation",
     "ExecutiveAgent",
