@@ -438,8 +438,8 @@ def test_cli_provider_only_reaches_a_gateway() -> None:
         if k.arg == "provider" and isinstance(k.value, ast.Name)
     }
     assert len(bench_args) == 1
-    # one guarded gateway per command that calls a model (``new``, ``run`` and
-    # ``review run``) …
+    # one guarded gateway per model-calling path: Executive planning (shared by ``new``
+    # and ``self new`` via ``_plan_with_executive``), ``run`` and ``review run`` …
     assert len(gateway_calls) == 3
     # … and every read of ``provider`` is exactly the argument of such a call
     gateway_args = {id(a) for c in gateway_calls for a in c.args}

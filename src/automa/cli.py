@@ -69,7 +69,7 @@ import unicodedata
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, NamedTuple
 
 import typer
 from pydantic import ValidationError
@@ -182,6 +182,7 @@ from automa.selfdev import (
     read_roadmap,
     visible,
 )
+from automa.selfdev_project import DEFAULT_ROADMAP_PATH, SnapshotError, create_selfdev_project
 from automa.skills import (
     Skill,
     SkillError,
@@ -276,7 +277,8 @@ finance_app = typer.Typer(
 )
 app.add_typer(finance_app, name="finance")
 self_app = typer.Typer(
-    help="Self-development: Automa's own ROADMAP.md as a project (read-only for now).",
+    help="Self-development: Automa's own ROADMAP.md as a project (on a snapshot; the "
+    "repository itself is never written).",
     no_args_is_help=True,
 )
 app.add_typer(self_app, name="self")
@@ -493,28 +495,55 @@ def new(
     if workflow_id is not None:
         _new_from_workflow(config, goal, project_id, workflow_id)
         return
-    settings = ExecutiveSettings()
-    try:
-        # Validate everything a model call needs *before* creating the project, so a
-        # missing key or tier never leaves an orphan project behind.
-        config.model_for(settings.tier)
-        provider = make_provider(config)
-        roles, _ = _roles_and_skills(config)
-        # A new project has no project memory yet: user preferences and lessons only.
-        prompt_memory = _prompt_memory(config, memory, None)
-    except (ConfigError, RoleError, SkillError, MemoryStoreError) as e:
-        raise _fail(str(e), EXIT_CONFIG) from None
+    prep = _prepare_executive(config, memory)
 
     store = ProjectStore.for_workspace(config.workspace)
     try:
         project = store.create(goal, project_id=project_id)
     except ProjectStoreError as e:
         raise _fail(str(e), EXIT_USER) from None
-    pid = project.id
-    typer.echo(f"project: {pid}")
-    typer.echo(f"memory: {_describe_prompt_memory(prompt_memory)}")
+    typer.echo(f"project: {project.id}")
+    typer.echo(f"memory: {_describe_prompt_memory(prep.memory)}")
     _print_suggestions(config, goal)
+    _plan_with_executive(config, store, project, prep, ask=ask)
 
+
+class _ExecutivePrep(NamedTuple):
+    """What an Executive call needs, validated before any project is created. The
+    provider inside is only ever unpacked to build a guarded ``LLMGateway``."""
+
+    settings: ExecutiveSettings
+    provider: Provider
+    roles: RoleRegistry
+    memory: MemoryContext | None
+
+
+def _prepare_executive(config: AutomaConfig, memory: bool | None) -> _ExecutivePrep:
+    """Validate everything an Executive call needs *before* a project is created, so a
+    missing key or tier never leaves an orphan project behind."""
+    settings = ExecutiveSettings()
+    try:
+        config.model_for(settings.tier)
+        roles, _ = _roles_and_skills(config)
+        # A new project has no project memory yet: user preferences and lessons only.
+        prompt_memory = _prompt_memory(config, memory, None)
+        # Built last; the provider goes straight into the tuple, never into a name here.
+        return _ExecutivePrep(settings, make_provider(config), roles, prompt_memory)
+    except (ConfigError, RoleError, SkillError, MemoryStoreError) as e:
+        raise _fail(str(e), EXIT_CONFIG) from None
+
+
+def _plan_with_executive(
+    config: AutomaConfig,
+    store: ProjectStore,
+    project: Project,
+    prep: _ExecutivePrep,
+    *,
+    ask: bool,
+) -> None:
+    """Clarify (optional) and plan ``project`` through a guarded gateway; print the plan."""
+    settings, provider, roles, prompt_memory = prep
+    pid = project.id
     events = store.events(pid)
     with CostLedger.for_workspace(config.workspace) as ledger:
         guard = BudgetGuard(config.limits, ledger, events=events)
@@ -3591,6 +3620,77 @@ def self_next(
             typer.echo("goal:")
             typer.echo(goal)
     raise typer.Exit(EXIT_OK if item is not None else EXIT_SELF_NOTHING_OPEN)
+
+
+@self_app.command("new")
+def self_new(
+    repo: Annotated[
+        Path, typer.Option("--repo", help="The git repository to snapshot (default: .).")
+    ] = Path("."),
+    ref: Annotated[
+        str, typer.Option("--ref", help="Commit or branch to snapshot (default: HEAD).")
+    ] = "HEAD",
+    roadmap_path: Annotated[
+        str,
+        typer.Option(
+            "--roadmap",
+            help="Roadmap path inside the snapshot, relative to the repository root "
+            "(default: ROADMAP.md).",
+        ),
+    ] = DEFAULT_ROADMAP_PATH,
+    project_id: Annotated[
+        str | None, typer.Option("--id", help="Project id (a-z, 0-9, '-'); default: generated.")
+    ] = None,
+    ask: Annotated[
+        bool,
+        typer.Option("--ask/--no-ask", help="Ask the Executive's clarifying questions first."),
+    ] = True,
+    memory: Annotated[
+        bool | None,
+        typer.Option(
+            "--memory/--no-memory",
+            help="Add memory to the system prompts as data; default: [memory] in_prompts.",
+        ),
+    ] = None,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Create a project for the next roadmap item on a snapshot of REPO at REF, and plan it.
+
+    The project's files/ is a copy of the tracked files of one commit (no .git, no
+    untracked or ignored files); the repository itself is never written. Planning is
+    the same as `automa new` (guarded gateway, BudgetGuard). Exits 9 when no open item
+    is left and 10 when the roadmap is missing or ambiguous; nothing is created then.
+    """
+    config = _load(config_path)
+    prep = _prepare_executive(config, memory)
+    store = ProjectStore.for_workspace(config.workspace)
+    try:
+        made = create_selfdev_project(
+            store, repo, roadmap_path=roadmap_path, ref=ref, project_id=project_id
+        )
+    except RoadmapError as e:
+        raise _fail(
+            f"roadmap: {_safe(str(e))}; nothing was created", EXIT_ROADMAP_INVALID
+        ) from None
+    except SnapshotError as e:
+        raise _fail(f"snapshot: {_safe(str(e))}; nothing was created", EXIT_USER) from None
+    except ProjectStoreError as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    if made is None:
+        typer.echo("no open item left ([ ] or [~]); nothing was created")
+        raise typer.Exit(EXIT_SELF_NOTHING_OPEN)
+    item, snap = made.item, made.snapshot
+    typer.echo(f"project: {made.project.id}")
+    typer.echo(f"item: line {item.line} [{item.status.value}] {visible(item.milestone)}")
+    typer.echo(f"  {_preview(visible(item.text), WAITING_PREVIEW_CHARS)}")
+    typer.echo(
+        f"snapshot: commit {snap.commit[:12]}, {snap.files} file(s), {snap.bytes} byte(s) "
+        "in files/ (the repository itself is not changed)"
+    )
+    typer.echo(f"memory: {_describe_prompt_memory(prep.memory)}")
+    _plan_with_executive(config, store, made.project, prep, ask=ask)
 
 
 def main() -> None:
