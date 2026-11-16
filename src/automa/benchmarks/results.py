@@ -88,6 +88,9 @@ class BenchmarkRunRecord(BaseModel):
     tasks_passed: list[str] = Field(default_factory=list)
     tasks_failed: list[str] = Field(default_factory=list)
     tasks_blocked: list[str] = Field(default_factory=list)
+    # SHA-256 of the roles and the skills they use (``skillset_fingerprint``, D89).
+    # ``None`` only in records written before it was recorded.
+    skills_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("schema_version")
     @classmethod
@@ -142,6 +145,7 @@ class BenchmarkRunRecord(BaseModel):
         tasks_passed: list[str],
         tasks_failed: list[str],
         tasks_blocked: list[str],
+        skills_fingerprint: str | None = None,
     ) -> BenchmarkRunRecord:
         return cls(
             benchmark_id=outcome.benchmark_id,
@@ -165,6 +169,7 @@ class BenchmarkRunRecord(BaseModel):
             tasks_passed=tasks_passed,
             tasks_failed=tasks_failed,
             tasks_blocked=tasks_blocked,
+            skills_fingerprint=skills_fingerprint,
         )
 
 

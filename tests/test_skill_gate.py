@@ -18,10 +18,29 @@ from automa.skill_gate import (
     SkillGateDecision,
     SkillGateError,
     SkillGatePolicy,
-    evaluate_skill_gate,
 )
+from automa.skill_gate import evaluate_skill_gate as _evaluate
 
 _ids = count()
+BASE_FP = "a" * 64
+CAND_FP = "b" * 64
+
+
+def _stamp(records: Any, fp: str) -> Any:
+    """Give unfingerprinted records of one side the side's skill set (D89)."""
+    if not isinstance(records, list):
+        return records
+    return [
+        r.model_copy(update={"skills_fingerprint": fp})
+        if isinstance(r, BenchmarkRunRecord) and r.skills_fingerprint is None
+        else r
+        for r in records
+    ]
+
+
+def evaluate_skill_gate(baseline: Any, candidate: Any, **kw: Any) -> SkillGateDecision:
+    """The gate with each side stamped as one distinct skill set."""
+    return _evaluate(_stamp(baseline, BASE_FP), _stamp(candidate, CAND_FP), **kw)
 
 
 def rec(bid: str = "cli-todo", ok: int = 2, n: int = 2, **over: Any) -> BenchmarkRunRecord:

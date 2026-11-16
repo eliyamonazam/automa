@@ -15,6 +15,8 @@ measurably better than runs *without* it (docs/ARCHITECTURE.md, "Skill Engine").
 * optionally, the candidate's mean cost per run may not exceed
   ``max_cost_ratio`` × the baseline's, per benchmark (``cost``).
 
+Each side must be exactly one skill set (one ``skills_fingerprint``, D89) and
+the two sides must differ; a record without a fingerprint cannot be compared.
 Records that cannot be compared fairly (different Automa versions, a benchmark
 whose budget, kind or number of checks changed, a project id used twice, a
 benchmark missing from one side) raise ``SkillGateError`` — the gate never
@@ -35,6 +37,7 @@ from automa.benchmarks.results import BenchmarkRunRecord
 DEFAULT_MIN_RUNS = 3
 MAX_MIN_RUNS = 50
 MAX_GATE_RECORDS = 1000  # per side
+FINGERPRINT_RE = r"^[0-9a-f]{64}$"
 
 
 class SkillGateError(ValueError):
@@ -123,6 +126,9 @@ class SkillGateDecision(BaseModel):
     reasons: list[GateReason]
     policy: SkillGatePolicy
     automa_version: str
+    # The one skill set of each side (``skillset_fingerprint``, D89); always different.
+    baseline_fingerprint: str = Field(pattern=FINGERPRINT_RE)
+    candidate_fingerprint: str = Field(pattern=FINGERPRINT_RE)
     comparisons: list[BenchmarkComparison]
 
     def event_data(self) -> dict[str, Any]:
@@ -133,6 +139,8 @@ class SkillGateDecision(BaseModel):
             "min_runs": self.policy.min_runs,
             "max_cost_ratio": self.policy.max_cost_ratio,
             "automa_version": self.automa_version,
+            "baseline_fingerprint": self.baseline_fingerprint,
+            "candidate_fingerprint": self.candidate_fingerprint,
             "benchmarks": [
                 {
                     "benchmark_id": c.benchmark_id,
@@ -157,6 +165,21 @@ def _check_records(records: Sequence[BenchmarkRunRecord], side: str) -> None:
     for r in records:
         if not isinstance(r, BenchmarkRunRecord):
             raise SkillGateError(f"{side} contains something that is not a benchmark run")
+
+
+def _side_fingerprint(records: Sequence[BenchmarkRunRecord], side: str) -> str:
+    """The single skill set of one side; unknown or mixed skill sets are errors (D89)."""
+    unknown = sorted(r.project_id for r in records if r.skills_fingerprint is None)
+    if unknown:
+        raise SkillGateError(
+            f"{side} runs without a skill-set fingerprint (recorded before D89): "
+            + ", ".join(unknown[:5])
+        )
+    fps = {r.skills_fingerprint for r in records if r.skills_fingerprint is not None}
+    if len(fps) != 1:
+        raise SkillGateError(f"{side} runs used {len(fps)} different skill sets")
+    (fp,) = fps
+    return fp
 
 
 def _group(records: Iterable[BenchmarkRunRecord]) -> dict[str, list[BenchmarkRunRecord]]:
@@ -211,6 +234,10 @@ def evaluate_skill_gate(
             "runs come from different Automa versions: " + ", ".join(sorted(versions))
         )
     (version,) = versions
+    base_fp = _side_fingerprint(baseline, "baseline")
+    cand_fp = _side_fingerprint(candidate, "candidate")
+    if base_fp == cand_fp:
+        raise SkillGateError("baseline and candidate runs used the same skill set")
 
     base_groups, cand_groups = _group(baseline), _group(candidate)
     if set(base_groups) != set(cand_groups):
@@ -269,5 +296,7 @@ def evaluate_skill_gate(
         reasons=reasons,
         policy=policy,
         automa_version=version,
+        baseline_fingerprint=base_fp,
+        candidate_fingerprint=cand_fp,
         comparisons=comparisons,
     )

@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-16 — M10: ساخت خودکار Skill (اجرای مقایسه‌ای، اثرانگشت و نسخهٔ نامزد)
+- **انجام‌شده:** مورد «اجرای مقایسه‌ای» به دو مورد شکسته شد و اولی انجام شد: ماژول خالص `automa.skill_variants` با `skillset_fingerprint` (SHA-256 نقش‌ها + متن Skillهای استفاده‌شده) و `with_candidate_skill` (افزودن نامزد فقط به‌عنوان متن به یک نقش، با بررسی دوبارهٔ ثابت ماندن policy). `run_benchmark` اثرانگشت را در فیلد تازهٔ `skills_fingerprint` رکورد ثبت می‌کند (رکوردهای قدیمی هنوز خوانده می‌شوند). `evaluate_skill_gate` رکورد بدون اثرانگشت، طرف قاطی و دو طرف یکسان را رد می‌کند و اثرانگشت‌ها را گزارش می‌دهد.
+- **فایل‌های اصلی:** `src/automa/skill_variants.py` (جدید)، `src/automa/skill_gate.py`، `src/automa/bench.py`، `src/automa/benchmarks/results.py`، `tests/test_skill_variants.py` (جدید)، `tests/test_skill_gate.py`، `tests/test_bench.py`، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D89).
+- **تست‌ها:** `pytest` ← ۳۵۱۶ تست سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI (`GITHUB_ACTIONS=true FORCE_COLOR=1`)؛ `ruff check`، `ruff format --check` و `mypy` روی ماژول‌های تغییرکرده سبز. ۱۹ تست جدید بدون مدل و شبکه.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود (HEAD جدا، به `origin/main` برگردانده شد) و وابستگی‌ها دوباره نصب شدند.
+- **قدم بعدی:** «ساخت خودکار Skill (اجرای مقایسه‌ای، اجراکننده)»: `run_skill_comparison` با خواندن نامزد از staging، اجرای N بار هر طرف و دادن رکوردها به دروازه.
+
 ## 2026-11-16 — رفع شکست CI (خارج از نقشه راه)
 - **مشکل:** از commit «M8: quality log in the CLI» (2026-11-14) همه اجراهای CI شکست می‌خوردن، در حالی که `pytest` محلی سبز بود. علت: GitHub Actions متغیر `GITHUB_ACTIONS` رو تنظیم می‌کنه و Typer/Rich با دیدنش رنگ ANSI رو اجباری می‌کنه؛ کدهای رنگ بین کاراکترهای خروجی `--help` قرار می‌گیرن (`-` + `-role`) و بررسی‌هایی مثل `"--role" in output` فقط در CI رد می‌شدن. ۳ تست درگیر: `test_quality_help_lists_sync`، `test_help_lists_estimate`، `test_run_help_lists_router_options`.
 - **رفع:** `tests/conftest.py` جدید که قبل از import شدن CLI متغیرهای رنگ (`GITHUB_ACTIONS`، `FORCE_COLOR`، `PY_COLORS`، `TTY_COMPATIBLE`) رو پاک و `NO_COLOR=1`، `TERM=dumb` رو تنظیم می‌کنه. هیچ کد اصلی تغییر نکرد.

@@ -8,7 +8,8 @@ Flow of ``run_benchmark`` (see D27):
 3. the ``Orchestrator`` runs the plan with ``max_attempts`` from the benchmark;
 4. the benchmark's success criteria are evaluated on the project's ``files/``
    with ``evaluate_benchmark`` (deterministic checks only, whatever the stop);
-5. a ``BenchmarkRunRecord`` is returned (the caller writes it).
+5. a ``BenchmarkRunRecord`` is returned (the caller writes it); it carries the
+   ``skillset_fingerprint`` of the roles and skills the run used (D89).
 
 Every model call goes through one ``LLMGateway`` + ``BudgetGuard`` whose limits
 are ``benchmark_limits``: the project cap is the *smaller* of the user's cap and
@@ -43,6 +44,7 @@ from automa.orchestrator import Orchestrator, OrchestratorSettings, StopReason
 from automa.project import ProjectStatus, ProjectStore
 from automa.quality import QualityLog
 from automa.roles import RoleRegistry
+from automa.skill_variants import skillset_fingerprint
 from automa.skills import SkillRegistry
 
 Clock = Callable[[], datetime]
@@ -130,6 +132,8 @@ def run_benchmark(
     no record is produced: an interrupted run is not a measurement).
     """
     clock = clock or _utc_now
+    # Computed before the project exists: the record says which skill set ran (D89).
+    fingerprint = skillset_fingerprint(roles, skills)
     started = clock()
     pid = project_id or benchmark_project_id(benchmark.id, started)
     store.create(benchmark.goal, project_id=pid)
@@ -199,6 +203,7 @@ def run_benchmark(
         tasks_passed=passed,
         tasks_failed=failed,
         tasks_blocked=blocked,
+        skills_fingerprint=fingerprint,
     )
     events.emit(
         Event(

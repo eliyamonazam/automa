@@ -714,3 +714,31 @@ def test_broken_workspace_skill_is_config_error_before_anything(env: Env) -> Non
     assert r.exit_code == cli.EXIT_CONFIG, r.output
     assert "workspace skills" in r.output
     assert env.projects() == [] and env.provider.requests == []
+
+
+def test_record_carries_the_skillset_fingerprint(env: Env) -> None:
+    # D89: each record says which roles + skills it ran with, so sides never mix.
+    from automa.skill_variants import skillset_fingerprint
+
+    env.provider.push(json.dumps({"questions": []}), json.dumps(PLAN), *build_attempt())
+    r = env.bench(BID)
+    assert r.exit_code == cli.EXIT_OK, r.output
+    rec = env.record()
+    config = cli._load(env.config)
+    roles, skills = cli._roles_and_skills(config)
+    assert rec.skills_fingerprint == skillset_fingerprint(roles, skills)
+    data = json.loads(env.results_files()[0].read_text(encoding="utf-8"))
+    assert data["skills_fingerprint"] == rec.skills_fingerprint
+
+
+def test_old_records_without_fingerprint_still_load(tmp_path: Path) -> None:
+    rec = _record()
+    data = rec.model_dump(mode="json")
+    data.pop("skills_fingerprint")
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert load_result(path).skills_fingerprint is None
+    with pytest.raises(ValidationError):
+        _record(skills_fingerprint="xyz")
+    with pytest.raises(ValidationError):
+        _record(skills_fingerprint="A" * 64)
