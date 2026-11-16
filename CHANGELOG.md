@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-16 — M10: خودتوسعه (هسته)
+- **انجام‌شده:** مورد «Automa روی مخزن خودش به‌عنوان یک پروژه کار کنه» به پنج بخش شکسته شد (هسته؛ CLI فقط‌خواندنی `automa self next`؛ ساخت پروژه `automa self new`؛ پیشنهاد مورد تازه؛ اجرای واقعی با `[!]`) و بخش اول انجام شد: ماژول `automa.selfdev` با `parse_roadmap`/`read_roadmap` (فهرست checkbox زیر سرتیترهای milestone؛ هر حالت مبهم خطاست)، `next_item` (همان قانون `CLAUDE.md`: اولین `[ ]`/`[~]`، رد `[!]`) و `build_goal` (متن هدف پروژه برای همان یک مورد + ۸ قانون قطعی مخزن؛ متن مورد به‌عنوان داده با کاراکترهای کنترلی/bidi آشکار، زیر سقف ۱۰٬۰۰۰ نویسهٔ هدف). روی `ROADMAP.md` واقعی ۸۴ مورد خوانده می‌شود.
+- **فایل‌های اصلی:** `src/automa/selfdev.py` (جدید)، `tests/test_selfdev.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D80).
+- **تست‌ها:** `pytest` ← ۳۰۹۶ تست سبز، ۲ رد شده (Docker واقعی)؛ `ruff check`، `ruff format --check` و `mypy` روی `selfdev.py` سبز. ۴۶ تست جدید بدون مدل و بدون شبکه: نمونهٔ کامل، `[X]`، CRLF، code fence، ۱۱ حالت مبهم، خطا بدون تکرار متن مورد، فایل ناموجود/symlink/پوشه/غیر UTF-8/بزرگ، نبودن نوشتن، ROADMAP واقعی مخزن، متن هدف و قوانین، escape، نام مخزن نامعتبر، سقف طول، و نبودن وابستگی به شبکه/مدل/BudgetGuard/ابزارها.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود (HEAD جدا، به `origin/main` برگردانده شد). وابستگی‌ها دوباره نصب شدند.
+- **قدم بعدی:** خودتوسعه (CLI فقط‌خواندنی): `automa self next [--roadmap PATH] [--json]`.
+
 ## 2026-11-16 — M9: اعلان (هسته)
 - **انجام‌شده:** مورد «اعلان (تلگرام یا ایمیل)» به دو بخش شکسته شد: هسته (این اجرا) و «سرویس واقعی و اتصال» با `[!]`. ماژول جدید `automa.notify`: مدل `Notification` (نوع `approval_pending`/`run_finished`، شناسهٔ پروژهٔ معتبر، عنوان یک‌خطی ≤۱۲۰ و متن ≤۳۰۰۰ نویسه، کاراکترهای کنترلی/bidi به شکل آشکار)، پروتکل `Notifier`، `FakeNotifier`، `approval_notification` (شناسه‌ها، ابزار، ریسک، دلیل Policy و فرمان `automa approve` — بدون آرگومان‌ها)، `run_notification` (وضعیت، دلیل توقف، شمارش وظایف، هزینه — بدون `detail`) و `deliver` که هیچ‌وقت برای شکست کانال استثنا نمی‌دهد و فقط نام نوع خطا را برمی‌گرداند. Policy، Approval Gate و BudgetGuard دست نخوردند.
 - **فایل‌های اصلی:** `src/automa/notify.py` (جدید)، `tests/test_notify.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D79).
