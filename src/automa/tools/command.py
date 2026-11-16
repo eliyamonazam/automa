@@ -28,7 +28,7 @@ import signal
 import subprocess
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import IO, ClassVar
 
@@ -285,6 +285,71 @@ def check_docker(sandbox: DockerSandbox, *, timeout_s: float = DOCKER_CHECK_TIME
         tail = done.stderr.decode("utf-8", "replace").strip()[-_CHECK_OUTPUT_CHARS:]
         raise SandboxError("docker daemon is not available" + (f": {tail}" if tail else ""))
     return out[:_CHECK_OUTPUT_CHARS]
+
+
+# -- read-only git for repository snapshots (D82) -----------------------------------
+# Not a tool: no model ever reaches it. It lives here so that this module stays the
+# only place in Automa that starts processes.
+
+GIT_READ_SUBCOMMANDS = frozenset({"rev-parse", "ls-tree", "cat-file"})
+GIT_READ_TIMEOUT_S = 60.0
+
+
+class GitReadError(RuntimeError):
+    """A read-only git command could not run or failed."""
+
+
+def git_env(parent: dict[str, str] | None = None) -> dict[str, str]:
+    """A minimal environment for git: no outer ``GIT_*``, no system/global config."""
+    source = os.environ if parent is None else parent
+    return {
+        "PATH": source.get("PATH") or DEFAULT_PATH,
+        "LC_ALL": "C",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+    }
+
+
+def run_git_read(
+    repo: Path,
+    args: Sequence[str],
+    *,
+    stdin: bytes | None = None,
+    timeout_s: float = GIT_READ_TIMEOUT_S,
+) -> bytes:
+    """Run one read-only git subcommand (``GIT_READ_SUBCOMMANDS``) in ``repo``.
+
+    No shell, minimal environment (``git_env``), fsmonitor off; returns stdout.
+    Raises ``GitReadError`` for another subcommand, a missing git, a timeout or a
+    non-zero exit (stderr is not repeated).
+    """
+    if not args or args[0] not in GIT_READ_SUBCOMMANDS:
+        raise GitReadError("git subcommand not allowed")
+    env = git_env()
+    argv = ["git", "--no-pager", "-c", "core.fsmonitor=false", "-C", str(repo), *args]
+    try:
+        done = subprocess.run(  # noqa: S603 - argv list, no shell
+            argv,
+            env=env,
+            input=stdin or b"",
+            capture_output=True,
+            shell=False,
+            close_fds=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except FileNotFoundError:
+        raise GitReadError("git is not installed") from None
+    except subprocess.TimeoutExpired:
+        raise GitReadError(f"git {args[0]} timed out") from None
+    except (OSError, subprocess.SubprocessError) as e:
+        raise GitReadError(f"cannot run git: {e.__class__.__name__}") from None
+    if done.returncode != 0:
+        raise GitReadError(f"git {args[0]} failed (exit {done.returncode})")
+    return done.stdout
 
 
 def _remove_container(sandbox: DockerSandbox, name: str) -> None:

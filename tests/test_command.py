@@ -441,3 +441,47 @@ def test_command_never_uses_shell() -> None:
             assert isinstance(node.value, ast.Constant) and node.value.value is False
         if isinstance(node, ast.keyword) and node.arg == "env":
             assert isinstance(node.value, ast.Name) and node.value.id == "env"
+
+
+# -- read-only git runner (D82) ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "args",
+    [(), ("push",), ("fetch",), ("config", "x"), ("checkout",), ("-c", "a=b"), ("archive",)],
+)
+def test_run_git_read_refuses_other_subcommands(tmp_path: Path, args: tuple[str, ...]) -> None:
+    from automa.tools.command import GitReadError, run_git_read
+
+    with pytest.raises(GitReadError, match="not allowed"):
+        run_git_read(tmp_path, args)
+
+
+def test_git_env_is_minimal_and_drops_secrets() -> None:
+    from automa.tools.command import git_env
+
+    env = git_env(
+        {
+            "PATH": "/bin",
+            "ANTHROPIC_API_KEY": "sk-x",
+            "GIT_DIR": "/elsewhere",
+            "GIT_SSH_COMMAND": "evil",
+            "HOME": "/root",
+        }
+    )
+    assert env["PATH"] == "/bin"
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1" and env["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert not {"ANTHROPIC_API_KEY", "GIT_DIR", "GIT_SSH_COMMAND", "HOME"} & set(env)
+    assert git_env({})["PATH"]
+
+
+def test_run_git_read_failure_hides_stderr(tmp_path: Path) -> None:
+    import shutil
+
+    from automa.tools.command import GitReadError, run_git_read
+
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    with pytest.raises(GitReadError, match=r"^git rev-parse failed \(exit \d+\)$"):
+        run_git_read(tmp_path, ("rev-parse", "--verify", "HEAD"))
