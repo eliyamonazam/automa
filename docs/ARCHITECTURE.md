@@ -166,6 +166,9 @@ Skillها با قالب استاندارد `SKILL.md` (frontmatter + دستور�
 
 `server.py` (D78) سرور محلی `automa web [--host] [--port]` با `http.server` (`ThreadingHTTPServer`): فقط روی IP loopback (پیش‌فرض `127.0.0.1:8765`؛ نام میزبان، حتی `localhost`، و نشانی غیر loopback قبل از bind رد)، فقط `GET`/`HEAD` (هر روش دیگر `405` با `Allow`)، سرتیتر `Host` باید دقیقاً `127.0.0.1:<port>` یا `localhost:<port>` باشد وگرنه `421` (محافظ DNS rebinding)، و روی هر پاسخ CSP با `frame-ancestors 'none'`، `X-Frame-Options: DENY`، `nosniff`، `no-store`، `no-referrer`. مسیرها: `/` و `/projects/<id>` (شناسهٔ نامعتبر یا ناموجود ← `404`، پروژهٔ خراب ← `500`). منطق در `WebApp.handle` بدون سوکت قابل‌تست است. خرج در هر درخواست از Ledger با `read_only=True` خوانده می‌شود؛ نبود Ledger = صفر (ساخته نمی‌شود) و Ledger خراب/symlink خط خطا. خطوط لاگ با `visible()` روی stderr.
 
+### اعلان (`src/automa/notify.py`، D79)
+فقط هسته، بدون کانال واقعی. `approval_notification` و `run_notification` از `ApprovalRequest`/`RunReport` یک `Notification` کوچک می‌سازند: فقط شناسه‌ها، نام ابزار، وضعیت‌ها، شمارش‌ها، هزینه و فرمان ترمینال — هرگز آرگومان ابزار یا `detail` اجرا؛ متن با نمایش آشکار کاراکترهای کنترلی/bidi و سقف طول. کانال یک `Notifier` است (فعلاً فقط `FakeNotifier`)؛ `deliver` شکست کانال را با نام نوع خطا گزارش می‌کند و هرگز استثنا نمی‌دهد. اعلان هیچ تأییدی ثبت نمی‌کند. انتخاب تلگرام/ایمیل و اتصال به `automa run` منتظر تصمیم صاحب مخزن.
+
 ## فناوری‌ها
 
 | بخش | انتخاب | دلیل |

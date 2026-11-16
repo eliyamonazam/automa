@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-16 — M9: اعلان (هسته)
+- **انجام‌شده:** مورد «اعلان (تلگرام یا ایمیل)» به دو بخش شکسته شد: هسته (این اجرا) و «سرویس واقعی و اتصال» با `[!]`. ماژول جدید `automa.notify`: مدل `Notification` (نوع `approval_pending`/`run_finished`، شناسهٔ پروژهٔ معتبر، عنوان یک‌خطی ≤۱۲۰ و متن ≤۳۰۰۰ نویسه، کاراکترهای کنترلی/bidi به شکل آشکار)، پروتکل `Notifier`، `FakeNotifier`، `approval_notification` (شناسه‌ها، ابزار، ریسک، دلیل Policy و فرمان `automa approve` — بدون آرگومان‌ها)، `run_notification` (وضعیت، دلیل توقف، شمارش وظایف، هزینه — بدون `detail`) و `deliver` که هیچ‌وقت برای شکست کانال استثنا نمی‌دهد و فقط نام نوع خطا را برمی‌گرداند. Policy، Approval Gate و BudgetGuard دست نخوردند.
+- **فایل‌های اصلی:** `src/automa/notify.py` (جدید)، `tests/test_notify.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D79).
+- **تست‌ها:** `pytest` ← ۳۰۵۰ تست سبز، ۲ رد شده (Docker واقعی)؛ `ruff check`، `ruff format --check` و `mypy` روی `notify.py` سبز. ۳۹ تست جدید بدون شبکه و بدون مدل: پاک‌سازی متن و نیم‌فاصله، سقف طول، شناسهٔ نامعتبر، نبودن آرگومان/راز/`detail` در متن، فهرست محدود وظایف، شکست کانال بدون متن خطا، عبور `KeyboardInterrupt`، Notifier با نام نامعتبر صدا زده نمی‌شود، و نبودن وابستگی شبکه/BudgetGuard در ماژول.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود (HEAD جدا، به `origin/main` برگردانده شد). وابستگی‌ها دوباره نصب شدند.
+- **قدم بعدی:** موردهای باقی‌ماندهٔ M9 همه `[!]` هستند؛ قدم بعدی M10: «Automa روی مخزن خودش به‌عنوان یک پروژه کار کنه» (احتمالاً اول شکستن به بخش‌های کوچک‌تر).
+
 ## 2026-11-15 — M9: رابط وب (سرور فقط‌خواندنی `automa web`)
 - **انجام‌شده:** فرمان `automa web [--host] [--port N]` و ماژول `automa.webui.server` با `http.server` کتابخانهٔ استاندارد: فقط روی IP loopback (پیش‌فرض `http://127.0.0.1:8765/`؛ `0.0.0.0`، نشانی شبکه و نام میزبان قبل از bind رد)، فقط `GET`/`HEAD` (بقیه `405`)، بررسی دقیق سرتیتر `Host` (`421` در برابر DNS rebinding)، سرتیترهای امنیتی روی هر پاسخ (CSP با `frame-ancestors 'none'`، `X-Frame-Options: DENY`، `nosniff`، `no-store`، `no-referrer`)، خرج از Ledger با `read_only` (نبودش = صفر و ساخته نمی‌شود؛ خراب/symlink = خط خطا)، شناسهٔ پروژهٔ نامعتبر/ناموجود `404`، لاگ امن روی stderr. تأیید/رد همچنان فقط از ترمینال. Policy، Approval Gate و BudgetGuard دست نخوردند.
 - **فایل‌های اصلی:** `src/automa/webui/server.py` (جدید)، `src/automa/cli.py` (فرمان `web`)، `tests/test_webui_server.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D78).
