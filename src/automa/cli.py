@@ -198,6 +198,7 @@ from automa.selfdev_project import (
     create_selfdev_project,
     read_commit_texts,
 )
+from automa.selfdev_proposals import ProposalDecision as ItemProposalDecision
 from automa.selfdev_proposals import ProposalSet, ProposalStore, ProposalStoreError
 from automa.skills import (
     Skill,
@@ -3850,6 +3851,189 @@ def self_propose(
         "nothing was written to the repository; to use a proposal, add its line to "
         f"{visible(roadmap_path)} by hand"
     )
+
+
+def _selfdev_store(config: AutomaConfig) -> ProposalStore:
+    return ProposalStore.for_workspace(config.workspace)
+
+
+def _item_decisions_json(decisions: dict[int, ItemProposalDecision]) -> dict[str, Any]:
+    return {
+        str(n): {"status": d.status.value, "decided_at": d.decided_at.isoformat()}
+        for n, d in sorted(decisions.items())
+    }
+
+
+def _proposal_counts(pset: ProposalSet, decisions: dict[int, ItemProposalDecision]) -> str:
+    accepted = sum(1 for d in decisions.values() if d.status.value == "accepted")
+    rejected = len(decisions) - accepted
+    pending = len(pset.proposals) - len(decisions)
+    return f"{pending} pending, {accepted} accepted, {rejected} rejected"
+
+
+@self_app.command("proposals")
+def self_proposals(
+    set_id: Annotated[
+        str | None,
+        typer.Argument(help="A proposal set to show in full; default: list every set."),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """List the stored proposal sets, or show one set: every proposal with its number,
+    decision and the exact ROADMAP line. Read-only: no API key, no model call, no files
+    written, and the repository is never read or written."""
+    config = _load(config_path)
+    store = _selfdev_store(config)
+    try:
+        if set_id is None:
+            sets = store.all()
+            listed = [(s, store.decisions(s.id)) for s in sets]
+        else:
+            pset = store.get(set_id)
+            decisions = store.decisions(pset.id)
+    except ProposalStoreError as e:
+        raise _fail(f"proposals: {_safe(str(e))}", EXIT_USER) from None
+    if set_id is None:
+        if as_json:
+            out: Any = [
+                {**_proposal_set_json(s), "decisions": _item_decisions_json(d)} for s, d in listed
+            ]
+            typer.echo(json.dumps(out, ensure_ascii=False, indent=2))
+            return
+        if not listed:
+            typer.echo("no proposal sets yet; make one with: automa self propose")
+            return
+        for s, d in listed:
+            typer.echo(
+                f"{s.id}  {s.saved_at:%Y-%m-%d %H:%M}  commit {(s.commit or '-')[:12]}  "
+                f"{len(s.proposals)} proposal(s): {_proposal_counts(s, d)}"
+            )
+        typer.echo("show one with: automa self proposals <set id>")
+        return
+    if as_json:
+        out = {**_proposal_set_json(pset), "decisions": _item_decisions_json(decisions)}
+        typer.echo(json.dumps(out, ensure_ascii=False, indent=2))
+        return
+    typer.echo(f"proposal set: {pset.id} (commit {(pset.commit or '-')[:12]})")
+    typer.echo(f"saved: {pset.saved_at.isoformat()}; {_proposal_counts(pset, decisions)}")
+    if not pset.proposals:
+        typer.echo("no new item proposed")
+    for n, p in enumerate(pset.proposals, start=1):
+        state = decisions[n].status.value if n in decisions else "pending"
+        typer.echo(f"{n}. [{_safe(p.milestone)}] {state}")
+        typer.echo(f"   {_safe(p.line)}")
+        if p.reason:
+            typer.echo(f"   why: {_safe(p.reason)}")
+    if any(n not in decisions for n in range(1, len(pset.proposals) + 1)):
+        typer.echo(
+            f"decide with: automa self accept {pset.id} N... / automa self reject {pset.id} N..."
+        )
+
+
+def _self_decide(
+    set_id: str, numbers: list[int], *, accept: bool, yes: bool, config_path: Path | None
+) -> None:
+    config = _load(config_path)
+    store = _selfdev_store(config)
+    try:
+        pset = store.get(set_id)
+        decisions = store.decisions(pset.id)
+    except ProposalStoreError as e:
+        raise _fail(f"proposals: {_safe(str(e))}; nothing was changed", EXIT_USER) from None
+    count = len(pset.proposals)
+    if not numbers:
+        raise _fail("give at least one proposal number", EXIT_USER)
+    if len(set(numbers)) != len(numbers):
+        raise _fail("each proposal number may be given only once; nothing was changed", EXIT_USER)
+    bad = [n for n in numbers if not 1 <= n <= count]
+    if bad:
+        has = f"proposals 1..{count}" if count else "no proposals"
+        raise _fail(
+            f"proposal set {pset.id} has {has}; no proposal {', '.join(map(str, bad))}; "
+            "nothing was changed",
+            EXIT_USER,
+        )
+    decided = [n for n in numbers if n in decisions]
+    if decided:
+        states = ", ".join(f"{n} is {decisions[n].status.value}" for n in decided)
+        raise _fail(
+            f"already decided (a decision is final): proposal {states}; nothing was changed",
+            EXIT_USER,
+        )
+    typer.echo(f"proposal set: {pset.id} (commit {(pset.commit or '-')[:12]})")
+    for n in numbers:
+        p = pset.proposal(n)
+        typer.echo(f"  {n}. [{_safe(p.milestone)}]")
+        typer.echo(f"     {_safe(p.line)}")
+    what = "this proposal" if len(numbers) == 1 else f"these {len(numbers)} proposals"
+    question = (
+        f"Accept {what}? Nothing is written to ROADMAP.md; you add the line(s) by hand"
+        if accept
+        else f"Reject {what}? A decision is final"
+    )
+    if not yes and not typer.confirm(question, default=False):
+        raise _fail(f"not {'accepted' if accept else 'rejected'}; nothing was changed", EXIT_USER)
+    done: list[int] = []
+    for i, n in enumerate(numbers):
+        try:
+            decision = store.accept(pset.id, n) if accept else store.reject(pset.id, n)
+        except ProposalStoreError as e:
+            rest = numbers[i:]
+            raise _fail(
+                f"proposal {n}: {_safe(str(e))}\nnot decided: {', '.join(map(str, rest))}",
+                EXIT_USER,
+            ) from None
+        done.append(n)
+        typer.echo(f"{n}: {decision.status.value}")
+    if accept:
+        typer.echo(
+            "nothing was written to the repository; add each accepted line to ROADMAP.md "
+            "by hand, under its milestone:"
+        )
+        for n in done:
+            p = pset.proposal(n)
+            typer.echo(f"## {_safe(p.milestone)}")
+            typer.echo(_safe(p.line))
+
+
+_SET_ID_ARGUMENT = typer.Argument(
+    help="Proposal set id, as shown by: automa self proposals.", show_default=False
+)
+_ITEM_NUMBERS_ARGUMENT = typer.Argument(
+    help="Proposal number(s), as shown by: automa self proposals <set id>.", show_default=False
+)
+
+
+@self_app.command("accept")
+def self_accept(
+    set_id: Annotated[str, _SET_ID_ARGUMENT],
+    numbers: Annotated[list[int], _ITEM_NUMBERS_ARGUMENT],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Accept proposed roadmap items: the decision is recorded and the exact ROADMAP
+    lines are printed for you to add by hand. ROADMAP.md and the repository are never
+    written. A decision is final. No API key, no model call."""
+    _self_decide(set_id, numbers, accept=True, yes=yes, config_path=config_path)
+
+
+@self_app.command("reject")
+def self_reject(
+    set_id: Annotated[str, _SET_ID_ARGUMENT],
+    numbers: Annotated[list[int], _ITEM_NUMBERS_ARGUMENT],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Reject proposed roadmap items: only the decision is recorded. A decision is
+    final. No API key, no model call."""
+    _self_decide(set_id, numbers, accept=False, yes=yes, config_path=config_path)
 
 
 def main() -> None:

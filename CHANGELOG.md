@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-16 — M10: خودتوسعه (پیشنهاد مورد تازه، CLI بازبینی)
+- **انجام‌شده:** زیرفرمان‌های تازه: `automa self proposals [SET_ID] [--json]` (فهرست مجموعه‌ها با شمارش pending/accepted/rejected، یا نمایش کامل یک مجموعه با شماره، وضعیت، خط دقیق و دلیل؛ فقط‌خواندنی) و `automa self accept|reject SET_ID N... [--yes]` (همهٔ بررسی‌ها قبل از نوشتن، نمایش کامل و پرسش با پیش‌فرض «نه»، تصمیم یک‌باره در `ProposalStore`). پذیرفتن خط‌های `- [ ] …` را زیر `## <milestone>` برای افزودن دستی چاپ می‌کند. مخزن و ROADMAP هرگز خوانده/نوشته نمی‌شوند؛ بدون مدل. Policy، Approval Gate و BudgetGuard دست نخوردند.
+- **فایل‌های اصلی:** `src/automa/cli.py`، `tests/test_cli_self_proposals_review.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D87).
+- **تست‌ها:** `pytest` ← ۳۴۴۸ تست سبز، ۲ رد شده (Docker واقعی)؛ `ruff check`، `ruff format --check` و `mypy` روی `cli.py` سبز. ۴۵ تست جدید بدون مدل و شبکه.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود (HEAD جدا، به `origin/main` برگردانده شد) و وابستگی‌ها دوباره نصب شدند.
+- **قدم بعدی:** «ساخت خودکار Skill با شرط عملکرد بهتر روی benchmark» (احتمالاً اول شکستن به بخش‌های کوچک‌تر).
+
 ## 2026-11-16 — M10: خودتوسعه (پیشنهاد مورد تازه، CLI ساخت)
 - **انجام‌شده:** مورد «پیشنهاد مورد تازه، CLI» به دو مورد شکسته شد و اولی انجام شد: `automa self propose [--repo] [--ref] [--roadmap] [--vision] [--json]` ROADMAP و VISION را از blobهای خام یک commit می‌خواند (`read_commit_texts`، بدون نوشتن هیچ فایل)، با `ProposalAgent` پشت `LLMGateway` + BudgetGuard (شناسهٔ بودجهٔ `selfdev-proposals`) پیشنهاد می‌گیرد، در `ProposalStore` ذخیره می‌کند و هر پیشنهاد را با شماره و خط دقیق `- [ ] …` برای افزودن دستی چاپ می‌کند. همهٔ بررسی‌ها (tier، جای خالی store با `check_room` تازه، فایل‌ها، ROADMAP) قبل از ساخت provider و فراخوانی مدل. مخزن و ROADMAP هرگز نوشته نمی‌شوند. Policy، Approval Gate و BudgetGuard دست نخوردند.
 - **فایل‌های اصلی:** `src/automa/cli.py`، `src/automa/selfdev_project.py` (`read_commit_texts`)، `src/automa/selfdev_proposals.py` (`check_room`)، `tests/test_cli_self_propose.py` (جدید)، `tests/test_cli.py` (تست ساختاری gateway: ۳ ← ۴)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D86).
