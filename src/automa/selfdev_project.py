@@ -217,6 +217,60 @@ def snapshot_repo(repo: Path, dest: Path, *, ref: str = "HEAD") -> RepoSnapshot:
     return RepoSnapshot(commit=commit, files=len(entries), bytes=sum(e[3] for e in entries))
 
 
+MAX_TEXT_FILE_BYTES = 1024 * 1024
+
+
+class CommitTexts(BaseModel):
+    """UTF-8 text of a few tracked files of one commit (see ``read_commit_texts``)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    commit: str = Field(pattern=_SHA_RE.pattern)
+    texts: dict[str, str]
+
+
+def read_commit_texts(
+    repo: Path,
+    paths: list[str],
+    *,
+    ref: str = "HEAD",
+    max_bytes: int = MAX_TEXT_FILE_BYTES,
+) -> CommitTexts:
+    """Read the tracked text files ``paths`` of commit ``ref`` of ``repo`` (D86).
+
+    The same safety rules as ``snapshot_repo`` (the whole tree is listed and refused
+    on symlinks, submodules or unsafe paths; blobs are read raw, without filters) but
+    nothing is written anywhere. ``texts`` is keyed by the paths as given. A path that
+    is missing from the commit, larger than
+    ``max_bytes`` or not valid UTF-8 raises ``SnapshotError``.
+    """
+    if not paths:
+        raise SnapshotError("no files to read")
+    wanted = {p: _safe_path(p.encode("utf-8")) for p in paths}
+    repo_info = repo.resolve()
+    if not repo_info.is_dir():
+        raise SnapshotError("repository directory does not exist")
+    commit = _resolve_commit(repo_info, ref)
+    by_path = {entry[0]: entry for entry in _list_tree(repo_info, commit)}
+    entries = []
+    for path in dict.fromkeys(wanted.values()):
+        entry = by_path.get(path)
+        if entry is None:
+            raise SnapshotError(f"{visible(str(path))} is not a tracked file of the commit")
+        if entry[3] > max_bytes:
+            raise SnapshotError(f"{visible(str(path))} is larger than {max_bytes} bytes")
+        entries.append(entry)
+    decoded: dict[PurePosixPath, str] = {}
+    for (path, *_), data in zip(entries, _read_blobs(repo_info, entries), strict=True):
+        try:
+            decoded[path] = data.decode("utf-8")
+        except UnicodeDecodeError:
+            raise SnapshotError(f"{visible(str(path))} is not valid UTF-8") from None
+    # Keyed by the paths exactly as the caller gave them.
+    texts = {given: decoded[path] for given, path in wanted.items()}
+    return CommitTexts(commit=commit, texts=texts)
+
+
 def _roadmap_in(snapshot_dir: Path, roadmap_path: str) -> Path:
     path = _safe_path(roadmap_path.encode("utf-8"))
     return snapshot_dir.joinpath(*path.parts)

@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-16 — M10: خودتوسعه (پیشنهاد مورد تازه، CLI ساخت)
+- **انجام‌شده:** مورد «پیشنهاد مورد تازه، CLI» به دو مورد شکسته شد و اولی انجام شد: `automa self propose [--repo] [--ref] [--roadmap] [--vision] [--json]` ROADMAP و VISION را از blobهای خام یک commit می‌خواند (`read_commit_texts`، بدون نوشتن هیچ فایل)، با `ProposalAgent` پشت `LLMGateway` + BudgetGuard (شناسهٔ بودجهٔ `selfdev-proposals`) پیشنهاد می‌گیرد، در `ProposalStore` ذخیره می‌کند و هر پیشنهاد را با شماره و خط دقیق `- [ ] …` برای افزودن دستی چاپ می‌کند. همهٔ بررسی‌ها (tier، جای خالی store با `check_room` تازه، فایل‌ها، ROADMAP) قبل از ساخت provider و فراخوانی مدل. مخزن و ROADMAP هرگز نوشته نمی‌شوند. Policy، Approval Gate و BudgetGuard دست نخوردند.
+- **فایل‌های اصلی:** `src/automa/cli.py`، `src/automa/selfdev_project.py` (`read_commit_texts`)، `src/automa/selfdev_proposals.py` (`check_room`)، `tests/test_cli_self_propose.py` (جدید)، `tests/test_cli.py` (تست ساختاری gateway: ۳ ← ۴)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D86).
+- **تست‌ها:** `pytest` ← ۳۴۰۳ تست سبز، ۲ رد شده (Docker واقعی)؛ `ruff check` و `ruff format --check` سبز؛ `mypy` روی فایل‌های تغییرکرده سبز. ۴۹ تست جدید فقط با FakeProvider.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود (HEAD جدا، به `origin/main` برگردانده شد) و وابستگی‌ها دوباره نصب شدند. `mypy src` کامل یک خطای قدیمی در `benchmarks/report.py:230` دارد (پیش از این اجرا هم بود؛ CI آن را اجرا نمی‌کند).
+- **قدم بعدی:** «خودتوسعه (پیشنهاد مورد تازه، CLI بازبینی)»: نمایش/تأیید/رد مجموعه‌های پیشنهاد.
+
 ## 2026-11-16 — M10: خودتوسعه (پیشنهاد مورد تازه، Agent)
 - **انجام‌شده:** `ProposalAgent` در `automa.agents.proposer`: از VISION و ROADMAP (متن، معمولاً از snapshot) یک digest قطعی و محدود (`proposal_digest`: سقف ۴۸٬۰۰۰ نویسه، VISION ≤ ۱۲٬۰۰۰، کاهش پله‌ای جزئیات، escape تگ و کاراکترهای کنترلی/bidi) می‌سازد و از طریق `LLMGateway` با BudgetGuard (شناسهٔ بودجهٔ پیش‌فرض `selfdev-proposals`) پیشنهاد می‌گیرد؛ پاسخ نامعتبر/بریده‌شده با بازخورد حداکثر ۳ بار تکرار می‌شود، خطای بودجه/provider بدون تکرار بالا می‌رود، و نتیجه با `screen_proposals` روی ROADMAP کامل غربال و به‌صورت `ProposalRun` برگردانده می‌شود. همهٔ بررسی‌های ورودی قبل از فراخوانی مدل. Agent هیچ فایلی نمی‌نویسد. Policy، Approval Gate و BudgetGuard دست نخوردند.
 - **فایل‌های اصلی:** `src/automa/agents/proposer.py` (جدید)، `src/automa/agents/__init__.py`، `tests/test_proposer.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D85).

@@ -89,6 +89,15 @@ from automa.agents import (
     WorkerAgent,
     plan_project,
 )
+from automa.agents.proposer import (
+    DEFAULT_BUDGET_ID as PROPOSAL_BUDGET_ID,
+)
+from automa.agents.proposer import (
+    ProposalAgent,
+    ProposalError,
+    ProposalFailed,
+    ProposalSettings,
+)
 from automa.bench import run_benchmark
 from automa.benchmarks import (
     BenchmarkError,
@@ -110,7 +119,7 @@ from automa.config import (
     describe_parallel,
     load_config,
 )
-from automa.events import Event
+from automa.events import Event, JsonlEventLog
 from automa.finance import (
     ANOMALY_EVENT,
     Anomaly,
@@ -179,10 +188,17 @@ from automa.selfdev import (
     RoadmapItem,
     build_goal,
     next_item,
+    parse_roadmap,
     read_roadmap,
     visible,
 )
-from automa.selfdev_project import DEFAULT_ROADMAP_PATH, SnapshotError, create_selfdev_project
+from automa.selfdev_project import (
+    DEFAULT_ROADMAP_PATH,
+    SnapshotError,
+    create_selfdev_project,
+    read_commit_texts,
+)
+from automa.selfdev_proposals import ProposalSet, ProposalStore, ProposalStoreError
 from automa.skills import (
     Skill,
     SkillError,
@@ -3691,6 +3707,149 @@ def self_new(
     )
     typer.echo(f"memory: {_describe_prompt_memory(prep.memory)}")
     _plan_with_executive(config, store, made.project, prep, ask=ask)
+
+
+DEFAULT_VISION_PATH = "docs/VISION.md"
+# Events of proposal runs (budget warnings, selfdev.proposals_*): not a project's log.
+PROPOSAL_EVENTS = Path("selfdev") / "events.jsonl"
+
+
+def _proposal_set_json(pset: ProposalSet) -> dict[str, Any]:
+    return {
+        "id": pset.id,
+        "commit": pset.commit,
+        "roadmap_sha256": pset.roadmap_sha256,
+        "saved_at": pset.saved_at.isoformat(),
+        "dropped_duplicates": pset.dropped_duplicates,
+        "dropped_unknown_milestone": pset.dropped_unknown_milestone,
+        "proposals": [
+            {
+                "number": n,
+                "milestone": p.milestone,
+                "text": p.text,
+                "reason": p.reason,
+                "line": p.line,
+            }
+            for n, p in enumerate(pset.proposals, start=1)
+        ],
+    }
+
+
+def _proposal_set_lines(pset: ProposalSet) -> list[str]:
+    lines = [f"proposal set: {pset.id} (commit {(pset.commit or '-')[:12]})"]
+    if not pset.proposals:
+        lines.append("no new item proposed")
+    for n, p in enumerate(pset.proposals, start=1):
+        lines.append(f"{n}. [{p.milestone}]")
+        lines.append(f"   {p.line}")
+        if p.reason:
+            lines.append(f"   why: {p.reason}")
+    dropped = pset.dropped_duplicates + pset.dropped_unknown_milestone
+    if dropped:
+        lines.append(
+            f"dropped: {pset.dropped_duplicates} duplicate(s), "
+            f"{pset.dropped_unknown_milestone} with an unknown milestone"
+        )
+    return lines
+
+
+@self_app.command("propose")
+def self_propose(
+    repo: Annotated[
+        Path, typer.Option("--repo", help="The git repository to read (default: .).")
+    ] = Path("."),
+    ref: Annotated[
+        str, typer.Option("--ref", help="Commit or branch to read (default: HEAD).")
+    ] = "HEAD",
+    roadmap_path: Annotated[
+        str,
+        typer.Option(
+            "--roadmap",
+            help="Roadmap path in the commit, relative to the repository root "
+            "(default: ROADMAP.md).",
+        ),
+    ] = DEFAULT_ROADMAP_PATH,
+    vision_path: Annotated[
+        str,
+        typer.Option(
+            "--vision",
+            help="Vision path in the commit, relative to the repository root "
+            "(default: docs/VISION.md).",
+        ),
+    ] = DEFAULT_VISION_PATH,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Ask the model for new roadmap items (from VISION and ROADMAP of REPO at REF), and
+    store them as a proposal set.
+
+    Reads the two files from one commit (tracked blobs only; uncommitted changes are
+    not seen) and never writes the repository or ROADMAP.md: the printed lines are for
+    the owner to add by hand. One guarded model call path (BudgetGuard, budget id
+    "selfdev-proposals"). Exit codes: 2 config, 3 budget stop, 4 no valid reply,
+    5 provider error, 10 roadmap invalid, 1 other user errors (nothing stored then).
+    """
+    config = _load(config_path)
+    settings = ProposalSettings()
+    try:
+        config.model_for(settings.tier)
+    except ConfigError as e:
+        raise _fail(str(e), EXIT_CONFIG) from None
+    store = ProposalStore.for_workspace(config.workspace)
+    try:
+        store.check_room()
+    except ProposalStoreError as e:
+        raise _fail(f"proposals: {_safe(str(e))}; nothing was stored", EXIT_USER) from None
+    try:
+        read = read_commit_texts(repo, [roadmap_path, vision_path], ref=ref)
+    except SnapshotError as e:
+        raise _fail(f"repository: {_safe(str(e))}; nothing was stored", EXIT_USER) from None
+    roadmap_text, vision_text = read.texts[roadmap_path], read.texts[vision_path]
+    try:
+        parse_roadmap(roadmap_text)
+    except RoadmapError as e:
+        raise _fail(f"roadmap: {_safe(str(e))}; nothing was stored", EXIT_ROADMAP_INVALID) from None
+    try:
+        provider = make_provider(config)
+    except ConfigError as e:
+        raise _fail(str(e), EXIT_CONFIG) from None
+    events = JsonlEventLog(Path(config.workspace) / PROPOSAL_EVENTS)
+    with CostLedger.for_workspace(config.workspace) as ledger:
+        before = ledger.spent_nusd(project_id=PROPOSAL_BUDGET_ID)
+        guard = BudgetGuard(config.limits, ledger, events=events)
+        gateway = LLMGateway(config, provider, guard=guard)
+        agent = ProposalAgent(gateway, settings=settings, events=events)
+        try:
+            proposal_run = agent.propose(vision_text, roadmap_text)
+        except BudgetError as e:
+            detail = f" ({e.scope.value} cap)" if isinstance(e, BudgetExceeded) else ""
+            raise _fail(f"budget stop{detail}: {e}; nothing was stored", EXIT_BUDGET) from None
+        except ProposalFailed as e:
+            raise _fail(f"{e}\n{_safe(e.details)}\nnothing was stored", EXIT_PLANNING) from None
+        except ProposalError as e:
+            raise _fail(f"{_safe(str(e))}; nothing was stored", EXIT_USER) from None
+        except ProviderError as e:
+            raise _fail(f"provider error: {e}; nothing was stored", EXIT_PROVIDER) from None
+        finally:
+            spent = ledger.spent_nusd(project_id=PROPOSAL_BUDGET_ID) - before
+            if not as_json:
+                typer.echo(f"cost: {_usd(spent)}")
+    try:
+        pset = store.save(proposal_run.screened, roadmap_text=roadmap_text, commit=read.commit)
+    except ProposalStoreError as e:
+        raise _fail(f"proposals: {_safe(str(e))}; nothing was stored", EXIT_USER) from None
+    if as_json:
+        out = {**_proposal_set_json(pset), "attempts": proposal_run.attempts, "cost_nusd": spent}
+        typer.echo(json.dumps(out, ensure_ascii=False, indent=2))
+        return
+    for line in _proposal_set_lines(pset):
+        typer.echo(line)
+    typer.echo(
+        "nothing was written to the repository; to use a proposal, add its line to "
+        f"{visible(roadmap_path)} by hand"
+    )
 
 
 def main() -> None:

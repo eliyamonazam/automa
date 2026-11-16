@@ -475,6 +475,14 @@ class ProposalStore:
 
     # -- writing --------------------------------------------------------------
 
+    def check_room(self) -> None:
+        """Raise ``ProposalStoreError`` if ``save`` would be refused for lack of room or
+        an unreadable store. Callers run this *before* paying for a model call."""
+        with self._lock:
+            ids, _ = self._scan()
+            if len(ids) >= MAX_SETS:
+                raise ProposalStoreError(f"there are already {MAX_SETS} proposal sets")
+
     def save(
         self, screened: Screened, *, roadmap_text: str, commit: str | None = None
     ) -> ProposalSet:
