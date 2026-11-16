@@ -1,5 +1,11 @@
 # گزارش تغییرات
 
+## 2026-11-16 — رفع شکست CI (خارج از نقشه راه)
+- **مشکل:** از commit «M8: quality log in the CLI» (2026-11-14) همه اجراهای CI شکست می‌خوردن، در حالی که `pytest` محلی سبز بود. علت: GitHub Actions متغیر `GITHUB_ACTIONS` رو تنظیم می‌کنه و Typer/Rich با دیدنش رنگ ANSI رو اجباری می‌کنه؛ کدهای رنگ بین کاراکترهای خروجی `--help` قرار می‌گیرن (`-` + `-role`) و بررسی‌هایی مثل `"--role" in output` فقط در CI رد می‌شدن. ۳ تست درگیر: `test_quality_help_lists_sync`، `test_help_lists_estimate`، `test_run_help_lists_router_options`.
+- **رفع:** `tests/conftest.py` جدید که قبل از import شدن CLI متغیرهای رنگ (`GITHUB_ACTIONS`، `FORCE_COLOR`، `PY_COLORS`، `TTY_COMPATIBLE`) رو پاک و `NO_COLOR=1`، `TERM=dumb` رو تنظیم می‌کنه. هیچ کد اصلی تغییر نکرد.
+- **پیشگیری:** `CLAUDE.md` به‌روز شد: هر اجرا اول وضعیت CI آخرین commit رو چک می‌کنه و اگه قرمزه فقط اون رو درست می‌کنه؛ تست‌ها در حالت شبیه CI (`GITHUB_ACTIONS=true FORCE_COLOR=1 pytest`) هم اجرا می‌شن؛ بعد از push نتیجه CI بررسی می‌شه.
+- **تست‌ها:** `pytest` ← ۳۴۹۷ سبز، ۲ رد شده (معمولی و حالت شبیه CI)؛ `ruff check` و `ruff format --check` ← بدون خطا.
+
 ## 2026-11-16 — M10: ساخت خودکار Skill (دروازهٔ benchmark، هسته)
 - **انجام‌شده:** مورد «ساخت خودکار Skill با شرط عملکرد بهتر روی benchmark» به پنج مورد شکسته شد و اولی انجام شد: ماژول خالص `automa.skill_gate` با `evaluate_skill_gate` که نتیجه‌های benchmark بدون و با Skill نامزد را با حساب دقیق مقایسه می‌کند. قبول فقط با پوشش یکسان، حداقل اجرای کافی در هر طرف، بدون پسرفت در نرخ قبولی یا میانگین امتیاز روی **هر** benchmark، دست‌کم یک بهبود اکید و سقف اختیاری هزینه؛ مقایسهٔ ناعادلانه خطاست. بدون مدل، نوشتن یا نصب Skill.
 - **فایل‌های اصلی:** `src/automa/skill_gate.py` (جدید)، `tests/test_skill_gate.py` (جدید)، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D88).
