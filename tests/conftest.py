@@ -16,3 +16,12 @@ for _name in ("GITHUB_ACTIONS", "FORCE_COLOR", "PY_COLORS", "TTY_COMPATIBLE"):
 os.environ["NO_COLOR"] = "1"
 os.environ["TERM"] = "dumb"
 os.environ.setdefault("COLUMNS", "120")
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _instant_provider_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provider retry waits (D91) must never slow the suite down."""
+    monkeypatch.setattr("automa.llm.gateway._sleep", lambda _s: None)

@@ -327,10 +327,10 @@ def test_planning_failed(env: Env, repo: Path) -> None:
 
 
 def test_provider_error(env: Env, repo: Path) -> None:
-    env.provider.push(ProviderError("HTTP 502", status=502, retryable=True))
+    env.provider.push(*[ProviderError("HTTP 502", status=502, retryable=True)] * 4)
     r = self_new(env, repo, "--id", "self-1", "--no-ask")
     assert r.exit_code == cli.EXIT_PROVIDER
-    assert len(env.provider.requests) == 1
+    assert len(env.provider.requests) == 4  # 1 call + 3 retries (D91)
 
 
 def test_cost_is_recorded_for_the_project(env: Env, repo: Path) -> None:

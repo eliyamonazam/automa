@@ -354,7 +354,7 @@ def test_budget_stop_mid_retries_propagates(tmp_path: Path) -> None:
 
 
 def test_provider_error_propagates_without_retry(tmp_path: Path) -> None:
-    rig = Rig(tmp_path, [ProviderError("boom", retryable=True), VALID])
+    rig = Rig(tmp_path, [ProviderError("boom"), VALID])  # non-retryable: gateway retries (D91)
     with pytest.raises(ProviderError):
         rig.agent().plan("g", project_id="p1")
     assert len(rig.provider.requests) == 1

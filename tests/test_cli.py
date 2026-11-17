@@ -249,11 +249,11 @@ def test_new_clarify_planning_failed(env: Env) -> None:
 
 
 def test_new_provider_error(env: Env) -> None:
-    env.provider.push(ProviderError("HTTP 502", status=502, retryable=True))
+    env.provider.push(*[ProviderError("HTTP 502", status=502, retryable=True)] * 4)
     r = env.run("new", "goal", "--id", "p1", "--no-ask")
     assert r.exit_code == cli.EXIT_PROVIDER
     assert "HTTP 502" in r.output
-    assert len(env.provider.requests) == 1  # never retried
+    assert len(env.provider.requests) == 4  # 1 call + 3 retries, then it stops (D91)
     assert env.store.load("p1").status is ProjectStatus.NEW
     assert "cost: $0.0000" in r.output
 

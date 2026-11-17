@@ -13,14 +13,38 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from collections.abc import Sequence
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from automa.config import AutomaConfig, ModelPrice, Tier
-from automa.llm.provider import Provider
-from automa.llm.types import ChatRequest, LLMResult, Message, ToolSpec, Usage
+from automa.llm.provider import Provider, ProviderError
+from automa.llm.types import (
+    ChatRequest,
+    ChatResponse,
+    FinishReason,
+    LLMResult,
+    Message,
+    ToolSpec,
+    Usage,
+)
+
+# Indirection so tests can make retry waits instant.
+_sleep = time.sleep
+
+
+def _unanswered(request: ChatRequest, tier: Tier, estimate: CallEstimate) -> LLMResult:
+    """A placeholder result for a sent-but-unanswered call, charged at the worst case."""
+    response = ChatResponse(
+        model=request.model,
+        message=Message.assistant(""),
+        usage=Usage(input_tokens=0, output_tokens=0),
+        finish_reason=FinishReason.STOP,
+    )
+    return LLMResult(tier=tier, response=response, cost_usd=estimate.max_cost_usd)
+
 
 # Per-message framing overhead in tokens, and a deliberately pessimistic
 # characters-per-token ratio so the pre-call estimate errs on the high side.
@@ -122,7 +146,9 @@ class LLMGateway:
         """Build a gateway that talks to the configured OpenAI-compatible endpoint."""
         from automa.llm.openai_compat import OpenAICompatProvider
 
-        provider = OpenAICompatProvider(config.base_url, config.require_api_key())
+        provider = OpenAICompatProvider(
+            config.base_url, config.require_api_key(), timeout_s=config.provider.timeout_s
+        )
         return cls(config, provider, guard=guard)
 
     @property
@@ -169,14 +195,39 @@ class LLMGateway:
         tools: Sequence[ToolSpec] = (),
         context: CallContext | None = None,
     ) -> LLMResult:
-        """Run one chat completion at ``tier``. Raises if the guard refuses."""
+        """Run one chat completion at ``tier``. Raises if the guard refuses.
+
+        Transient provider failures are retried per ``config.provider`` (D91). Every
+        attempt is a separate call: authorized by the guard first (so a retry can
+        never exceed a cap) and then recorded or released.
+        """
         request = self.build_request(
             messages, tier=tier, max_tokens=max_tokens, temperature=temperature, tools=tools
         )
         estimate = self.estimate(request, tier, context or CallContext())
+        policy = self._config.provider
+        retry = 0
+        while True:
+            try:
+                return self._attempt(request, tier, estimate)
+            except ProviderError as e:
+                if not e.retryable or retry >= policy.max_retries:
+                    raise
+                retry += 1
+                _sleep(policy.delay(retry, e.retry_after_s))
+
+    def _attempt(self, request: ChatRequest, tier: Tier, estimate: CallEstimate) -> LLMResult:
         self._guard.authorize(estimate)
         try:
             response = self._provider.complete(request)
+        except ProviderError as e:
+            if e.maybe_billed:
+                # The request was sent and may have been charged: count the worst
+                # case rather than nothing, so the cap can never be undercut (D91).
+                self._guard.record(estimate, _unanswered(request, tier, estimate))
+            else:
+                self._guard.release(estimate)
+            raise
         except BaseException:
             self._guard.release(estimate)
             raise

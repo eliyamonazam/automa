@@ -152,6 +152,41 @@ class SandboxConfig(_Strict):
 MAX_PARALLEL = 8
 
 
+MAX_PROVIDER_RETRIES = 6
+MAX_RETRY_DELAY_S = 120.0
+
+
+class ProviderConfig(_Strict):
+    """``[provider]`` in automa.toml: retrying transient gateway failures (D91).
+
+    Only failures the provider marks retryable (timeouts, network errors, 408/409/
+    425/429/5xx) are retried, each retry is a new call authorized by the BudgetGuard,
+    and ``max_retries = 0`` turns retrying off. ``retry_delays_s[i]`` is the wait
+    before retry ``i + 1`` (the last value repeats); a gateway ``Retry-After`` hint
+    is honoured up to ``MAX_RETRY_DELAY_S``.
+    """
+
+    max_retries: int = Field(default=3, ge=0, le=MAX_PROVIDER_RETRIES)
+    retry_delays_s: tuple[float, ...] = Field(
+        default=(3.0, 10.0, 30.0), min_length=1, max_length=10
+    )
+    timeout_s: float = Field(default=180.0, gt=0, le=900)
+
+    @field_validator("retry_delays_s")
+    @classmethod
+    def _delays(cls, v: tuple[float, ...]) -> tuple[float, ...]:
+        if any(not (0 <= d <= MAX_RETRY_DELAY_S) for d in v):
+            raise ValueError(f"retry delays must be between 0 and {MAX_RETRY_DELAY_S:g} seconds")
+        return v
+
+    def delay(self, retry: int, hint: float | None = None) -> float:
+        """Seconds to wait before retry number ``retry`` (1-based)."""
+        base = self.retry_delays_s[min(retry, len(self.retry_delays_s)) - 1]
+        if hint is not None and hint > base:
+            return min(hint, MAX_RETRY_DELAY_S)
+        return base
+
+
 class OrchestratorConfig(_Strict):
     """How ``automa run`` schedules tasks (``[orchestrator]`` in automa.toml; D36).
 
@@ -246,6 +281,7 @@ class AutomaConfig(_Strict):
     limits: BudgetLimits = Field(default_factory=BudgetLimits)
     workspace: Path = Path("workspace")
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    provider: ProviderConfig = Field(default_factory=ProviderConfig)
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
     roles: dict[str, RoleSettings] = Field(default_factory=dict)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)

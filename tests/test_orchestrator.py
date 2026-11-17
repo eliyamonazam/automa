@@ -413,6 +413,9 @@ def test_provider_error_pauses_and_resume_redoes_attempt(tmp_path: Path) -> None
     assert report.reason is StopReason.PROVIDER and report.status is ProjectStatus.PAUSED
     assert rig.store.attempt_count(PID, "a") == 0
     assert "503" in (rig.state("a").error or "")
+    # The pause event says what the provider answered, not just "provider" (D91).
+    paused = [e for e in rig.store.events(PID).read() if e.type == "orchestrator.paused"]
+    assert paused[-1].data["reason"] == "provider" and "503" in paused[-1].data["detail"]
     rig.provider.push(*write("a"))
     assert rig.run().status is ProjectStatus.DONE
     assert rig.store.attempt_count(PID, "a") == 1

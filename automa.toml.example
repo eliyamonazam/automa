@@ -78,3 +78,13 @@ in_prompts = true
 enabled = false
 min_attempts = 5
 min_pass_rate = 0.8
+
+# Transient gateway failures (timeouts, network errors, 408/409/425/429/5xx) are
+# retried; each retry is a new call the BudgetGuard must authorize. 402 (no
+# balance), 401 (bad key) and other client errors are never retried. A request
+# that timed out after being sent is charged at its worst case (it may have been
+# billed). max_retries = 0 turns retrying off.
+[provider]
+max_retries = 3
+retry_delays_s = [3.0, 10.0, 30.0]
+timeout_s = 180.0

@@ -14,4 +14,6 @@ from automa.llm.provider import Provider
 
 def provider_from_config(config: AutomaConfig) -> Provider:
     """OpenAI-compatible HTTP provider for ``config``. Raises ``ConfigError`` without a key."""
-    return OpenAICompatProvider(config.base_url, config.require_api_key())
+    return OpenAICompatProvider(
+        config.base_url, config.require_api_key(), timeout_s=config.provider.timeout_s
+    )

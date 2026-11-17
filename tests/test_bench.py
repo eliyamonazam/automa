@@ -477,9 +477,15 @@ def test_provider_error_during_clarification_is_recorded(env: Env) -> None:
 
 
 def test_provider_error_during_run_pauses_and_is_recorded(env: Env) -> None:
-    env.provider.push(json.dumps({"questions": []}), json.dumps(PLAN), ProviderError("down"))
+    env.provider.push(
+        json.dumps({"questions": []}),
+        json.dumps(PLAN),
+        ProviderError("provider returned HTTP 402: insufficient balance", status=402),
+    )
     r = env.bench(BID)
     assert r.exit_code == cli.EXIT_BENCH_FAILED, r.output
+    # The reason is printed, not only recorded in the result file (D91).
+    assert "detail: provider returned HTTP 402: insufficient balance" in r.output
     rec = env.record()
     assert rec.stop is BenchmarkStop.PROVIDER and rec.planned
     assert rec.project_status is ProjectStatus.PAUSED

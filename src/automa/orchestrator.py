@@ -427,6 +427,7 @@ class Orchestrator:
             project_id,
             type_,
             {"reason": stop.reason.value, "task": stop.task_id}
+            | ({"detail": _short(stop.detail)} if stop.detail else {})
             | ({"approval": stop.approval_id} if stop.approval_id else {}),
         )
 

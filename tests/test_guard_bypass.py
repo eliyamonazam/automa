@@ -202,7 +202,7 @@ def test_foreign_guard_exception_blocks_provider(ledger: CostLedger) -> None:
 
 @pytest.mark.parametrize(
     "failure",
-    [ProviderError("down", retryable=True), RuntimeError("bug"), KeyboardInterrupt()],
+    [ProviderError("down"), RuntimeError("bug"), KeyboardInterrupt()],
     ids=["provider-error", "unexpected-error", "keyboard-interrupt"],
 )
 def test_provider_failure_releases_reservation(guard: BudgetGuard, failure: BaseException) -> None:
@@ -465,14 +465,8 @@ def test_providers_are_not_imported_outside_llm_package() -> None:
     assert offenders == []
 
 
-def test_gateway_complete_authorizes_before_calling_provider() -> None:
-    tree = ast.parse((SRC / "llm" / "gateway.py").read_text(encoding="utf-8"))
-    (fn,) = [
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef) and n.name == "complete" and n.args.args[0].arg == "self"
-    ]
-    lines: dict[str, list[int]] = {"authorize": [], "provider": []}
+def _guard_and_provider_calls(fn: ast.FunctionDef) -> dict[str, list[int]]:
+    lines: dict[str, list[int]] = {"authorize": [], "provider": [], "attempt": []}
     for node in ast.walk(fn):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             owner = node.func.value
@@ -481,8 +475,33 @@ def test_gateway_complete_authorizes_before_calling_provider() -> None:
                     lines["authorize"].append(node.lineno)
             if isinstance(owner, ast.Attribute) and owner.attr == "_provider":
                 lines["provider"].append(node.lineno)
-    assert len(lines["authorize"]) == 1 and len(lines["provider"]) == 1
-    assert lines["authorize"][0] < lines["provider"][0]
+            if isinstance(owner, ast.Name) and owner.id == "self" and node.func.attr == "_attempt":
+                lines["attempt"].append(node.lineno)
+    return lines
+
+
+def test_gateway_complete_authorizes_before_calling_provider() -> None:
+    tree = ast.parse((SRC / "llm" / "gateway.py").read_text(encoding="utf-8"))
+    methods = {
+        n.name: n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.args.args and n.args.args[0].arg == "self"
+    }
+    # complete() (and its retry loop) never touches the provider directly ...
+    outer = _guard_and_provider_calls(methods["complete"])
+    assert outer["provider"] == [] and outer["authorize"] == []
+    assert len(outer["attempt"]) == 1
+    # ... every attempt authorizes before its single provider call (D91).
+    inner = _guard_and_provider_calls(methods["_attempt"])
+    assert len(inner["authorize"]) == 1 and len(inner["provider"]) == 1
+    assert inner["authorize"][0] < inner["provider"][0]
+    # No other method calls the provider.
+    others = [
+        name
+        for name, fn in methods.items()
+        if name != "_attempt" and _guard_and_provider_calls(fn)["provider"]
+    ]
+    assert others == []
 
 
 def test_budget_guard_is_the_only_production_guard() -> None:

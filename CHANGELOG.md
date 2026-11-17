@@ -1,5 +1,11 @@
 # گزارش تغییرات
 
+## 2026-11-18 — درس‌های اولین اجرای واقعی: تلاش دوباره و پیام خطای روشن (خارج از نقشه راه)
+- **اجرای واقعی:** benchmark `cli-word-count` روی درگاه 1xAi با `claude-haiku-5-5` و `claude-sonnet-5-5`: ۵ از ۶ معیار قبول، هزینه ۰٫۱۴۳۷ دلار (۱۷ فراخوانی). با `stop: provider` متوقف شد؛ علت HTTP 402 (تموم شدن اعتبار هدیه مدل‌های غیرارزان) بود، ولی پیام خطا فقط در فایل JSON نتیجه دیده می‌شد.
+- **رفع (D91):** تلاش دوباره خودکار برای خطاهای موقت درگاه در `LLMGateway` (هر تلاش از `BudgetGuard` اجازه می‌گیره؛ درخواست بی‌پاسخ با بدترین هزینه ثبت می‌شه؛ 402/401 تکرار نمی‌شن)؛ پیام خطای درگاه (با حذف کلید) در `ProviderError`؛ `detail` در رویداد `orchestrator.paused` و در خروجی `automa bench run`؛ بخش جدید `[provider]` در تنظیمات (`max_retries`، `retry_delays_s`، `timeout_s`).
+- **فایل‌ها:** `src/automa/llm/{provider,openai_compat,gateway,factory}.py`، `src/automa/config.py`، `src/automa/orchestrator.py`، `src/automa/cli.py`، `tests/test_provider_retry.py` (۳۲ تست جدید)، به‌روزرسانی چند تست موجود، `automa.toml.example`.
+- **تست‌ها:** `pytest` ← ۳۵۵۴ سبز، ۲ رد شده (معمولی و حالت شبیه CI)؛ `ruff` ← بدون خطا.
+
 ## 2026-11-18 — پیام روشن روی Windows (خارج از نقشه راه)
 - **مشکل:** اولین اجرای واقعی روی لپتاپ Windows صاحب مخزن (`automa bench run`) با `AttributeError: module 'os' has no attribute 'O_NONBLOCK'` شکست خورد. لایه‌های ایمنی Automa (`Workspace`، `run_command`) ذاتاً POSIX‌ان (D90).
 - **رفع:** `automa` روی سیستم غیر POSIX قبل از هر فرمانی با راهنمای نصب در WSL متوقف می‌شه. بخش Windows به README اضافه شد.

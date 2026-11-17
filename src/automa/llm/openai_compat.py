@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from typing import Any
 
 import httpx
@@ -139,15 +141,24 @@ class OpenAICompatProvider:
     def complete(self, request: ChatRequest) -> ChatResponse:
         try:
             resp = self._client.post("chat/completions", json=request_to_wire(request))
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+            # Never reached the provider: nothing can have been billed.
+            raise ProviderError(
+                f"could not connect: {type(exc).__name__}", retryable=True
+            ) from None
         except httpx.TimeoutException:
-            raise ProviderError("request timed out", retryable=True) from None
+            # Sent, but no answer in time: the provider may still bill it (D91).
+            raise ProviderError("request timed out", retryable=True, maybe_billed=True) from None
         except httpx.HTTPError as exc:
-            raise ProviderError(f"network error: {type(exc).__name__}", retryable=True) from None
+            raise ProviderError(
+                f"network error: {type(exc).__name__}", retryable=True, maybe_billed=True
+            ) from None
         if resp.status_code >= 400:
             raise ProviderError(
-                f"provider returned HTTP {resp.status_code}",
+                f"provider returned HTTP {resp.status_code}{self._error_suffix(resp)}",
                 status=resp.status_code,
                 retryable=resp.status_code in _RETRYABLE_STATUS,
+                retry_after_s=_retry_after(resp),
             )
         try:
             data = resp.json()
@@ -155,5 +166,60 @@ class OpenAICompatProvider:
             raise ProviderError("provider returned non-JSON body") from None
         if isinstance(data, dict) and data.get("error"):
             # Some gateways return 200 with an error object.
-            raise ProviderError("provider returned an error object", status=resp.status_code)
+            raise ProviderError(
+                f"provider returned an error object{self._error_suffix(resp)}",
+                status=resp.status_code,
+            )
         return response_from_wire(data, fallback_model=request.model)
+
+    def _error_suffix(self, resp: httpx.Response) -> str:
+        """``: <gateway message>`` (redacted, single line, bounded) or ``""``."""
+        message = _error_message(resp)
+        if not message:
+            return ""
+        key = self._client.headers.get("Authorization", "").removeprefix("Bearer ")
+        if key:
+            message = message.replace(key, "[redacted]")
+        message = _SECRETISH.sub("[redacted]", message)
+        message = " ".join(message.split())  # no newlines / control layout
+        message = "".join(ch for ch in message if ch.isprintable())
+        if len(message) > _MAX_ERROR_MESSAGE:
+            message = message[:_MAX_ERROR_MESSAGE] + " [...]"
+        return f": {message}" if message else ""
+
+
+_MAX_ERROR_MESSAGE = 300
+# Anything that looks like a bearer token or API key in a gateway's error text.
+_SECRETISH = re.compile(r"(?i)(bearer\s+\S+|\b(?:sk|1xai|key)[-_][A-Za-z0-9_\-]{8,})")
+
+
+def _error_message(resp: httpx.Response) -> str:
+    """Best-effort human message from an error body (OpenAI-style or plain text)."""
+    try:
+        data = resp.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return resp.text[: _MAX_ERROR_MESSAGE * 2] if resp.text else ""
+    if isinstance(data, dict):
+        err = data.get("error", data)
+        if isinstance(err, dict):
+            for field in ("message", "detail", "error", "code", "type"):
+                value = err.get(field)
+                if isinstance(value, str) and value.strip():
+                    return value
+        elif isinstance(err, str):
+            return err
+        detail = data.get("detail") or data.get("message")
+        if isinstance(detail, str):
+            return detail
+    return ""
+
+
+def _retry_after(resp: httpx.Response) -> float | None:
+    value = resp.headers.get("Retry-After")
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        return None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None

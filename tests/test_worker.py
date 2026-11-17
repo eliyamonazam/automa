@@ -575,7 +575,7 @@ def test_text_alongside_tool_calls_is_not_final(tmp_path: Path) -> None:
 
 
 def test_provider_error_propagates_without_retry(tmp_path: Path) -> None:
-    rig = Rig(tmp_path, [ProviderError("boom", status=500, retryable=True), "done"])
+    rig = Rig(tmp_path, [ProviderError("boom", status=400), "done"])  # gateway retries (D91)
     with pytest.raises(ProviderError):
         rig.run()
     assert len(rig.provider.requests) == 1

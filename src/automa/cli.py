@@ -3185,6 +3185,8 @@ def bench_run(
         raise _fail(f"could not record the result: {e}", EXIT_USER) from None
     typer.echo(f"project: {record.project_id} ({record.project_status.value})")
     typer.echo(f"stop: {record.stop.value}")
+    if record.detail:
+        typer.echo(f"detail: {_preview(record.detail, 300)}")
     for c in record.checks:
         mark = "PASS" if c.passed else "FAIL"
         desc = benchmark.success_criteria[c.criterion].description
