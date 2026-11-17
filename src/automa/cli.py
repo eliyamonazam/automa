@@ -63,8 +63,10 @@ Exit codes (stable, for scripts):
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
+import sys
 import unicodedata
 from collections.abc import Callable
 from datetime import UTC, date, datetime
@@ -4036,6 +4038,28 @@ def self_reject(
     _self_decide(set_id, numbers, accept=False, yes=yes, config_path=config_path)
 
 
+UNSUPPORTED_PLATFORM_MESSAGE = (
+    "Automa needs a POSIX system (Linux or macOS). Its file confinement and command "
+    "control use POSIX-only features that Windows does not have, and it refuses to run "
+    "with weaker protection.\n"
+    "On Windows, use WSL (Windows Subsystem for Linux):\n"
+    "  1. In PowerShell as administrator: wsl --install   (then restart)\n"
+    "  2. Open 'Ubuntu' from the Start menu and install Automa there:\n"
+    "       sudo apt update && sudo apt install -y python3-pip python3-venv git\n"
+    "       git clone https://github.com/eliyamonazam/automa && cd automa\n"
+    "       python3 -m venv .venv && . .venv/bin/activate && pip install -e .\n"
+    "See README.md (Windows)."
+)
+
+
+def platform_supported(os_name: str | None = None) -> bool:
+    """True when Automa's safety layers can work on this platform (POSIX only)."""
+    return (os.name if os_name is None else os_name) == "posix"
+
+
 def main() -> None:
     """Console-script entry point."""
+    if not platform_supported():
+        sys.stderr.write(UNSUPPORTED_PLATFORM_MESSAGE + "\n")
+        raise SystemExit(EXIT_USER)
     app()

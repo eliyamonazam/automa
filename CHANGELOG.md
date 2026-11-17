@@ -1,5 +1,10 @@
 # گزارش تغییرات
 
+## 2026-11-18 — پیام روشن روی Windows (خارج از نقشه راه)
+- **مشکل:** اولین اجرای واقعی روی لپتاپ Windows صاحب مخزن (`automa bench run`) با `AttributeError: module 'os' has no attribute 'O_NONBLOCK'` شکست خورد. لایه‌های ایمنی Automa (`Workspace`، `run_command`) ذاتاً POSIX‌ان (D90).
+- **رفع:** `automa` روی سیستم غیر POSIX قبل از هر فرمانی با راهنمای نصب در WSL متوقف می‌شه. بخش Windows به README اضافه شد.
+- **فایل‌ها:** `src/automa/cli.py`، `tests/test_platform.py`، `README.md`، `docs/DECISIONS.md` (D90).
+
 ## 2026-11-16 — M10: ساخت خودکار Skill (اجرای مقایسه‌ای، اثرانگشت و نسخهٔ نامزد)
 - **انجام‌شده:** مورد «اجرای مقایسه‌ای» به دو مورد شکسته شد و اولی انجام شد: ماژول خالص `automa.skill_variants` با `skillset_fingerprint` (SHA-256 نقش‌ها + متن Skillهای استفاده‌شده) و `with_candidate_skill` (افزودن نامزد فقط به‌عنوان متن به یک نقش، با بررسی دوبارهٔ ثابت ماندن policy). `run_benchmark` اثرانگشت را در فیلد تازهٔ `skills_fingerprint` رکورد ثبت می‌کند (رکوردهای قدیمی هنوز خوانده می‌شوند). `evaluate_skill_gate` رکورد بدون اثرانگشت، طرف قاطی و دو طرف یکسان را رد می‌کند و اثرانگشت‌ها را گزارش می‌دهد.
 - **فایل‌های اصلی:** `src/automa/skill_variants.py` (جدید)، `src/automa/skill_gate.py`، `src/automa/bench.py`، `src/automa/benchmarks/results.py`، `tests/test_skill_variants.py` (جدید)، `tests/test_skill_gate.py`، `tests/test_bench.py`، `ROADMAP.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D89).

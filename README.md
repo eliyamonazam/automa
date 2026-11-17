@@ -26,6 +26,24 @@ pytest
 ruff check .
 ```
 
+## Windows
+
+Automa فقط روی Linux و macOS اجرا می‌شه. لایه‌های ایمنی‌اش (محدود کردن دسترسی فایل به پوشه پروژه و کنترل پروسه‌ها) به امکاناتی از POSIX وابسته‌ان که در Windows نیستن، و Automa حاضر نیست با محافظت ضعیف‌تر اجرا بشه. روی Windows از WSL استفاده کن:
+
+```powershell
+wsl --install          # در PowerShell با دسترسی Administrator؛ بعد سیستم رو ری‌استارت کن
+```
+
+بعد برنامه «Ubuntu» رو از منوی Start باز کن:
+
+```bash
+sudo apt update && sudo apt install -y python3-pip python3-venv git
+git clone https://github.com/eliyamonazam/automa && cd automa
+python3 -m venv .venv && . .venv/bin/activate && pip install -e .
+cp .env.example .env   # کلید رو اینجا بذار
+automa version
+```
+
 ## راه‌اندازی
 
 ```bash
