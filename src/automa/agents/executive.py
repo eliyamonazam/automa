@@ -117,6 +117,14 @@ small, independently verifiable tasks. Reply with ONLY one JSON object, no prose
 Check types: file_exists {path}, file_contains {path, text}, command {command,
 exit_code, timeout_s}. Paths are relative to the project's files directory and
 must not contain "..". Prefer deterministic checks wherever possible.
+Command checks run as ONE program with arguments, WITHOUT a shell: pipes (|),
+redirects (> <), '!', '&&', ';', '$(...)', backticks and $VARIABLES do not work
+and are rejected. For anything beyond a single command use
+"python3 -c '<code>'" (exit non-zero on failure). To require that a pattern is
+absent, use the program's exit code, e.g. {"command": "grep -q '@import'
+style.css", "exit_code": 1}.
+Each task's checks may only rely on files that this task or the tasks it
+depends_on create.
 (The // comments above are explanations; JSON must not contain comments.)"""
 
 

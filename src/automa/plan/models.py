@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
@@ -478,9 +479,64 @@ def parse_plan(text: str) -> Plan:
     if not isinstance(data, dict):
         raise PlanError("plan must be a JSON object", "- <root>: expected a JSON object")
     try:
-        return Plan.model_validate(data)
+        plan = Plan.model_validate(data)
     except ValidationError as e:
         raise PlanError("plan failed validation", _format_errors(e)) from e
+    problems = shell_syntax_problems(plan)
+    if problems:
+        raise PlanError("plan uses shell syntax in command checks", "\n".join(problems))
+    return plan
+
+
+# Command checks run as a plain argv (``shlex.split``, no shell; see the Tool
+# Layer). Shell operators therefore never work: ``!`` becomes a program name,
+# ``$(...)`` is passed literally, ``|`` is an argument. A check written that way
+# can never pass, so every worker attempt on its task is wasted (D92). Catch it
+# at planning time, when the Executive can still rewrite the check.
+_SHELL_OPERATORS = frozenset(
+    {"|", "||", "&", "&&", ";", ";;", "!", ">", ">>", "<", "<<", "<<<", "(", ")", "{", "}"}
+)
+_SHELL_HINT = (
+    "commands run WITHOUT a shell (no pipes, redirects, '!', '&&', ';', '$(...)', "
+    "backticks or $VARIABLES). Use one program with arguments, e.g. "
+    "\"python3 -c '<code>'\" for anything complex; to require that something is "
+    "absent, use the program's own exit code (e.g. grep -q PATTERN FILE with "
+    "exit_code 1) instead of '!'."
+)
+
+
+def shell_construct(command: str) -> str | None:
+    """The first shell-only construct in ``command`` (as the model wrote it), or None."""
+    if "$(" in command or "`" in command:
+        return "$(...)" if "$(" in command else "backticks"
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None  # unbalanced quotes: reported when the check runs
+    for tok in tokens:
+        if tok in _SHELL_OPERATORS or (tok and set(tok) <= set("|&;<>()")):
+            return tok
+        if re.fullmatch(r"\$[A-Za-z_{][A-Za-z0-9_}]*", tok):
+            return tok
+    return None
+
+
+def shell_syntax_problems(plan: Plan) -> list[str]:
+    """Model-readable problems for command checks that need a shell (D92)."""
+    problems = []
+    for task in plan.tasks:
+        for i, criterion in enumerate(task.acceptance_criteria):
+            check = criterion.check
+            if isinstance(check, CommandCheck):
+                found = shell_construct(check.command)
+                if found is not None:
+                    problems.append(
+                        f"- tasks[{task.id}].acceptance_criteria.{i}.check.command: "
+                        f"uses {found!r}; {_SHELL_HINT}"
+                    )
+    return problems
 
 
 _FENCE_RE = re.compile(r"^```[A-Za-z0-9_-]*\s*\n(.*)\n```$", re.DOTALL)
