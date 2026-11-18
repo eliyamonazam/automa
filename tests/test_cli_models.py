@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
-from click.testing import Result
 from typer.testing import CliRunner
 
 from automa import cli
@@ -60,7 +60,7 @@ def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
-def _models(config: Path, *args: str) -> Result:
+def _models(config: Path, *args: str) -> Any:
     return CliRunner().invoke(cli.app, ["models", *args, "--config", str(config)])
 
 
@@ -144,7 +144,7 @@ def test_list_writes_nothing(tmp_path: Path, config: Path) -> None:
 # --- import -----------------------------------------------------------------------
 
 
-def _import(*args: str) -> Result:
+def _import(*args: str) -> Any:
     return CliRunner().invoke(cli.app, ["models", "import", *args])
 
 

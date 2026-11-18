@@ -4,6 +4,7 @@
 - **انجام‌شده:** فرمان فقط‌خواندنی `automa models [--capability C] [--family F] [--json]` (با نمایش سطح‌هایی که هر مدل رو استفاده می‌کنن و مدل‌های فقط-`[prices]`)، و `automa models import --format 1xai FILE --rate TOMAN_PER_USD` که فهرست قیمت متنی 1xAi (تومان به ازای ۱K توکن) رو به بخش‌های `[models."<id>"]` تبدیل و چاپ می‌کنه: حساب دهدهی دقیق، گرد کردن رو به بالا (۶ رقم)، رقم فارسی و جداکننده هزارگان، خانواده از پیشوند شناسه، توانایی محافظه‌کارانه، خطای دقیق با شماره خط، هشدار برای مدل‌های از قبل قیمت‌دار با `--config`. `automa.toml` هرگز نوشته نمی‌شه (D95).
 - **فایل‌های اصلی:** `src/automa/model_import.py` (جدید)، `src/automa/cli.py`، `src/automa/config.py` (نام عمومی `MODEL_ID_RE`)، `tests/test_model_import.py` (۷۸ تست)، `tests/test_cli_models.py` (۲۵ تست)، `automa.toml.example`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D95).
 - **تست‌ها:** `pytest` ← ۳۷۶۱ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check`، `ruff format --check` و `mypy` روی ماژول‌های تغییرکرده سبز.
+- **مشکلات:** اولین push در CI شکست خورد: تست از `click.testing` import می‌کرد و Typer نسخه CI دیگه به `click` وابسته نیست (محلی نصب بود). با حذف این import درست شد.
 - **برای صاحب مخزن:** فهرست قیمت 1xAi رو در یک فایل متنی (هر خط: شناسه، قیمت ورودی، قیمت خروجی) بذار و `automa models import --format 1xai prices.txt --rate 323000 --config automa.toml` رو اجرا کن؛ خانواده/توانایی‌ها رو بازبینی و در `automa.toml` بچسبون.
 - **قدم بعدی:** ارزیاب از خانواده دیگر (`[verifier] prefer_other_family`).
 
