@@ -95,6 +95,7 @@ from automa.agents import (
     WorkerAgent,
     plan_project,
 )
+from automa.agents.model_selector import ModelSelectorAgent
 from automa.agents.proposer import (
     DEFAULT_BUDGET_ID as PROPOSAL_BUDGET_ID,
 )
@@ -821,6 +822,8 @@ def run(
     typer.echo(f"parallel: {describe_parallel(settings.max_parallel)}")
     typer.echo(f"memory: {_describe_prompt_memory(prompt_memory)}")
     typer.echo(f"router: {_describe_router(router)}")
+    use_selector = router is not None and config.router.selector
+    typer.echo(f"model selector: {_describe_selector(router, config)}")
     events = store.events(pid)
     with quality, CostLedger.for_workspace(config.workspace) as ledger:
         spent_before = ledger.spent_nusd(project_id=pid)
@@ -841,6 +844,7 @@ def run(
             tools=tools_factory(config.sandbox.docker_sandbox()),
             quality=quality,
             router=router,
+            selector=ModelSelectorAgent(gateway) if use_selector else None,
         )
         try:
             report = orchestrator.run(pid)
@@ -1076,6 +1080,18 @@ def _run_anomalies(
             f"({ratio}, {a.history} earlier)"
         )
     return lines
+
+
+def _describe_selector(router: Router | None, config: AutomaConfig) -> str:
+    """Human description of the model selector setting of one run (D99)."""
+    if not config.router.selector:
+        return "off (enable with [router] selector = true)"
+    if router is None:
+        return "off (needs the router: --router or [router] enabled = true)"
+    return (
+        "on (without enough data, one small-tier call per task type may pick a "
+        "cheaper eligible model; not in the estimate; see router.selector events)"
+    )
 
 
 def _describe_router(router: Router | None) -> str:

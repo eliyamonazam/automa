@@ -378,9 +378,15 @@ class RouterConfig(_Strict):
     rate of at least ``min_pass_rate``. The router only changes which configured
     tier (and so which priced model) a task starts on: every call still goes
     through the gateway and the BudgetGuard, and escalation works as before.
+
+    ``selector`` (D99): when the router has too little data, let the model selector
+    agent choose a role's starting model among the eligible ones (never more
+    expensive than the requested tier) with one small-tier call per task type and
+    run. Needs a ``small`` tier; only active while the router is.
     """
 
     enabled: StrictBool = False
+    selector: StrictBool = False
     min_attempts: StrictInt = Field(default=5, ge=1, le=100_000)
     # A TOML integer (``1``) is accepted; booleans and strings are not.
     min_pass_rate: StrictFloat | StrictInt = Field(default=0.8, gt=0, le=1)
@@ -497,6 +503,9 @@ class AutomaConfig(_Strict):
             raise ValueError(f"tier model(s) without the 'text' capability: {', '.join(textless)}")
         self._check_verifier()
         self._check_role_models()
+        if self.router.selector and Tier.SMALL not in self.tiers:
+            # The selector call runs on the small tier (D99).
+            raise ValueError("[router] selector = true needs a model for the 'small' tier")
         return self
 
     def _check_role_models(self) -> None:

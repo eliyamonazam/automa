@@ -113,6 +113,12 @@ in_prompts = true
 enabled = false
 min_attempts = 5
 min_pass_rate = 0.8
+# With too little data (no eligible tier has min_attempts judged attempts), let a
+# small-tier model call pick a task type's starting model among the role's tier
+# models that are not more expensive than the requested one (D99). One guarded
+# call per (role, requested tier) per run; any invalid reply keeps the default.
+# Needs a small tier and is only active while the router is.
+selector = false
 
 # Transient gateway failures (timeouts, network errors, 408/409/425/429/5xx) are
 # retried; each retry is a new call the BudgetGuard must authorize. 402 (no

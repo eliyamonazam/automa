@@ -32,6 +32,12 @@ Data router (D59): with ``router=``, a task's *first* attempt starts at the tier
 saved in the task state like any tier, so resuming never routes again and
 escalation continues from it. Without a router nothing changes.
 
+Model selector (D99): with ``selector=`` (needs a router), a fresh task whose
+router decision rests on too little data (no eligible tier has ``min_attempts``
+judged attempts) starts on the tier the ``ModelSelectorAgent`` picks among the
+tiers no more expensive than the requested one (event ``router.selector``). Its
+call is guarded like any other; a gateway error pauses the run.
+
 What the orchestrator never does:
 
 - mark a task passed by itself: only a stored ``pass`` verdict can (enforced by the
@@ -55,6 +61,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from automa.agents.model_selector import ModelSelectorAgent, needs_selection
 from automa.agents.verifier import VerificationFailed, VerifierAgent, verifier_policy
 from automa.agents.worker import WorkerAgent
 from automa.budget.guard import BudgetError
@@ -214,6 +221,7 @@ class Orchestrator:
         clock: Clock = _utc_now,
         quality: QualityLog | None = None,
         router: Router | None = None,
+        selector: ModelSelectorAgent | None = None,
     ):
         if not isinstance(store, ProjectStore):
             raise TypeError("store must be a ProjectStore")
@@ -239,6 +247,16 @@ class Orchestrator:
             if router.config != config:
                 # Its tiers/prices must be the ones the gateway uses (D59).
                 raise ValueError("router was built from a different configuration")
+        if selector is not None:
+            if not isinstance(selector, ModelSelectorAgent):
+                raise TypeError("selector must be a ModelSelectorAgent")
+            if router is None:
+                # The selector only fills in where the router lacks data (D99).
+                raise ValueError("selector needs a router")
+            if selector.config != config:
+                raise ValueError("selector was built from a different configuration")
+            if Tier.SMALL not in config.tiers:
+                raise ConfigError("the model selector needs a model for the 'small' tier")
         self._store = store
         self._worker = worker
         self._verifier = verifier
@@ -250,6 +268,7 @@ class Orchestrator:
         self._clock = clock
         self._quality = quality
         self._router = router
+        self._selector = selector
         self._make_tools()  # a factory that ignores a required sandbox fails here
 
     @property
@@ -555,7 +574,22 @@ class Orchestrator:
             }
             | ({"source": "role"} if decision.source == "role" else {}),
         )
-        return decision.tier
+        if self._selector is None or not needs_selection(
+            decision.evidence, requested, min_attempts=router.settings.min_attempts
+        ):
+            return decision.tier
+        try:
+            selection = self._selector.select(
+                task, requested, decision.evidence, project_id=project_id
+            )
+        except BaseException as e:
+            # Nothing stored for the task: it stays pending and is routed again later.
+            stop = self._stop_for(e, task.id)
+            if stop is None:
+                raise
+            raise stop from e
+        self._emit(project_id, "router.selector", selection.event_data(task.id))
+        return selection.tier
 
     def _verify(
         self,

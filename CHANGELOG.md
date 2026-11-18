@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-18 — M11: Agent انتخاب مدل (وقتی داده کافی نیست)
+- **انجام‌شده:** `ModelSelectorAgent` با `[router] selector = true` (پیش‌فرض خاموش، فقط همراه Router). وقتی Router برای وظیفهٔ تازه داده کافی نداره، یک فراخوانی سطح `small` (حداکثر ۲۰۰ توکن خروجی، از Gateway و BudgetGuard، ثبت در Ledger) از بین مدل‌های سطح‌های نقش/نردبان نقش که از سطح درخواستی گران‌تر نیستن یکی رو انتخاب می‌کنه. پاسخ فقط `{"model", "reason"}` با شناسهٔ مجاز؛ هر چیز دیگه ← مدل پیش‌فرض. نتیجه برای (نقش، سطح درخواستی) در طول اجرا cache می‌شه (وظایف موازی هم یک بار)؛ خطای بودجه/درگاه مثل Worker اجرا رو متوقف می‌کنه. رویداد `router.selector` و خط `model selector:` در `automa run` (D99).
+- **فایل‌های اصلی:** `src/automa/agents/model_selector.py` (جدید)، `src/automa/orchestrator.py` (`selector=`)، `src/automa/config.py` (`RouterConfig.selector`)، `src/automa/cli.py`، `tests/test_model_selector.py` (۷۵ تست جدید)، `automa.toml.example`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D99).
+- **تست‌ها:** `pytest` ← ۳۹۷۱ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check`، `ruff format --check` و `mypy` روی ماژول‌های تغییرکرده سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و بسته دوباره نصب شد. هزینهٔ فراخوانی Selector در خط `estimate:` حساب نمی‌شه (در DECISIONS ثبت شد).
+- **برای صاحب مخزن:** برای امتحان: `[router] enabled = true` و `selector = true`؛ رویدادهای `router.selector` نشون می‌دن کدوم مدل و چرا انتخاب شد.
+- **قدم بعدی:** ساخت تصویر (ابزار `generate_image`).
+
 ## 2026-11-18 — M11: انتخاب مدل داده‌محور
 - **انجام‌شده:** Router داده‌محور برای نقش دارای `[roles.<name>] models` دیگه رد نمی‌شه: شواهد هر سطح آمار مدل خود نقش در اون سطح (با قیمت کاتالوگ) است، پس ارزان‌ترین مدل نردبان که `min_attempts` و `min_pass_rate` رو داره انتخاب می‌شه و وگرنه مدل پیش‌فرض نقش (قاعدهٔ «هرگز گران‌تر بدون اثبات ضعف» همونه). مدل بیرون از نردبان هرگز انتخاب نمی‌شه. `router.skipped` حذف شد؛ `router.decision` کلید `source: role` داره. `estimate_plan` هم همین مسیر رو می‌ره. `automa quality route` مدل هر سطح، میانگین هزینهٔ هر تلاش و نشان `[role models]` رو نشون می‌ده (D98).
 - **فایل‌های اصلی:** `src/automa/router.py`، `src/automa/orchestrator.py`، `src/automa/finance/estimate.py`، `src/automa/cli.py`، `tests/test_role_model_router.py` (۳۰ تست جدید)، `tests/test_role_models.py`، `tests/test_cli_quality_route.py`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D98).
