@@ -22,17 +22,33 @@ from automa.finance.compare import (
     compare_estimate,
 )
 from automa.finance.estimate import (
+    DEFAULT_TOKEN_PROFILES,
     BudgetFit,
     EstimateBasis,
     EstimateSettings,
     PlanEstimate,
+    RangeBasis,
+    RoleTokenProfile,
     TaskEstimate,
     TaskProgress,
+    TokenAllowance,
+    attempt_costs,
     estimate_plan,
+    percentile_nusd,
+    profile_for,
+    tokens_nusd,
 )
 from automa.finance.report import SpendGroup, SpendingReport, spending_report
 
 __all__ = [
+    "DEFAULT_TOKEN_PROFILES",
+    "RangeBasis",
+    "RoleTokenProfile",
+    "TokenAllowance",
+    "attempt_costs",
+    "percentile_nusd",
+    "profile_for",
+    "tokens_nusd",
     "ANOMALY_EVENT",
     "Anomaly",
     "AnomalyReport",

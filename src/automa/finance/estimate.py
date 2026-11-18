@@ -20,6 +20,21 @@ up to ``[images] max_per_task`` images per attempt at the ``[images]`` model's
 the expected cost (when known) conservatively adds the full image allowance for
 every expected attempt, since the quality log does not hold image costs.
 
+Cost range (D119): next to the worst case and the history-based expected cost,
+every task gets a *realistic range* ``range_low_nusd``..``range_high_nusd`` that
+is never "unknown". Each attempt in the range is priced at the catalog price of
+the model it would run on, from
+
+* the user's own history when the quality log holds at least ``min_samples``
+  judged attempts of (role, model): the 25th (low) and 90th (high) percentile of
+  the worker cost per attempt, plus the role's verifier token allowance; else
+* the role's default token profile (``DEFAULT_TOKEN_PROFILES``: input/output
+  tokens per attempt, low and high, taken from the first real runs on 1xAi).
+
+The low end assumes the first attempt passes, the high end ``RANGE_HIGH_ATTEMPTS``
+attempts on the orchestrator's escalation schedule. Both are clamped to the
+worst case, which stays the only hard bound ("Guard cap").
+
 The estimate is pure and advisory: no model call, no write, no authorization.
 Whatever it says, every call still goes through the gateway and the
 ``BudgetGuard``, which alone bounds spending.
@@ -28,7 +43,7 @@ Whatever it says, every call still goes through the gateway and the
 from __future__ import annotations
 
 import math
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -36,10 +51,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from automa.agents.verifier import VerifierSettings
 from automa.agents.worker import WorkerSettings
 from automa.budget.guard import NANO_PER_USD, cap_to_nusd
-from automa.config import AutomaConfig, ConfigError, Tier
+from automa.config import AutomaConfig, ConfigError, ModelPrice, Tier
 from automa.orchestrator import OrchestratorSettings, next_tier, uses_images
 from automa.plan.models import MAX_TASK_ATTEMPTS, Plan
-from automa.quality import QualityStats
+from automa.quality import QualityRecord, QualityStats
 from automa.roles.registry import RoleRegistry
 from automa.router import Router
 
@@ -109,6 +124,104 @@ class TaskProgress(_Frozen):
         return self.attempts == 0 and self.tier is None
 
 
+class TokenAllowance(_Frozen):
+    """Tokens of one attempt (all its calls together)."""
+
+    input_tokens: int = Field(ge=0, le=10_000_000)
+    output_tokens: int = Field(ge=0, le=10_000_000)
+
+
+class RoleTokenProfile(_Frozen):
+    """Default tokens per attempt of a role when its history is too thin (D119).
+
+    ``low``/``high`` cover the worker's calls of one attempt; ``verify`` the
+    verifier's calls of one attempt (added in both ends, also on history).
+    """
+
+    low: TokenAllowance
+    high: TokenAllowance
+    verify: TokenAllowance
+
+    @model_validator(mode="after")
+    def _ordered(self) -> RoleTokenProfile:
+        if (
+            self.low.input_tokens > self.high.input_tokens
+            or self.low.output_tokens > self.high.output_tokens
+        ):
+            raise ValueError("low token allowance must not exceed high")
+        return self
+
+
+def _profile(
+    li: int, lo: int, hi: int, ho: int, vi: int = 4_000, vo: int = 600
+) -> RoleTokenProfile:
+    return RoleTokenProfile(
+        low=TokenAllowance(input_tokens=li, output_tokens=lo),
+        high=TokenAllowance(input_tokens=hi, output_tokens=ho),
+        verify=TokenAllowance(input_tokens=vi, output_tokens=vo),
+    )
+
+
+# Calibrated on the first real runs on 1xAi (CHANGELOG M4/M11; D119): one attempt of
+# a writer/developer task typically used ~10-25k input and ~2-4k output tokens over
+# all its calls; research attempts read web pages and use more input.
+DEFAULT_PROFILE = _profile(8_000, 1_500, 30_000, 5_000)
+DEFAULT_TOKEN_PROFILES: dict[str, RoleTokenProfile] = {
+    "writer": _profile(6_000, 1_500, 25_000, 5_000),
+    "developer": _profile(8_000, 1_500, 30_000, 5_000),
+    "architect": _profile(8_000, 2_000, 30_000, 6_000),
+    "designer": _profile(6_000, 1_500, 25_000, 5_000),
+    "researcher": _profile(15_000, 1_500, 50_000, 5_000),
+}
+RANGE_HIGH_ATTEMPTS = 2  # attempts the high end of the range assumes
+RANGE_LOW_PERCENTILE = 25
+RANGE_HIGH_PERCENTILE = 90
+
+
+def profile_for(role: str) -> RoleTokenProfile:
+    """The default token profile of ``role`` (``DEFAULT_PROFILE`` for custom roles)."""
+    return DEFAULT_TOKEN_PROFILES.get(role, DEFAULT_PROFILE)
+
+
+def tokens_nusd(price: ModelPrice, tokens: TokenAllowance) -> int:
+    """Cost of ``tokens`` at ``price`` in nano-USD, rounded up (like the ledger)."""
+    # USD per Mtok * 1e9 nUSD/USD / 1e6 tok/Mtok = per_mtok * 1000 nUSD per token.
+    cost = (
+        tokens.input_tokens * price.input_per_mtok + tokens.output_tokens * price.output_per_mtok
+    ) * (NANO_PER_USD / 1_000_000)
+    return math.ceil(cost - 1e-6) if cost > 0 else 0
+
+
+def percentile_nusd(costs: Sequence[int], pct: int) -> int:
+    """Nearest-rank percentile ``pct`` (1..100) of non-empty integer ``costs``."""
+    if not costs:
+        raise ValueError("no costs")
+    if not 1 <= pct <= 100:
+        raise ValueError("pct must be within 1..100")
+    if any(c < 0 for c in costs):
+        raise ValueError("costs must not be negative")
+    ordered = sorted(costs)
+    rank = math.ceil(pct * len(ordered) / 100)
+    return ordered[max(rank, 1) - 1]
+
+
+def attempt_costs(records: Iterable[QualityRecord]) -> dict[tuple[str, str], list[int]]:
+    """Worker cost of every judged attempt, grouped by (role, model)."""
+    out: dict[tuple[str, str], list[int]] = {}
+    for rec in records:
+        out.setdefault((rec.role, rec.model), []).append(rec.cost_nusd)
+    return out
+
+
+class RangeBasis(StrEnum):
+    """Where a task's cost range comes from."""
+
+    HISTORY = "history"  # every attempt in the range is priced from the user's history
+    MIXED = "mixed"  # some attempts from history, some from default token profiles
+    DEFAULTS = "defaults"  # default token profiles and catalog prices only
+    UNKNOWN_ROLE = "unknown_role"  # no model call at all
+
+
 class EstimateBasis(StrEnum):
     """Where a task's expected cost comes from."""
 
@@ -137,6 +250,18 @@ class TaskEstimate(_Frozen):
     image_worst_nusd: int = Field(default=0, ge=0)  # their cost (included in worst_nusd)
     done_attempts: int = Field(default=0, ge=0)  # attempts already stored (resume)
     reverify: bool = False  # the last stored attempt still has to be judged
+    # Realistic range (D119); never above the worst case.
+    range_low_nusd: int = Field(default=0, ge=0)
+    range_high_nusd: int = Field(default=0, ge=0)
+    range_basis: RangeBasis = RangeBasis.DEFAULTS
+
+    @model_validator(mode="after")
+    def _range_ordered(self) -> TaskEstimate:
+        if self.range_low_nusd > self.range_high_nusd:
+            raise ValueError("range low must not exceed range high")
+        if self.range_high_nusd > self.worst_nusd:
+            raise ValueError("range high must not exceed the worst case")
+        return self
 
 
 class BudgetFit(StrEnum):
@@ -156,6 +281,28 @@ class PlanEstimate(_Frozen):
     per_call_cap_nusd: int = Field(gt=0)
     expected_nusd: int = Field(ge=0)  # sum of the known expected costs
     worst_nusd: int = Field(ge=0)
+
+    @property
+    def range_low_nusd(self) -> int:
+        """Low end of the realistic range of the whole plan (D119)."""
+        return sum(t.range_low_nusd for t in self.tasks)
+
+    @property
+    def range_high_nusd(self) -> int:
+        """High end of the realistic range of the whole plan (D119)."""
+        return sum(t.range_high_nusd for t in self.tasks)
+
+    @property
+    def range_basis(self) -> RangeBasis:
+        """``history`` only if every task's range is from history (no-call tasks aside)."""
+        kinds = {t.range_basis for t in self.tasks} - {RangeBasis.UNKNOWN_ROLE}
+        if not kinds:
+            return RangeBasis.HISTORY if self.tasks else RangeBasis.DEFAULTS
+        if kinds == {RangeBasis.HISTORY}:
+            return RangeBasis.HISTORY
+        if kinds == {RangeBasis.DEFAULTS}:
+            return RangeBasis.DEFAULTS
+        return RangeBasis.MIXED
 
     @property
     def unknown(self) -> list[str]:
@@ -226,6 +373,66 @@ def _expected(
     return attempts, math.ceil(cost - 1e-6) if cost > 0 else 0
 
 
+def _range(
+    schedule: list[Tier],
+    role: str,
+    config: AutomaConfig,
+    costs: Mapping[tuple[str, str], Sequence[int]],
+    min_samples: int,
+    *,
+    left: int,
+    unjudged: bool,
+    images_per_attempt: int,
+    image_nusd: int,
+) -> tuple[int, int, RangeBasis]:
+    """(low, high, basis) of the realistic range of one task (D119).
+
+    ``schedule`` holds the tier of the unjudged stored attempt first (if any), then
+    of every attempt left. Low: the stored attempt (if any) passes, else the first
+    new attempt passes. High: ``RANGE_HIGH_ATTEMPTS`` attempts in all.
+    """
+    prof = profile_for(role)
+    used_history = False
+    used_defaults = False
+
+    def verify_nusd(tier: Tier) -> int:
+        return tokens_nusd(config.price_for(config.model_for_role(role, tier)), prof.verify)
+
+    def attempt_nusd(tier: Tier, *, high: bool) -> int:
+        nonlocal used_history, used_defaults
+        model = config.model_for_role(role, tier)
+        hist = costs.get((role, model))
+        if hist is not None and len(hist) >= min_samples:
+            used_history = True
+            pct = RANGE_HIGH_PERCENTILE if high else RANGE_LOW_PERCENTILE
+            worker = percentile_nusd(hist, pct)
+        else:
+            used_defaults = True
+            worker = tokens_nusd(config.price_for(model), prof.high if high else prof.low)
+        return worker + verify_nusd(tier)
+
+    new_tiers = schedule[1:] if unjudged else schedule
+    new_tiers = new_tiers[:left]
+    low = 0
+    high = 0
+    if unjudged:
+        low += verify_nusd(schedule[0])
+        high += verify_nusd(schedule[0])
+    else:
+        if new_tiers:
+            low += attempt_nusd(new_tiers[0], high=False) + min(images_per_attempt, 1) * image_nusd
+    n_high = max(0, RANGE_HIGH_ATTEMPTS - (1 if unjudged else 0))
+    for tier in new_tiers[:n_high]:
+        high += attempt_nusd(tier, high=True) + images_per_attempt * image_nusd
+    if used_history and used_defaults:
+        basis = RangeBasis.MIXED
+    elif used_history:
+        basis = RangeBasis.HISTORY
+    else:
+        basis = RangeBasis.DEFAULTS
+    return low, high, basis
+
+
 def estimate_plan(
     plan: Plan,
     config: AutomaConfig,
@@ -236,12 +443,17 @@ def estimate_plan(
     router: Router | None = None,
     skip: Collection[str] = (),
     progress: Mapping[str, TaskProgress] | None = None,
+    costs: Mapping[tuple[str, str], Sequence[int]] | None = None,
 ) -> PlanEstimate:
     """Estimate the cost of running ``plan`` (tasks in ``skip`` are left out).
 
     ``progress`` describes tasks that already ran (resume, D63): they continue with
     the attempts that are left, from their saved tier and escalation count, are
     never routed again, and an unjudged last attempt only costs its verification.
+
+    ``costs`` maps (role, model) to the worker cost of every judged attempt
+    (``attempt_costs(log.records())``); it feeds the history end of the realistic
+    range (D119). Without it the range uses the default token profiles only.
 
     Raises ``ConfigError`` if a task's requested tier has no configured model
     (the orchestrator would stop before any call), ``ValueError`` for duplicate
@@ -266,6 +478,7 @@ def estimate_plan(
     if bad:
         raise ValueError(f"unknown task id(s) in progress: {', '.join(bad)}")
 
+    hist_costs: Mapping[tuple[str, str], Sequence[int]] = costs if costs is not None else {}
     cap = cap_to_nusd(config.limits.per_call_usd)
     image_price = config.image_price()
     # Rounded up, like the ledger: an image is never estimated below its price.
@@ -290,6 +503,7 @@ def estimate_plan(
                     expected_nusd=0,
                     max_calls=0,
                     worst_nusd=0,
+                    range_basis=RangeBasis.UNKNOWN_ROLE,
                 )
             )
             continue
@@ -333,6 +547,20 @@ def estimate_plan(
             if exp is not None:
                 extra = math.ceil(exp[0] * config.images.max_per_task * image_nusd)
                 exp = (exp[0], exp[1] + extra)
+        worst = calls * cap + images * image_nusd
+        r_low, r_high, r_basis = _range(
+            schedule,
+            task.role,
+            config,
+            hist_costs,
+            s.min_samples,
+            left=left,
+            unjudged=prog.unjudged,
+            images_per_attempt=config.images.max_per_task if images else 0,
+            image_nusd=image_nusd,
+        )
+        r_high = min(r_high, worst)
+        r_low = min(r_low, r_high)
         out.append(
             TaskEstimate(
                 task_id=task.id,
@@ -347,11 +575,14 @@ def estimate_plan(
                 expected_attempts=exp[0] if exp is not None else None,
                 expected_nusd=exp[1] if exp is not None else None,
                 max_calls=calls,
-                worst_nusd=calls * cap + images * image_nusd,
+                worst_nusd=worst,
                 max_images=images,
                 image_worst_nusd=images * image_nusd,
                 done_attempts=prog.attempts,
                 reverify=prog.unjudged,
+                range_low_nusd=r_low,
+                range_high_nusd=r_high,
+                range_basis=r_basis,
             )
         )
     skipped = [t.id for t in plan.tasks if t.id in skip]
