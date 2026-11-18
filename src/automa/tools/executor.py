@@ -196,6 +196,22 @@ class ToolExecutor:
             # answer comes from memory, nothing leaves the machine (D112).
             self._emit("tool.cache_hit", {"tool": tool.name, **tool.audit(args)})
             needs_approval = False
+        elif needs_approval and self._auto_read_limit_reached(tool, args):
+            # The task already read its allowance of pages automatically. Asking the
+            # user would stall an unattended run on a page the model rarely needs;
+            # tell the model to finish with what it has instead (D113).
+            self._emit("tool.auto_read_limit", {"tool": tool.name, **tool.audit(args)})
+            assert self._auto_reads is not None  # noqa: S101 - checked above
+            return self._finish(
+                tool,
+                args,
+                self._fail(
+                    tool.name,
+                    f"reading limit reached: this task already read "
+                    f"{self._auto_reads.max_per_task} web pages. Do not fetch more pages; "
+                    "write the result now from the pages you already read.",
+                ),
+            )
         elif needs_approval and self._auto_read(tool, args):
             needs_approval = False
         if needs_approval:
@@ -216,6 +232,16 @@ class ToolExecutor:
                 content = content[:MAX_TOOL_OUTPUT_CHARS] + "\n[... truncated]"
             result = ToolResult(tool=tool.name, ok=True, content=content)
         return self._finish(tool, args, result)
+
+    def _auto_read_limit_reached(self, tool: Tool, args: Any) -> bool:
+        """A qualifying plain read (D93) after the task's automatic allowance is used."""
+        return (
+            self._auto_reads is not None
+            and type(tool) is FetchUrl
+            and not tool.irreversible
+            and self._auto_reads_used >= self._auto_reads.max_per_task
+            and auto_read_refusal(getattr(args, "url", None)) is None
+        )
 
     def _auto_read(self, tool: Tool, args: Any) -> bool:
         """True if this gated call is a plain web read the user pre-approved (D93)."""

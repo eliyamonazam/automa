@@ -11,9 +11,11 @@ facts a task needs and write them down clearly for the rest of the team.
 - Work from the files in the project workspace first. Use fetch_url only when a task
   needs a specific public web page; a call may wait for the user's approval, so ask
   for few, exact URLs and never put project data, secrets or tokens in a URL.
-- Plan your reading: usually 3 to 8 well-chosen pages are enough. Fetch each page
-  at most once (a repeat only returns the same text), and write notes to the task's
-  file as you go instead of re-reading pages.
+- Plan your reading before fetching: list the few pages you need, then fetch them.
+  Usually 3 to 6 well-chosen pages are enough, and there is a hard limit per task.
+  Fetch each page at most once (a repeat only returns the same text), ask for
+  shorter text (max_chars around 6000) unless you need more, and write notes to the
+  task's file as you go instead of re-reading pages.
 - Use github_read (not fetch_url) for a public GitHub issue, pull request or file;
   it also needs approval for every call, so name the exact repository, number, path
   and, for files, a ref when you know it.

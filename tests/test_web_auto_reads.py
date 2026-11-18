@@ -145,13 +145,22 @@ def test_non_qualifying_read_still_needs_approval(tmp_path: Path) -> None:
 
 
 def test_auto_reads_are_capped_per_task(tmp_path: Path) -> None:
+    # Past the allowance a plain read is refused to the model (finish with what you
+    # have), not turned into an approval request that stalls the run (D113).
     tool, seen = fetcher()
-    ex, _, store = executor(tmp_path, [tool], AutoReadPolicy(max_per_task=2))
+    ex, sink, store = executor(tmp_path, [tool], AutoReadPolicy(max_per_task=2))
     assert ex.execute("fetch_url", {"url": "https://example.com/a"}).ok
     assert ex.execute("fetch_url", {"url": "https://example.com/b"}).ok
+    r = ex.execute("fetch_url", {"url": "https://example.com/c"})
+    assert not r.ok and "reading limit reached" in (r.error or "")
+    assert len(seen) == 2 and store.list() == []
+    assert "tool.auto_read_limit" in types(sink)
+    # Pages already read are still answered from the cache.
+    assert ex.execute("fetch_url", {"url": "https://example.com/a"}).ok
+    # A URL that never qualified still asks, even past the allowance.
     with pytest.raises(ApprovalRequired):
-        ex.execute("fetch_url", {"url": "https://example.com/c"})
-    assert len(seen) == 2 and len(store.list()) == 1
+        ex.execute("fetch_url", {"url": "https://example.com/s?q=1"})
+    assert len(seen) == 2
 
 
 def test_only_the_real_fetch_tool_is_auto_approved(tmp_path: Path) -> None:
@@ -218,6 +227,7 @@ def test_repeated_page_is_served_from_cache_and_not_counted(tmp_path: Path) -> N
     # The cache did not use up the automatic-read allowance.
     assert ex.execute("fetch_url", {"url": "https://www.sqlite.org/wal.html"}).ok
     assert store.list() == []
+    assert not ex.execute("fetch_url", {"url": "https://www.sqlite.org/x.html"}).ok
 
 
 def test_cache_is_per_executor(tmp_path: Path) -> None:
