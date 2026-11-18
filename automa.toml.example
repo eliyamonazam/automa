@@ -88,3 +88,12 @@ min_pass_rate = 0.8
 max_retries = 3
 retry_delays_s = [3.0, 10.0, 30.0]
 timeout_s = 180.0
+
+# Plain web reads. Off by default: every fetch_url call needs approval.
+# With auto_approve_reads = true, fetch_url runs without asking ONLY for URLs that
+# cannot plausibly carry project data out: https, default port, a normal host name,
+# no query string, a short plain path. Everything else still asks. Every automatic
+# read is logged (tool.auto_approved). Sending/publishing tools always ask.
+[web]
+auto_approve_reads = false
+max_auto_reads_per_task = 20

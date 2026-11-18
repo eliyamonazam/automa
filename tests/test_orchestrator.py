@@ -719,3 +719,22 @@ def test_rejected_irreversible_call_keeps_the_file(tmp_path: Path) -> None:
     rig.store.approvals(PID).decide(report.approval_id, approve=False)
     assert rig.run().status is ProjectStatus.DONE
     assert old.read_text() == "keep me until approved"
+
+
+def test_auto_read_policy_follows_config(tmp_path: Path) -> None:
+    # [web] auto_approve_reads reaches the task executors only when opted in (D93).
+    from automa.tools.policy import PermissionPolicy
+    from automa.tools.web_reads import AutoReadPolicy
+
+    rig = Rig(tmp_path, [], make_plan(task_dict("a")))
+    ex = rig.orch()._executor(PID, PermissionPolicy(allowed_tools=frozenset()), task_id="a")
+    assert ex._auto_reads is None
+    rig.cfg = rig.cfg.model_copy(
+        update={
+            "web": rig.cfg.web.model_copy(
+                update={"auto_approve_reads": True, "max_auto_reads_per_task": 7}
+            )
+        }
+    )
+    ex = rig.orch()._executor(PID, PermissionPolicy(allowed_tools=frozenset()), task_id="a")
+    assert ex._auto_reads == AutoReadPolicy(max_per_task=7)

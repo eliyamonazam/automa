@@ -17,6 +17,7 @@ import json
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
@@ -25,6 +26,8 @@ from automa.tools.approvals import ApprovalError, ApprovalStatus, ApprovalStore
 from automa.tools.base import MAX_TOOL_OUTPUT_CHARS, Tool, ToolError, ToolResult
 from automa.tools.claims import PathClaims
 from automa.tools.policy import Decision, PermissionPolicy, PolicyDecision
+from automa.tools.web import FetchUrl
+from automa.tools.web_reads import AutoReadPolicy, auto_read_refusal
 from automa.tools.workspace import MAX_WRITE_BYTES, Workspace
 
 MAX_ARGUMENTS_CHARS = 2 * MAX_WRITE_BYTES
@@ -69,7 +72,10 @@ class ToolExecutor:
         approvals: ApprovalStore | None = None,
         task_id: str | None = None,
         claims: PathClaims | None = None,
+        auto_reads: AutoReadPolicy | None = None,
     ) -> None:
+        if auto_reads is not None and not isinstance(auto_reads, AutoReadPolicy):
+            raise TypeError("auto_reads must be an AutoReadPolicy")
         if not isinstance(policy, PermissionPolicy):
             raise TypeError("policy must be a PermissionPolicy")
         if not isinstance(workspace, Workspace):
@@ -103,6 +109,8 @@ class ToolExecutor:
         self._approvals = approvals
         self._task_id = task_id
         self._claims = claims
+        self._auto_reads = auto_reads
+        self._auto_reads_used = 0
 
     @property
     def policy(self) -> PermissionPolicy:
@@ -183,6 +191,8 @@ class ToolExecutor:
         if conflict is not None:
             return self._finish(tool, args, conflict)
 
+        if needs_approval and self._auto_read(tool, args):
+            needs_approval = False
         if needs_approval:
             rejected = self._gate(tool, args, decision.reason)
             if rejected is not None:
@@ -201,6 +211,25 @@ class ToolExecutor:
                 content = content[:MAX_TOOL_OUTPUT_CHARS] + "\n[... truncated]"
             result = ToolResult(tool=tool.name, ok=True, content=content)
         return self._finish(tool, args, result)
+
+    def _auto_read(self, tool: Tool, args: Any) -> bool:
+        """True if this gated call is a plain web read the user pre-approved (D93)."""
+        if self._auto_reads is None or type(tool) is not FetchUrl or tool.irreversible:
+            return False
+        url = getattr(args, "url", None)
+        refusal = auto_read_refusal(url)
+        if refusal is None and self._auto_reads_used >= self._auto_reads.max_per_task:
+            refusal = f"more than {self._auto_reads.max_per_task} automatic reads in this task"
+        if refusal is not None:
+            self._emit("tool.auto_read_refused", {"tool": tool.name, "reason": _short(refusal)})
+            return False
+        self._auto_reads_used += 1
+        parts = urlsplit(url)
+        self._emit(
+            "tool.auto_approved",
+            {"tool": tool.name, "host": parts.hostname or "", "path": _short(parts.path, 200)},
+        )
+        return True
 
     def _claim(self, tool: Tool, args: Any) -> ToolResult | None:
         """Claim the paths this call writes; a failed result if another task holds one."""

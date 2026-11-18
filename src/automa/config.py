@@ -187,6 +187,19 @@ class ProviderConfig(_Strict):
         return base
 
 
+class WebConfig(_Strict):
+    """``[web]`` in automa.toml (D93).
+
+    ``auto_approve_reads``: run ``fetch_url`` without asking when the URL cannot
+    plausibly carry project data out (https, no query string, short plain path).
+    Off by default; anything that does not qualify still needs approval.
+    ``max_auto_reads_per_task``: automatic reads allowed per task attempt.
+    """
+
+    auto_approve_reads: bool = False
+    max_auto_reads_per_task: int = Field(default=20, ge=1, le=100)
+
+
 class OrchestratorConfig(_Strict):
     """How ``automa run`` schedules tasks (``[orchestrator]`` in automa.toml; D36).
 
@@ -282,6 +295,7 @@ class AutomaConfig(_Strict):
     workspace: Path = Path("workspace")
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     provider: ProviderConfig = Field(default_factory=ProviderConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
     roles: dict[str, RoleSettings] = Field(default_factory=dict)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)

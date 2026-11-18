@@ -80,6 +80,7 @@ from automa.tools.base import Tool
 from automa.tools.claims import PathClaims, paths_overlap
 from automa.tools.executor import ApprovalRequired, ToolExecutor, ToolLayerError
 from automa.tools.policy import PermissionPolicy
+from automa.tools.web_reads import AutoReadPolicy
 from automa.tools.workspace import Workspace
 
 Clock = Callable[[], datetime]
@@ -738,6 +739,11 @@ class Orchestrator:
             approvals=self._store.approvals(project_id) if task_id is not None else None,
             task_id=task_id,
             claims=claims,
+            auto_reads=(
+                AutoReadPolicy(max_per_task=self._config.web.max_auto_reads_per_task)
+                if self._config.web.auto_approve_reads
+                else None
+            ),
         )
 
     def _save_state(
