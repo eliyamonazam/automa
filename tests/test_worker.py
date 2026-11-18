@@ -679,3 +679,49 @@ def test_worker_module_structure() -> None:
             assert node.func.attr not in {"authorize", "record", "release"}
             if node.func.attr == "run":
                 pytest.fail("worker must not call Tool.run directly")
+
+
+# --- old large tool results are shortened (D116) --------------------------------
+
+
+def test_compact_keeps_recent_large_results_whole() -> None:
+    from automa.agents.worker import COMPACTED_MARK, compact_tool_results
+
+    big = "x" * 5000
+    msgs = [Message.system("s"), Message.user("u")]
+    for i in range(5):
+        msgs.append(Message.tool(f"c{i}", f"{i}" + big))
+        msgs.append(Message.tool(f"s{i}", "small result"))
+    n = compact_tool_results(msgs, keep=2, threshold=1500)
+    assert n == 3
+    tools = [m for m in msgs if m.role is MsgRole.TOOL]
+    large = [m for m in tools if m.tool_call_id.startswith("c")]
+    assert all(COMPACTED_MARK in (m.content or "") for m in large[:3])
+    assert all(len(m.content or "") == 5001 for m in large[3:])
+    assert [m.tool_call_id for m in tools] == [f"{p}{i}" for i in range(5) for p in "cs"]
+    assert all(m.content == "small result" for m in tools if m.tool_call_id.startswith("s"))
+    assert large[0].content and large[0].content.startswith("0xxx")
+    # Idempotent: a second pass changes nothing.
+    assert compact_tool_results(msgs, keep=2, threshold=1500) == 0
+
+
+def test_worker_sends_old_pages_shortened(tmp_path: Path) -> None:
+    for i in range(4):
+        (tmp_path / f"f{i}.txt").write_text("")
+    rig = Rig(
+        tmp_path,
+        [calls(("write_file", {"path": f"p{i}.txt", "content": "y" * 3000})) for i in range(4)]
+        + [
+            calls(*[("read_file", {"path": f"p{i}.txt"}) for i in range(4)]),
+            calls(("write_file", {"path": "hello.txt", "content": "hi"})),
+            reply("done"),
+        ],
+    )
+    result = rig.run()
+    assert result.status is ResultStatus.COMPLETED
+    last = rig.provider.requests[-1].messages
+    reads = [m for m in last if m.role is MsgRole.TOOL and "y" * 1000 in (m.content or "")]
+    shortened = [
+        m for m in last if m.role is MsgRole.TOOL and "shortened to save cost" in (m.content or "")
+    ]
+    assert len(reads) == 3 and len(shortened) == 1  # 4 large reads, the newest 3 kept whole

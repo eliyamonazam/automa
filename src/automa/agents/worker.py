@@ -128,6 +128,42 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+COMPACT_HEAD_CHARS = 400
+COMPACTED_MARK = "[earlier tool output shortened to save cost"
+
+
+def compact_tool_results(messages: list[Message], *, keep: int, threshold: int) -> int:
+    """Shorten old large tool results in place; return how many were shortened.
+
+    The ``keep`` most recent tool results longer than ``threshold`` characters stay
+    whole. Older ones keep their first ``COMPACT_HEAD_CHARS`` characters plus a note
+    that the rest was removed and can be fetched or read again (web pages are then
+    served from the task's cache, D112). Already shortened results are left alone,
+    and every tool message still answers its call (same ``tool_call_id``).
+    """
+    large = [
+        i
+        for i, m in enumerate(messages)
+        if m.role is MsgRole.TOOL
+        and isinstance(m.content, str)
+        and len(m.content) > threshold
+        and COMPACTED_MARK not in m.content[: COMPACT_HEAD_CHARS + 200]
+    ]
+    shortened = 0
+    for i in large[: max(0, len(large) - keep)]:
+        old = messages[i]
+        text = old.content or ""
+        head = text[:COMPACT_HEAD_CHARS]
+        note = (
+            f"\n{COMPACTED_MARK}: {len(text) - len(head)} more characters removed. "
+            "Your notes should already hold what you needed; read or fetch it again "
+            "only if you must.]"
+        )
+        messages[i] = old.model_copy(update={"content": head + note})
+        shortened += 1
+    return shortened
+
+
 def _short(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "\n[... truncated]"
 
@@ -145,6 +181,12 @@ class WorkerSettings(BaseModel):
     max_tool_calls_per_step: int = Field(default=8, ge=1, le=32)
     # Each tool result is cut to this size in the conversation (bounds input cost).
     max_tool_result_chars: int = Field(default=8_000, ge=200, le=20_000)
+    # The whole conversation is re-sent on every step, so large old tool results
+    # (web pages, big files) are the main input cost. Only the most recent
+    # ``keep_full_tool_results`` results longer than ``compact_tool_result_chars``
+    # stay whole; older ones are shortened to a stub in the conversation (D116).
+    keep_full_tool_results: int = Field(default=3, ge=1, le=50)
+    compact_tool_result_chars: int = Field(default=1_500, ge=300, le=20_000)
 
 
 def task_message(task: Task, feedback: Sequence[Issue] = ()) -> str:
@@ -302,6 +344,9 @@ class WorkerAgent:
         error: str | None = f"step limit reached ({max_steps} steps)"
         while steps < max_steps:
             steps += 1
+            compact_tool_results(
+                messages, keep=s.keep_full_tool_results, threshold=s.compact_tool_result_chars
+            )
             # Gateway errors (budget stop, provider failure) propagate: never retried here.
             result = self._gateway.complete(
                 messages,
