@@ -11,8 +11,10 @@ Order of evaluation:
    through the verifier's own ``ToolExecutor`` (Tool Layer + Permission Policy);
 3. only if every check passed and some criteria have no check, a **model-based
    evaluation** judges those criteria, each one explicitly, through the guarded
-   ``LLMGateway``. Invalid replies are retried (at most ``max_attempts``); if none
-   is valid, ``VerificationFailed`` is raised — never a passing verdict.
+   ``LLMGateway`` — on a model from another family than the worker's when
+   ``[verifier] prefer_other_family`` is set (D96). Invalid replies are retried
+   (at most ``max_attempts``); if none is valid, ``VerificationFailed`` is
+   raised — never a passing verdict.
 
 Gateway errors (``BudgetExceeded``/``ProviderError``) and ``ToolLayerError``
 propagate and are never retried here. The verifier cannot write files: its
@@ -25,6 +27,7 @@ import json
 import shlex
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Annotated, Any
 
 from pydantic import (
@@ -36,7 +39,7 @@ from pydantic import (
     ValidationError,
 )
 
-from automa.config import Tier
+from automa.config import AutomaConfig, Tier
 from automa.events import Event, EventSink
 from automa.llm.gateway import CallContext, LLMGateway
 from automa.llm.types import FinishReason, Message
@@ -108,6 +111,64 @@ class VerifierSettings(BaseModel):
     max_files: int = Field(default=20, ge=0, le=100)
     max_file_chars: int = Field(default=20_000, ge=200, le=MAX_TOOL_OUTPUT_CHARS)
     max_total_chars: int = Field(default=60_000, ge=200, le=400_000)
+
+
+# --- evaluator choice (D96) ----------------------------------------------------
+
+
+class EvaluatorReason(StrEnum):
+    """Why the model-based evaluation runs on the model it does."""
+
+    DISABLED = "disabled"  # [verifier] prefer_other_family is off: tier model
+    OTHER_FAMILY = "other_family"  # a listed model from another family
+    WORKER_FAMILY_UNKNOWN = "worker_family_unknown"  # worker model not catalogued
+    NO_OTHER_FAMILY = "no_other_family"  # every listed model is the worker's family
+
+
+class EvaluatorChoice(BaseModel):
+    """The model the evaluation will use. ``model`` is ``None`` for the tier model."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model: str | None
+    reason: EvaluatorReason
+    worker_family: str | None
+
+    @property
+    def fallback(self) -> bool:
+        """True when cross-family was wanted but could not be honoured."""
+        return self.reason in (
+            EvaluatorReason.WORKER_FAMILY_UNKNOWN,
+            EvaluatorReason.NO_OTHER_FAMILY,
+        )
+
+
+def choose_evaluator(config: AutomaConfig, worker_model: str) -> EvaluatorChoice:
+    """Pick the evaluator for work done by ``worker_model`` (pure, no model call).
+
+    With ``[verifier] prefer_other_family``, the first model of ``[verifier] models``
+    whose catalogued family differs from the worker model's family; otherwise (or if
+    that is impossible) the verifier's tier model, as before D96.
+    """
+    worker_family = config.family_of(worker_model)
+    vc = config.verifier
+    if not vc.prefer_other_family:
+        return EvaluatorChoice(
+            model=None, reason=EvaluatorReason.DISABLED, worker_family=worker_family
+        )
+    if worker_family is None:
+        return EvaluatorChoice(
+            model=None, reason=EvaluatorReason.WORKER_FAMILY_UNKNOWN, worker_family=None
+        )
+    for candidate in vc.models:
+        family = config.family_of(candidate)
+        if family is not None and family != worker_family:
+            return EvaluatorChoice(
+                model=candidate, reason=EvaluatorReason.OTHER_FAMILY, worker_family=worker_family
+            )
+    return EvaluatorChoice(
+        model=None, reason=EvaluatorReason.NO_OTHER_FAMILY, worker_family=worker_family
+    )
 
 
 # --- deterministic checks ----------------------------------------------------
@@ -372,6 +433,7 @@ class VerifierAgent:
         issues: list[Issue] = []
         checks: list[CheckResult] = []
         model_evaluated = False
+        evaluator: tuple[str, str | None] | None = None
 
         if result.status is not ResultStatus.COMPLETED:
             reason = result.error or result.status.value
@@ -397,7 +459,9 @@ class VerifierAgent:
             )
             judged = [i for i, c in enumerate(task.acceptance_criteria) if c.check is None]
             if not issues and judged:
-                evaluation = self._evaluate(task, result, judged, executor, project_id, tier)
+                evaluation, evaluator = self._evaluate(
+                    task, result, judged, executor, project_id, tier
+                )
                 model_evaluated = True
                 for j in sorted(evaluation.criteria, key=lambda j: j.criterion):
                     if not j.passed:
@@ -410,6 +474,8 @@ class VerifierAgent:
             checks=checks,
             issues=issues,
             model_evaluated=model_evaluated,
+            evaluator_model=evaluator[0] if evaluator else None,
+            evaluator_family=evaluator[1] if evaluator else None,
             created_at=self._clock(),
         )
         self._emit(
@@ -464,8 +530,29 @@ class VerifierAgent:
         executor: ToolExecutor,
         project_id: str,
         tier: Tier | None,
-    ) -> Evaluation:
+    ) -> tuple[Evaluation, tuple[str, str | None]]:
         s = self._settings
+        config = self._gateway.config
+        eval_tier = tier or s.tier
+        choice = choose_evaluator(config, result.model)
+        # Resolve the model up front: the verdict names the model actually asked.
+        model = choice.model if choice.model is not None else config.model_for(eval_tier)
+        family = config.family_of(model)
+        if choice.reason is not EvaluatorReason.DISABLED:
+            self._emit(
+                "verifier.evaluator",
+                project_id,
+                {
+                    "task": task.id,
+                    "attempt": result.attempt,
+                    "model": model,
+                    "family": family,
+                    "worker_model": result.model,
+                    "worker_family": choice.worker_family,
+                    "reason": choice.reason.value,
+                    "fallback": choice.fallback,
+                },
+            )
         files, omitted = self._workspace_files(task, result, executor)
         messages = [
             Message.system(EVAL_SYSTEM_PROMPT),
@@ -477,10 +564,11 @@ class VerifierAgent:
             # Gateway errors (budget stop, provider failure) propagate: never retried here.
             reply = self._gateway.complete(
                 messages,
-                tier=tier or s.tier,
+                tier=eval_tier,
                 max_tokens=s.eval_max_tokens,
                 temperature=s.temperature,
                 context=context,
+                model=choice.model,
             )
             text = reply.text
             try:
@@ -492,7 +580,7 @@ class VerifierAgent:
                     )
                 if finish is FinishReason.CONTENT_FILTER:
                     raise PlanError("reply filtered", "- <root>: reply was blocked by a filter")
-                return parse_evaluation(text, judged)
+                return parse_evaluation(text, judged), (model, family)
             except PlanError as e:
                 details = e.details or str(e)
                 self._emit(

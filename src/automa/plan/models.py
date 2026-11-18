@@ -352,6 +352,10 @@ class VerdictOutcome(StrEnum):
     FAIL = "fail"
 
 
+# A catalogued model family, as in ``[models."<id>"] family`` (D94).
+FAMILY_PATTERN = r"^[a-z][a-z0-9_-]{0,31}$"
+
+
 class CheckResult(_Strict):
     """Outcome of one deterministic check (``criterion`` indexes ``acceptance_criteria``)."""
 
@@ -380,10 +384,20 @@ class Verdict(_Strict):
     checks: list[CheckResult] = Field(default_factory=list, max_length=MAX_LIST_ITEMS)
     issues: list[Issue] = Field(default_factory=list, max_length=MAX_LIST_ITEMS)
     model_evaluated: bool = False
+    # Which model did the model-based evaluation, and its catalogued family (D96).
+    # Absent in verdicts written before D96 and when no model evaluated.
+    evaluator_model: str | None = Field(default=None, min_length=1, max_length=200)
+    evaluator_family: str | None = Field(default=None, pattern=FAMILY_PATTERN)
     created_at: UtcDatetime
 
     @model_validator(mode="after")
     def _consistent(self) -> Verdict:
+        if not self.model_evaluated and (
+            self.evaluator_model is not None or self.evaluator_family is not None
+        ):
+            raise ValueError("an evaluator is only recorded when a model evaluated")
+        if self.evaluator_family is not None and self.evaluator_model is None:
+            raise ValueError("an evaluator family needs an evaluator model")
         indexes = [c.criterion for c in self.checks]
         if len(set(indexes)) != len(indexes):
             raise ValueError("duplicate check results for one criterion")

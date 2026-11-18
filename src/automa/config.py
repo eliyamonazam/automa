@@ -5,7 +5,7 @@ Sources, from lowest to highest precedence:
 1. Built-in defaults (conservative, finite budget limits).
 2. ``automa.toml`` (non-secret settings: tiers, prices, model catalog, limits,
    workspace, sandbox, orchestrator, extra skills for built-in roles, memory in
-   prompts, router).
+   prompts, router, cross-family verifier).
 3. ``.env`` file in the working directory.
 4. Process environment variables.
 
@@ -353,6 +353,40 @@ class RouterConfig(_Strict):
         return v
 
 
+MAX_VERIFIER_MODELS = 20
+
+
+class VerifierConfig(_Strict):
+    """``[verifier]`` in automa.toml: the cross-family evaluator (D96).
+
+    With ``prefer_other_family = true``, the Verifier's model-based evaluation uses the
+    first model of ``models`` (owner's order of preference) whose catalogued family
+    differs from the family of the model that did the work. If the worker's family is
+    unknown or no listed model is from another family, the evaluation runs on the
+    verifier's tier model as before (and an event says why). Every listed model must
+    be in the catalog (so it has a family and a price) and have the ``text``
+    capability; calls still go through the gateway and the BudgetGuard.
+    """
+
+    prefer_other_family: StrictBool = False
+    models: tuple[str, ...] = ()
+
+    @field_validator("models", mode="before")
+    @classmethod
+    def _model_list(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            raise ValueError("models must be a list of model ids, not a string")
+        if isinstance(v, list | tuple):
+            if len(v) > MAX_VERIFIER_MODELS:
+                raise ValueError(f"at most {MAX_VERIFIER_MODELS} verifier models")
+            bad = [repr(m) for m in v if not isinstance(m, str) or not _MODEL_ID_RE.fullmatch(m)]
+            if bad:
+                raise ValueError(f"invalid model ids: {', '.join(bad)}")
+            if len(set(v)) != len(v):
+                raise ValueError("models must not repeat")
+        return v
+
+
 class AutomaConfig(_Strict):
     """Fully resolved, validated configuration."""
 
@@ -370,6 +404,7 @@ class AutomaConfig(_Strict):
     roles: dict[str, RoleSettings] = Field(default_factory=dict)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     router: RouterConfig = Field(default_factory=RouterConfig)
+    verifier: VerifierConfig = Field(default_factory=VerifierConfig)
 
     @field_validator("roles")
     @classmethod
@@ -420,7 +455,24 @@ class AutomaConfig(_Strict):
         if textless:
             # Roles talk to their tier's model; a model without text output cannot serve one.
             raise ValueError(f"tier model(s) without the 'text' capability: {', '.join(textless)}")
+        self._check_verifier()
         return self
+
+    def _check_verifier(self) -> None:
+        v = self.verifier
+        if v.prefer_other_family and not v.models:
+            raise ValueError("[verifier] prefer_other_family needs a non-empty models list")
+        uncatalogued = [m for m in v.models if m not in self.models]
+        if uncatalogued:
+            # A family (to compare) and a price (to cap) both come from the catalog.
+            raise ValueError(
+                f"[verifier] model(s) not in the [models] catalog: {', '.join(uncatalogued)}"
+            )
+        textless = [m for m in v.models if not self.models[m].has(Capability.TEXT)]
+        if textless:
+            raise ValueError(
+                f"[verifier] model(s) without the 'text' capability: {', '.join(textless)}"
+            )
 
     def model_for(self, tier: Tier) -> str:
         """Return the model name mapped to ``tier``."""

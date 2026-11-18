@@ -1,7 +1,8 @@
 """``LLMGateway``: the single path through which every model call goes.
 
 Responsibilities:
-- resolve a capability tier to a concrete model (roles never name models);
+- resolve a capability tier to a concrete model (roles never name models), or
+  accept an explicitly requested, priced model (the cross-family verifier, D96);
 - bound every call (``max_tokens`` is mandatory) and estimate its worst-case cost;
 - ask the mandatory ``CallGuard`` (``automa.budget.BudgetGuard`` in production)
   for permission before sending, report the actual cost after the call, and
@@ -19,7 +20,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from automa.config import AutomaConfig, ModelPrice, Tier
+from automa.config import AutomaConfig, Capability, ConfigError, ModelPrice, Tier
 from automa.llm.provider import Provider, ProviderError
 from automa.llm.types import (
     ChatRequest,
@@ -163,8 +164,9 @@ class LLMGateway:
         max_tokens: int,
         temperature: float = 0.2,
         tools: Sequence[ToolSpec] = (),
+        model: str | None = None,
     ) -> ChatRequest:
-        model = self._config.model_for(tier)
+        model = self._config.model_for(tier) if model is None else self.check_model(model)
         return ChatRequest(
             model=model,
             messages=tuple(messages),
@@ -172,6 +174,21 @@ class LLMGateway:
             temperature=temperature,
             tools=tuple(tools),
         )
+
+    def check_model(self, model: str) -> str:
+        """Validate an explicitly requested model (D96) and return it.
+
+        The model must have a configured price (so the BudgetGuard can bound the
+        call) and, if it is catalogued, the ``text`` capability. Raises ``ConfigError``
+        before anything is authorized or sent.
+        """
+        if not isinstance(model, str) or not model:
+            raise ConfigError("model must be a non-empty model id")
+        self._config.price_for(model)  # raises ConfigError if unpriced
+        info = self._config.model_info(model)
+        if info is not None and not info.has(Capability.TEXT):
+            raise ConfigError(f"model '{model}' has no 'text' capability")
+        return model
 
     def estimate(self, request: ChatRequest, tier: Tier, context: CallContext) -> CallEstimate:
         price = self._config.price_for(request.model)
@@ -194,15 +211,24 @@ class LLMGateway:
         temperature: float = 0.2,
         tools: Sequence[ToolSpec] = (),
         context: CallContext | None = None,
+        model: str | None = None,
     ) -> LLMResult:
         """Run one chat completion at ``tier``. Raises if the guard refuses.
+
+        ``model`` overrides the tier's model with a specific priced model (D96); the
+        tier is still recorded, and the call is guarded exactly the same way.
 
         Transient provider failures are retried per ``config.provider`` (D91). Every
         attempt is a separate call: authorized by the guard first (so a retry can
         never exceed a cap) and then recorded or released.
         """
         request = self.build_request(
-            messages, tier=tier, max_tokens=max_tokens, temperature=temperature, tools=tools
+            messages,
+            tier=tier,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            tools=tools,
+            model=model,
         )
         estimate = self.estimate(request, tier, context or CallContext())
         policy = self._config.provider

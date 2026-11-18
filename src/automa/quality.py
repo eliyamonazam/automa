@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from automa.config import Tier
 from automa.plan.models import (
+    FAMILY_PATTERN,
     ROLE_PATTERN,
     TASK_ID_PATTERN,
     ResultStatus,
@@ -44,7 +45,7 @@ from automa.plan.models import (
 )
 from automa.project.store import PROJECT_ID_PATTERN, ProjectStore
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 QUALITY_FILE = "quality.sqlite3"
 
 _SCHEMA = """
@@ -60,6 +61,8 @@ CREATE TABLE IF NOT EXISTS attempts (
     model_evaluated INTEGER NOT NULL CHECK (model_evaluated IN (0, 1)),
     cost_nusd       INTEGER NOT NULL CHECK (cost_nusd >= 0),
     judged_at       TEXT    NOT NULL,
+    verifier_model  TEXT,
+    verifier_family TEXT,
     PRIMARY KEY (project_id, task_id, attempt)
 );
 CREATE INDEX IF NOT EXISTS attempts_role_model ON attempts (role, model);
@@ -77,7 +80,12 @@ _COLUMNS = (
     "model_evaluated",
     "cost_nusd",
     "judged_at",
+    "verifier_model",
+    "verifier_family",
 )
+# Columns of schema version 1 (before D96); a read-only open of a v1 log reads these.
+_V1_COLUMNS = _COLUMNS[:-2]
+_V2_ADDED = ("verifier_model", "verifier_family")
 
 
 class QualityError(Exception):
@@ -100,6 +108,10 @@ class QualityRecord(BaseModel):
     model_evaluated: bool
     cost_nusd: int = Field(ge=0)  # the worker's cost of this attempt
     judged_at: UtcDatetime
+    # The model that did the model-based evaluation and its family (D96); ``None``
+    # when no model evaluated or for attempts judged before D96.
+    verifier_model: str | None = Field(default=None, min_length=1, max_length=200)
+    verifier_family: str | None = Field(default=None, pattern=FAMILY_PATTERN)
 
     @property
     def passed(self) -> bool:
@@ -124,6 +136,8 @@ class QualityRecord(BaseModel):
             model_evaluated=verdict.model_evaluated,
             cost_nusd=result.cost_nusd,
             judged_at=verdict.created_at,
+            verifier_model=verdict.evaluator_model,
+            verifier_family=verdict.evaluator_family,
         )
 
 
@@ -173,6 +187,7 @@ class QualityLog:
         self._path = str(path)
         self._read_only = read_only
         self._empty = False  # read-only open of a file without the schema yet
+        self._columns: tuple[str, ...] = _COLUMNS
         target = self._path
         uri = False
         if self._path == ":memory:":
@@ -214,7 +229,7 @@ class QualityLog:
 
     def _init_schema(self) -> None:
         (version,) = self._conn.execute("PRAGMA user_version").fetchone()
-        if version not in (0, SCHEMA_VERSION):
+        if version not in (0, 1, SCHEMA_VERSION):
             raise QualityError(f"unsupported quality log schema version {version}")
         if version == 0:
             tables = self._conn.execute(
@@ -222,12 +237,26 @@ class QualityLog:
             ).fetchall()
             if tables:
                 raise QualityError("database is not an Automa quality log (unexpected tables)")
+        else:
+            self._check_columns(_V1_COLUMNS if version == 1 else _COLUMNS)
         if self._read_only:
             self._empty = version == 0
+            if version == 1:
+                self._columns = _V1_COLUMNS  # read as is; verifier columns are None
             return
         with self._conn:
+            if version == 1:
+                # D96 migration: two nullable columns; existing rows keep NULL.
+                for column in _V2_ADDED:
+                    self._conn.execute(f"ALTER TABLE attempts ADD COLUMN {column} TEXT")
             self._conn.executescript(_SCHEMA)
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    def _check_columns(self, expected: tuple[str, ...]) -> None:
+        rows = self._conn.execute("PRAGMA table_info(attempts)").fetchall()
+        have = tuple(r[1] for r in rows)
+        if have != expected:
+            raise QualityError("database is not an Automa quality log (unexpected columns)")
 
     def close(self) -> None:
         with self._lock:
@@ -290,7 +319,7 @@ class QualityLog:
 
     def _get_row(self, project_id: str, task_id: str, attempt: int) -> tuple[object, ...] | None:
         row: tuple[object, ...] | None = self._conn.execute(
-            f"SELECT {', '.join(_COLUMNS)} FROM attempts"  # noqa: S608 - constant columns
+            f"SELECT {', '.join(self._columns)} FROM attempts"  # noqa: S608 - constant columns
             " WHERE project_id = ? AND task_id = ? AND attempt = ?",
             (project_id, task_id, attempt),
         ).fetchone()
@@ -316,13 +345,13 @@ class QualityLog:
         with self._lock:
             try:
                 rows = self._conn.execute(
-                    f"SELECT {', '.join(_COLUMNS)} FROM attempts{where}"  # noqa: S608
+                    f"SELECT {', '.join(self._columns)} FROM attempts{where}"  # noqa: S608
                     " ORDER BY judged_at, project_id, task_id, attempt",
                     params,
                 ).fetchall()
             except sqlite3.Error as e:
                 raise QualityError(f"cannot read quality log: {e}") from e
-        return [_row_to_record(r) for r in rows]
+        return [_row_to_record(r, self._columns) for r in rows]
 
     def stats(self, *, role: str | None = None) -> list[QualityStats]:
         """Aggregates per (role, model), sorted by role then model.
@@ -378,11 +407,13 @@ def _to_row(rec: QualityRecord) -> tuple[object, ...]:
         int(rec.model_evaluated),
         rec.cost_nusd,
         rec.judged_at.isoformat(),
+        rec.verifier_model,
+        rec.verifier_family,
     )
 
 
-def _row_to_record(row: tuple[object, ...]) -> QualityRecord:
-    data = dict(zip(_COLUMNS, row, strict=True))
+def _row_to_record(row: tuple[object, ...], columns: tuple[str, ...] = _COLUMNS) -> QualityRecord:
+    data = dict(zip(columns, row, strict=True))
     if data["model_evaluated"] not in (0, 1):
         raise QualityError("corrupt quality log row (model_evaluated)")
     data["model_evaluated"] = bool(data["model_evaluated"])

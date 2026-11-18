@@ -38,6 +38,16 @@ output_per_mtok = 20.00
 # review and paste here (prints only, rounds prices up; D95):
 #   automa models import --format 1xai prices.txt --rate 323000
 
+# Cross-family verifier (optional, D96): the Verifier's model-based evaluation uses the
+# first model below whose catalog family differs from the family of the model that did
+# the work (e.g. a Claude worker is judged by a GPT or Gemini model). If the worker's
+# family is unknown or no listed model is from another family, the verifier's tier
+# model is used as before (event verifier.evaluator says why). Every model listed must
+# be in the [models] catalog with the "text" capability; calls are capped as usual.
+# [verifier]
+# prefer_other_family = true
+# models = ["openai/gpt-5.5", "google/gemini-3-pro"]
+
 # Hard caps in USD. Reaching a cap stops the run; per_call must not exceed the others.
 [limits]
 project_usd = 5.0

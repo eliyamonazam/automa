@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-18 — M11: ارزیاب از خانواده دیگر
+- **انجام‌شده:** بخش `[verifier]` با `prefer_other_family` و `models`؛ ارزیابی مدلی Verifier روی اولین مدل فهرست با خانواده‌ای غیر از مدل Worker اجرا می‌شه (اگه خانوادهٔ Worker نامعلوم بود یا مدل دگرخانواده نبود، مدل سطح مثل قبل، با رویداد `verifier.evaluator` و دلیل). `LLMGateway.complete(model=…)` مدل مشخص قیمت‌دار رو با همون BudgetGuard و Ledger می‌پذیره. مدل و خانوادهٔ ارزیاب در `Verdict` (`evaluator_model`/`evaluator_family`) و در لاگ کیفیت (`verifier_model`/`verifier_family`، طرح نسخهٔ ۲ با مهاجرت خودکار از نسخهٔ ۱) ثبت می‌شه (D96).
+- **فایل‌های اصلی:** `src/automa/config.py` (`VerifierConfig`)، `src/automa/llm/gateway.py` (`model`، `check_model`)، `src/automa/agents/verifier.py` (`choose_evaluator`)، `src/automa/plan/models.py` (`Verdict`)، `src/automa/quality.py` (طرح ۲)، `tests/test_verifier_family.py` (۵۷ تست جدید)، `automa.toml.example`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D96).
+- **تست‌ها:** `pytest` ← ۳۸۱۸ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check`، `ruff format --check` و `mypy` روی ماژول‌های تغییرکرده سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و `httpx` و وابستگی‌ها دوباره نصب شدن.
+- **برای صاحب مخزن:** برای روشن کردن: مدل‌های دگرخانواده (مثلاً GPT یا Gemini روی 1xAi) رو در `[models]` با قیمت بذار و `[verifier] prefer_other_family = true` و `models = [...]` رو تنظیم کن.
+- **قدم بعدی:** انتخاب مدل برای هر نقش (قانون‌محور، `[roles.<name>] models`).
+
 ## 2026-11-18 — M11: کاتالوگ مدل (CLI)
 - **انجام‌شده:** فرمان فقط‌خواندنی `automa models [--capability C] [--family F] [--json]` (با نمایش سطح‌هایی که هر مدل رو استفاده می‌کنن و مدل‌های فقط-`[prices]`)، و `automa models import --format 1xai FILE --rate TOMAN_PER_USD` که فهرست قیمت متنی 1xAi (تومان به ازای ۱K توکن) رو به بخش‌های `[models."<id>"]` تبدیل و چاپ می‌کنه: حساب دهدهی دقیق، گرد کردن رو به بالا (۶ رقم)، رقم فارسی و جداکننده هزارگان، خانواده از پیشوند شناسه، توانایی محافظه‌کارانه، خطای دقیق با شماره خط، هشدار برای مدل‌های از قبل قیمت‌دار با `--config`. `automa.toml` هرگز نوشته نمی‌شه (D95).
 - **فایل‌های اصلی:** `src/automa/model_import.py` (جدید)، `src/automa/cli.py`، `src/automa/config.py` (نام عمومی `MODEL_ID_RE`)، `tests/test_model_import.py` (۷۸ تست)، `tests/test_cli_models.py` (۲۵ تست)، `automa.toml.example`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D95).
