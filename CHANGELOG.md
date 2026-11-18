@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-18 — M10: ساخت خودکار Skill (اجرای مقایسه‌ای، اجراکننده)
+- **انجام‌شده:** ماژول تازهٔ `automa.skill_comparison`: `load_candidate_skill` نامزد رو فقط از پوشهٔ staging جدا از `<workspace>/skills/` و Skillهای داخلی می‌خونه (دقیقاً یک `<name>/` فقط با `SKILL.md`؛ هر چیز دیگه ← خطا). `plan_skill_comparison` قبل از هر خرج همه چیز رو می‌سنجه: نسخهٔ نامزد با `with_candidate_skill`، `runs` بین `min_runs` دروازه و ۲۰، شناسه‌های پروژهٔ یکتا `skc-…`، و بدترین هزینهٔ کل (جمع سقف تنگ‌شدهٔ هر اجرا) در برابر `max_total_usd` و باقی‌ماندهٔ سقف روزانه. `run_skill_comparison` اجراها رو درهم (پایه، نامزد، …) با `run_benchmark` معمولی اجرا می‌کنه، قبل از هر اجرا سقف‌ها رو دوباره می‌سنجه، با خطای زیرساخت (provider/tool_layer/config) یا تموم شدن سقف روزانه بدون تصمیم لغو می‌کنه و در پایان رکوردها رو به `evaluate_skill_gate` می‌ده. لاگ کیفیت نوشته نمی‌شه و هیچ Skillی نصب نمی‌شه (D105).
+- **فایل‌های اصلی:** `src/automa/skill_comparison.py` (جدید)، `tests/test_skill_comparison.py` (۶۱ تست جدید)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D105).
+- **تست‌ها:** `pytest` ← ۴۳۰۹ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check`، `ruff format --check` و `mypy` روی ماژول تازه سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و بسته دوباره نصب شد. BudgetGuard، Policy و Approval Gate دست نخوردن؛ فقط سقف‌های اضافه (کل مقایسه و روزانه پیش از هر اجرا) اضافه شد.
+- **برای صاحب مخزن:** کاری لازم نیست؛ فرمان CLI در مورد بعدی میاد.
+- **قدم بعدی:** ساخت خودکار Skill (Agent نویسنده، `SkillAuthorAgent`).
+
 ## 2026-11-18 — M11: benchmark تصویری
 - **انجام‌شده:** benchmark تازهٔ `benchmarks/landing-page-with-image.toml` (صفحه فرود فروشگاه بادبادک «Lumen Kites» با یک تصویر ساخته‌شده؛ نوع `web`، بودجه ۱ دلار) با شش معیار قطعی: `index.html`، doctype/`lang="en"`/`h1`، دقیقاً یک `images/hero.png` یا `images/hero.jpg`، تصویر PNG/JPEG واقعی هم‌قالب پسوند با ابعاد حداقل ۲۵۶×۲۵۶ (خواندن سرآیند)، `<img>` با `src` نسبی و `alt` غیرخالی، و بدون JavaScript/منبع بیرونی/`data:`. فیلد تازهٔ `needs_images` در `Benchmark`؛ `automa bench run` حالا با `[images] model` ابزار تصویر رو روی همون BudgetGuard benchmark وصل می‌کنه (خط `images:`)، و benchmark نیازمند تصویر رو بدون `[images]` قبل از هر ساخت/هزینه با کد ۲ رد می‌کنه. `bench list` نشان `[needs images]` داره (D104).
 - **فایل‌های اصلی:** `benchmarks/landing-page-with-image.toml` (جدید)، `benchmarks/README.md`، `src/automa/benchmarks/models.py`، `src/automa/bench.py` (`image_provider=`)، `src/automa/cli.py`، `tests/test_bench_images.py` (۵۷ تست جدید، شامل تصویرهای PNG/JPEG دست‌ساز خراب و سالم)، `tests/test_benchmarks.py`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D104).
