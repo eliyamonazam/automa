@@ -23,6 +23,17 @@ output_per_mtok = 4.00
 input_per_mtok = 5.00
 output_per_mtok = 20.00
 
+# Model catalog (optional, D94): models with their family (maker), capabilities
+# (text, code, vision, image_out) and price in USD per one million tokens. A catalog
+# entry is priced, so a tier may name it instead of an entry in [prices]; a model must
+# not be priced in both places. Family and capabilities are data for model selection
+# (cross-family verifier, per-role models); they never grant a tool or budget.
+# [models."example/vision-model"]
+# family = "example"
+# capabilities = ["text", "code", "vision"]
+# input_per_mtok = 2.00
+# output_per_mtok = 8.00
+
 # Hard caps in USD. Reaching a cap stops the run; per_call must not exceed the others.
 [limits]
 project_usd = 5.0

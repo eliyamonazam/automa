@@ -1,5 +1,11 @@
 # گزارش تغییرات
 
+## 2026-11-18 — M11: کاتالوگ مدل (داده و تنظیمات)
+- **انجام‌شده:** بخش اختیاری `[models."<id>"]` در `automa.toml` با `family`، `capabilities` (`text`/`code`/`vision`/`image_out`) و قیمت. `price_for` قیمت رو از `[prices]` یا کاتالوگ می‌خونه، پس سطح‌ها می‌تونن مدل کاتالوگ رو نام ببرن و BudgetGuard همون‌طور هزینه رو می‌سنجه. قیمت دوگانه، مدل سطح بی‌قیمت و مدل سطح بدون `text` رد می‌شن. متدهای کمکی `model_info`، `family_of` و `catalog(capability=, family=)` برای موردهای بعدی M11. `[prices]` قبلی بی‌تغییر کار می‌کنه (D94).
+- **فایل‌های اصلی:** `src/automa/config.py`، `tests/test_model_catalog.py` (۵۲ تست جدید، شامل هزینه‌گیری Gateway با قیمت کاتالوگ روی FakeProvider)، `automa.toml.example`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D94).
+- **تست‌ها:** `pytest` ← ۳۶۵۸ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check`، `ruff format --check` و `mypy src/automa/config.py` سبز.
+- **قدم بعدی:** `automa models` (فهرست فقط‌خواندنی) و `automa models import --format 1xai`.
+
 ## 2026-11-18 — M4: مبنای اولین اجرای واقعی
 روی درگاه 1xAi، با `small`/`medium` = `claude-sonnet-5-5` و `large` = `claude-opus-5-5`، روی لپتاپ صاحب مخزن (WSL، sandbox محلی):
 

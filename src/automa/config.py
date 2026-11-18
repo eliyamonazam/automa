@@ -3,8 +3,9 @@
 Sources, from lowest to highest precedence:
 
 1. Built-in defaults (conservative, finite budget limits).
-2. ``automa.toml`` (non-secret settings: tiers, prices, limits, workspace, sandbox,
-   orchestrator, extra skills for built-in roles, memory in prompts, router).
+2. ``automa.toml`` (non-secret settings: tiers, prices, model catalog, limits,
+   workspace, sandbox, orchestrator, extra skills for built-in roles, memory in
+   prompts, router).
 3. ``.env`` file in the working directory.
 4. Process environment variables.
 
@@ -71,6 +72,73 @@ class ModelPrice(_Strict):
 
     input_per_mtok: float = Field(ge=0)
     output_per_mtok: float = Field(ge=0)
+
+
+class Capability(StrEnum):
+    """What a catalogued model can do (``capabilities`` in ``[models."<id>"]``)."""
+
+    TEXT = "text"
+    CODE = "code"
+    VISION = "vision"
+    IMAGE_OUT = "image_out"
+
+
+# A model id as the gateway knows it: printable ASCII, no whitespace or quotes.
+_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
+_FAMILY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+MAX_CATALOG_MODELS = 500
+
+
+def _price_number(v: Any) -> Any:
+    # TOML booleans and strings are not prices (pydantic would coerce some of them).
+    if isinstance(v, bool) or not isinstance(v, int | float):
+        raise ValueError("price must be a number")
+    return v
+
+
+class ModelInfo(_Strict):
+    """One entry of the model catalog: ``[models."<id>"]`` in automa.toml (D94).
+
+    Every catalogued model carries its price (USD per one million tokens), so the
+    BudgetGuard can bound spending on any model the catalog offers. ``family`` (the
+    model's maker, e.g. ``anthropic``) and ``capabilities`` are data for model
+    selection; they never grant a tool, risk level or budget.
+    """
+
+    family: str
+    capabilities: tuple[Capability, ...] = Field(min_length=1)
+    input_per_mtok: float = Field(ge=0)
+    output_per_mtok: float = Field(ge=0)
+
+    @field_validator("family")
+    @classmethod
+    def _family(cls, v: str) -> str:
+        if not _FAMILY_RE.fullmatch(v):
+            raise ValueError(
+                "family must be lowercase letters, digits, '_' or '-' (e.g. anthropic)"
+            )
+        return v
+
+    @field_validator("capabilities", mode="before")
+    @classmethod
+    def _capability_list(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            raise ValueError("capabilities must be a list, not a string")
+        if isinstance(v, list | tuple) and len(set(map(str, v))) != len(v):
+            raise ValueError("capabilities must not repeat")
+        return v
+
+    @field_validator("input_per_mtok", "output_per_mtok", mode="before")
+    @classmethod
+    def _price(cls, v: Any) -> Any:
+        return _price_number(v)
+
+    @property
+    def price(self) -> ModelPrice:
+        return ModelPrice(input_per_mtok=self.input_per_mtok, output_per_mtok=self.output_per_mtok)
+
+    def has(self, capability: Capability) -> bool:
+        return capability in self.capabilities
 
 
 class BudgetLimits(_Strict):
@@ -291,6 +359,7 @@ class AutomaConfig(_Strict):
     api_key: SecretStr | None = None
     tiers: dict[Tier, str] = Field(default_factory=dict)
     prices: dict[str, ModelPrice] = Field(default_factory=dict)
+    models: dict[str, ModelInfo] = Field(default_factory=dict)
     limits: BudgetLimits = Field(default_factory=BudgetLimits)
     workspace: Path = Path("workspace")
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
@@ -309,6 +378,16 @@ class AutomaConfig(_Strict):
             raise ValueError(f"invalid role names: {', '.join(bad)}")
         return v
 
+    @field_validator("models")
+    @classmethod
+    def _model_ids(cls, v: dict[str, ModelInfo]) -> dict[str, ModelInfo]:
+        if len(v) > MAX_CATALOG_MODELS:
+            raise ValueError(f"at most {MAX_CATALOG_MODELS} models in the catalog")
+        bad = sorted(repr(k) for k in v if not _MODEL_ID_RE.fullmatch(k))
+        if bad:
+            raise ValueError(f"invalid model ids: {', '.join(bad)}")
+        return v
+
     def role_skills(self) -> dict[str, tuple[str, ...]]:
         """Extra skills per role from ``[roles.<name>]`` (roles with none are left out)."""
         return {name: rs.skills for name, rs in sorted(self.roles.items()) if rs.skills}
@@ -317,10 +396,29 @@ class AutomaConfig(_Strict):
     def _check(self) -> AutomaConfig:
         if not self.base_url.startswith(("https://", "http://")):
             raise ValueError("base_url must start with http:// or https://")
-        missing = sorted({m for m in self.tiers.values() if m not in self.prices})
+        twice = sorted(set(self.prices) & set(self.models))
+        if twice:
+            # Two prices for one model would make the effective cap ambiguous.
+            raise ValueError(
+                f"model(s) priced both in [prices] and [models]: {', '.join(twice)} "
+                "(keep the price in one place)"
+            )
+        missing = sorted(
+            {m for m in self.tiers.values() if m not in self.prices and m not in self.models}
+        )
         if missing:
             # Without a price the budget layer cannot bound spending.
             raise ValueError(f"no price configured for tier model(s): {', '.join(missing)}")
+        textless = sorted(
+            {
+                m
+                for m in self.tiers.values()
+                if m in self.models and not self.models[m].has(Capability.TEXT)
+            }
+        )
+        if textless:
+            # Roles talk to their tier's model; a model without text output cannot serve one.
+            raise ValueError(f"tier model(s) without the 'text' capability: {', '.join(textless)}")
         return self
 
     def model_for(self, tier: Tier) -> str:
@@ -331,11 +429,32 @@ class AutomaConfig(_Strict):
             raise ConfigError(f"no model configured for tier '{tier.value}'") from None
 
     def price_for(self, model: str) -> ModelPrice:
-        """Return the configured price for ``model``."""
-        try:
+        """Return the configured price for ``model`` (from ``[prices]`` or the catalog)."""
+        if model in self.prices:
             return self.prices[model]
-        except KeyError:
-            raise ConfigError(f"no price configured for model '{model}'") from None
+        if model in self.models:
+            return self.models[model].price
+        raise ConfigError(f"no price configured for model '{model}'")
+
+    def model_info(self, model: str) -> ModelInfo | None:
+        """The catalog entry for ``model``, or ``None`` if it is not catalogued."""
+        return self.models.get(model)
+
+    def family_of(self, model: str) -> str | None:
+        """The catalogued family of ``model``, or ``None`` if it is not catalogued."""
+        info = self.models.get(model)
+        return None if info is None else info.family
+
+    def catalog(
+        self, *, capability: Capability | None = None, family: str | None = None
+    ) -> list[tuple[str, ModelInfo]]:
+        """Catalogued models (sorted by id), optionally filtered by capability/family."""
+        return [
+            (mid, info)
+            for mid, info in sorted(self.models.items())
+            if (capability is None or info.has(capability))
+            and (family is None or info.family == family)
+        ]
 
     def require_api_key(self) -> str:
         """Return the API key, or raise if it is not configured."""
