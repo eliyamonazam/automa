@@ -1,5 +1,10 @@
 # گزارش تغییرات
 
+## 2026-11-18 — شمارش توکن‌های پنهان مدل‌های استدلالی (خارج از نقشه راه، D107)
+- **یافته (آزمون واقعی):** `gemini-3.1-pro-preview` روی 1xAi: `prompt 4، completion 0، total 21` و tool calling ناموفق (با سقف ۱۰۰ توکن، همه توکن‌ها صرف «فکر کردن» شد). `gpt-5.5`: هر سه آزمون قبول.
+- **رفع:** اختلاف `total_tokens` با جمع ورودی و خروجی، خروجی حساب می‌شه تا Ledger و Guard هزینه رو کمتر از واقعیت نشمرن.
+- **تست‌ها:** `pytest` ← ۴۳۶۸ سبز، ۲ رد شده (معمولی و حالت شبیه CI)؛ `ruff` ← بدون خطا.
+
 ## 2026-11-18 — M10: ساخت خودکار Skill (Agent نویسنده)
 - **انجام‌شده:** ماژول تازهٔ `automa.agents.skill_author`: `SkillAuthorAgent.draft(report, role=, skills=, suite=, benchmark_ids=)` از تحلیل شکست benchmarkها (`BenchmarkReport`) یک digest محدود و قطعی می‌سازه (فقط benchmarkهای ناموفق، بدترین اول؛ هدف، علت‌ها و معیارهای شکست‌خورده؛ escape کامل) و از `LLMGateway` با BudgetGuard یک `SKILL.md` نامزد می‌گیره. `parse_skill_draft` پاسخ رو سخت‌گیرانه بررسی می‌کنه (همون `parse_skill`، رد `allowed-tools`/مجوز و `license`، نام تازه، فقط نویسهٔ قابل‌دیدن، سقف بدنه) و پاسخ نامعتبر با بازخورد دوباره پرسیده می‌شه. خروجی `SkillDraft` با متن canonical (`render_skill_md`) که بی‌تغییر با `parse_skill` و `SkillRegistry.from_dir` برمی‌گرده. هیچ فایلی نوشته نمی‌شه (D106).
 - **فایل‌های اصلی:** `src/automa/agents/skill_author.py` (جدید)، `src/automa/agents/__init__.py`، `tests/test_skill_author.py` (۵۳ تست جدید)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D106).

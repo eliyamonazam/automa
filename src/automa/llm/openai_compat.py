@@ -89,9 +89,18 @@ def response_from_wire(data: Any, *, fallback_model: str) -> ChatResponse:
         message = Message(role=Role.ASSISTANT, content=content, tool_calls=tool_calls)
         raw_usage = data.get("usage") or {}
         cost = raw_usage.get("cost")
+        input_tokens = int(raw_usage.get("prompt_tokens") or 0)
+        output_tokens = int(raw_usage.get("completion_tokens") or 0)
+        total = raw_usage.get("total_tokens")
+        if isinstance(total, int | float) and not isinstance(total, bool):
+            # Some gateways leave hidden "thinking" tokens out of completion_tokens but
+            # count (and bill) them in total_tokens (seen with Gemini on 1xAi: prompt 4,
+            # completion 0, total 21). Count the gap as output, the dearer side, so
+            # the BudgetGuard never under-counts (D107).
+            output_tokens = max(output_tokens, int(total) - input_tokens)
         usage = Usage(
-            input_tokens=int(raw_usage.get("prompt_tokens") or 0),
-            output_tokens=int(raw_usage.get("completion_tokens") or 0),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             reported_cost_usd=float(cost) if cost is not None else None,
         )
         finish = _FINISH.get(str(choice.get("finish_reason")), FinishReason.OTHER)

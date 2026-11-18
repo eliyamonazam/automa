@@ -369,3 +369,35 @@ def test_openai_provider_network_error_is_retryable() -> None:
 def test_openai_provider_requires_key() -> None:
     with pytest.raises(ValueError):
         OpenAICompatProvider("https://x/v1", "")
+
+
+def _usage_body(usage: dict[str, object]) -> dict[str, object]:
+    return {
+        "model": "m",
+        "choices": [{"message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
+        "usage": usage,
+    }
+
+
+def test_hidden_thinking_tokens_in_total_count_as_output() -> None:
+    # Seen live (Gemini 3.1 Pro on 1xAi): completion 0, total 21 for a 4-token prompt.
+    resp = response_from_wire(
+        _usage_body({"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 21}),
+        fallback_model="m",
+    )
+    assert resp.usage.input_tokens == 4 and resp.usage.output_tokens == 17
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13},
+        {"prompt_tokens": 9, "completion_tokens": 4},
+        {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 5},
+        {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": None},
+        {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": True},
+    ],
+)
+def test_consistent_or_missing_total_keeps_completion_tokens(usage: dict[str, object]) -> None:
+    resp = response_from_wire(_usage_body(usage), fallback_model="m")
+    assert resp.usage.output_tokens == 4

@@ -603,3 +603,8 @@
 **تغییر در Policy و لایهٔ مالی:** هیچ. همهٔ فراخوانی‌ها از `LLMGateway` با BudgetGuard (شناسهٔ بودجهٔ `skill-author` تا سقف per-project روی همهٔ نوشتن‌ها جمع شود)؛ Skill فقط متن است و هیچ کلید مجوزی پذیرفته نمی‌شود. ۵۳ تست تازه در `tests/test_skill_author.py`.
 **ریسک باقی‌مونده:** بدنهٔ Skill می‌تواند به نقش بگوید کاری بکند که Policy اجازه نمی‌دهد؛ اثری ندارد چون ابزار و ریسک فقط از Policy نقش می‌آیند، و Approval Gate دست نخورده است. کیفیت محتوا فقط با دروازهٔ benchmark سنجیده می‌شود.
 **ردشده:** پاسخ JSON (`name`/`description`/`body`)؛ پذیرفتن نام موجود و بازنویسی Skill (تغییر بی‌صدای رفتار نقش)؛ فرستادن فرمان‌های بررسی benchmark به مدل (تشویق به حفظ کردن پاسخ یک benchmark)؛ نوشتن مستقیم در staging داخل Agent (نوشتن کار CLI است، مثل `ProposalAgent`).
+
+## D107 — توکن‌های پنهان «فکر کردن» که فقط در `total_tokens` میان، خروجی حساب می‌شن (2026-11-18)
+**تصمیم:** `response_from_wire` اگه `total_tokens` (عدد، نه bool) از `prompt_tokens + completion_tokens` بیشتر باشه، اختلاف رو به توکن‌های خروجی اضافه می‌کنه: `output = max(completion_tokens, total_tokens - prompt_tokens)`. اگه total نباشه یا کمتر/برابر باشه، رفتار قبلی می‌مونه.
+**دلیل:** آزمون واقعی `gemini-3.1-pro-preview` روی 1xAi پاسخ داد `prompt 4، completion 0، total 21`: ۱۷ توکن «فکر کردن» که درگاه حساب و احتمالاً پولش رو می‌گیره، ولی در `completion_tokens` نیست. بدون این اصلاح، Ledger هزینه مدل‌های استدلالی رو کمتر از واقعیت ثبت می‌کرد و سقف بودجه می‌تونست دور زده بشه (خلاف D8). حساب کردن اختلاف به‌عنوان خروجی (طرف گرون‌تر) محافظه‌کارانه‌ست. استاندارد OpenAI `reasoning_tokens` رو داخل `completion_tokens` می‌شمره و این قاعده چیزی رو دوبار حساب نمی‌کنه.
+**ردشده:** جمع کردن `completion_tokens_details.reasoning_tokens` با completion (در OpenAI دوباره‌شماری می‌شد)؛ نادیده گرفتن total (کم‌شماری).
