@@ -191,7 +191,12 @@ class ToolExecutor:
         if conflict is not None:
             return self._finish(tool, args, conflict)
 
-        if needs_approval and self._auto_read(tool, args):
+        if needs_approval and type(tool) is FetchUrl and tool.cached(args) is not None:
+            # Already fetched (and approved or auto-approved) in this task attempt: the
+            # answer comes from memory, nothing leaves the machine (D112).
+            self._emit("tool.cache_hit", {"tool": tool.name, **tool.audit(args)})
+            needs_approval = False
+        elif needs_approval and self._auto_read(tool, args):
             needs_approval = False
         if needs_approval:
             rejected = self._gate(tool, args, decision.reason)

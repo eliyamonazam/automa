@@ -197,3 +197,63 @@ def test_executor_rejects_a_bad_auto_reads_value(tmp_path: Path) -> None:
 def test_invalid_web_config_is_rejected(bad: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         WebConfig.model_validate(bad)
+
+
+# --- repeated pages are served from the task's cache (D112) ---------------------
+
+
+def test_repeated_page_is_served_from_cache_and_not_counted(tmp_path: Path) -> None:
+    tool, seen = fetcher()
+    ex, sink, store = executor(tmp_path, [tool], AutoReadPolicy(max_per_task=2))
+    assert ex.execute("fetch_url", {"url": "https://www.sqlite.org/backup.html"}).ok
+    for url in (
+        "https://www.sqlite.org/backup.html",
+        "https://sqlite.org/backup.html",  # same page without www
+        "https://SQLITE.org/backup.html",
+    ):
+        r = ex.execute("fetch_url", {"url": url})
+        assert r.ok and "already fetched" in r.content and "hello" in r.content
+    assert seen == ["https://www.sqlite.org/backup.html"]
+    assert len([e for e in sink.events if e.type == "tool.cache_hit"]) == 3
+    # The cache did not use up the automatic-read allowance.
+    assert ex.execute("fetch_url", {"url": "https://www.sqlite.org/wal.html"}).ok
+    assert store.list() == []
+
+
+def test_cache_is_per_executor(tmp_path: Path) -> None:
+    tool, seen = fetcher()
+    ex, _, _ = executor(tmp_path, [tool], AutoReadPolicy())
+    ex.execute("fetch_url", {"url": "https://example.com/a"})
+    other_tool, other_seen = fetcher()
+    (tmp_path / "b").mkdir()
+    ex2, _, _ = executor(tmp_path / "b", [other_tool], AutoReadPolicy())
+    assert ex2.execute("fetch_url", {"url": "https://example.com/a"}).ok
+    assert len(seen) == 1 and len(other_seen) == 1
+
+
+def test_different_query_is_a_different_page(tmp_path: Path) -> None:
+    from automa.tools.web import FetchUrlArgs
+
+    tool, _ = fetcher()
+    full = FetchUrlArgs(url="https://example.com/a?x=1").max_chars
+    tool._cache[tool._cache_key("https://example.com/a?x=1")] = (full, "cached")
+
+    assert tool.cached(FetchUrlArgs(url="https://example.com/a?x=1")) is not None
+    assert tool.cached(FetchUrlArgs(url="https://example.com/a?x=2")) is None
+    assert tool.cached(FetchUrlArgs(url="http://example.com/a?x=1")) is None
+
+
+def test_asking_for_more_text_than_was_fetched_is_a_new_request(tmp_path: Path) -> None:
+    tool, seen = fetcher()
+    ex, _, store = executor(tmp_path, [tool], None)  # every new request needs approval
+    with pytest.raises(ApprovalRequired) as ei:
+        ex.execute("fetch_url", {"url": "https://example.com/a", "max_chars": 1000})
+    store.decide(ei.value.request_id or "", approve=True)
+    assert ex.execute("fetch_url", {"url": "https://example.com/a", "max_chars": 1000}).ok
+    assert (
+        "already fetched"
+        in ex.execute("fetch_url", {"url": "https://example.com/a", "max_chars": 500}).content
+    )
+    with pytest.raises(ApprovalRequired):
+        ex.execute("fetch_url", {"url": "https://example.com/a", "max_chars": 5000})
+    assert len(seen) == 1

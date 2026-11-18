@@ -391,9 +391,10 @@ def test_every_call_needs_approval_and_nothing_is_fetched_before(tmp_path: Path)
     store.decide(req.id, approve=True)
     result = ex.execute("fetch_url", {"url": "https://example.com/a?token=SECRET"})
     assert result.ok and "page" in result.content and len(rec.requests) == 1
-    # The approval is used up: the same call needs a new one.
-    with pytest.raises(ApprovalRequired):
-        ex.execute("fetch_url", {"url": "https://example.com/a?token=SECRET"})
+    # The approval is used up. Repeating the same call is answered from this task's
+    # page cache: no new request leaves the machine, so no new approval (D112).
+    again = ex.execute("fetch_url", {"url": "https://example.com/a?token=SECRET"})
+    assert again.ok and "already fetched" in again.content and len(rec.requests) == 1
     assert len(rec.requests) == 1
     calls = sink.of_type("tool.call")
     assert calls and all("SECRET" not in str(e.data) for e in calls)
