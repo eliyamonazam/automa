@@ -295,3 +295,61 @@ def test_error_object_with_200_includes_message():
 def test_timeout_comes_from_config():
     cfg = config(timeout_s=42)
     assert cfg.provider.timeout_s == 42
+
+
+# --- models that reject `temperature` (D111) --------------------------------------
+
+
+def temperature_rejected() -> ProviderError:
+    # Verbatim from a live gpt-5.5 call on 1xAi.
+    return ProviderError(
+        "provider returned HTTP 400: `temperature` is deprecated for this model.", status=400
+    )
+
+
+def test_rejected_temperature_is_dropped_and_remembered(ledger: CostLedger, sleeps: list[float]):
+    g, fake, guard = gw(ledger, temperature_rejected(), "ok", "again")
+    assert call(g).text == "ok"
+    assert fake.requests[0].temperature is not None
+    assert fake.requests[1].temperature is None
+    assert sleeps == []  # not a transient failure: no wait
+    assert call(g).text == "again"
+    assert fake.requests[2].temperature is None  # remembered for this model
+    assert len(ledger.entries()) == 2 and guard.pending_nusd() == 0
+
+
+def test_temperature_retry_happens_once(ledger: CostLedger, sleeps: list[float]):
+    g, fake, _ = gw(ledger, temperature_rejected(), temperature_rejected(), "ok")
+    with pytest.raises(ProviderError, match="temperature"):
+        call(g)
+    assert len(fake.requests) == 2
+
+
+def test_temperature_retry_is_guarded(ledger: CostLedger, sleeps: list[float]):
+    g, fake, guard = gw(ledger, temperature_rejected(), "ok")
+    calls: list[str] = []
+    real = guard.authorize
+
+    def spy(estimate):  # type: ignore[no-untyped-def]
+        calls.append("authorize")
+        return real(estimate)
+
+    guard.authorize = spy  # type: ignore[method-assign]
+    call(g)
+    assert calls == ["authorize", "authorize"]
+
+
+def test_other_400s_are_not_retried(ledger: CostLedger, sleeps: list[float]):
+    err = ProviderError("provider returned HTTP 400: bad tools", status=400)
+    g, fake, _ = gw(ledger, err, "ok")
+    with pytest.raises(ProviderError):
+        call(g)
+    assert len(fake.requests) == 1
+
+
+def test_wire_omits_temperature_when_none():
+    from automa.llm.openai_compat import request_to_wire
+
+    req = ChatRequest(model="m", messages=(Message.user("hi"),), max_tokens=5, temperature=None)
+    assert "temperature" not in request_to_wire(req)
+    assert request_to_wire(req.model_copy(update={"temperature": 0.2}))["temperature"] == 0.2

@@ -1,5 +1,10 @@
 # گزارش تغییرات
 
+## 2026-11-18 — مدل‌هایی که `temperature` رو رد می‌کنن (خارج از نقشه راه، D111)
+- **یافته (آزمون واقعی M11):** ارزیاب `gpt-5.5` روی 1xAi: `HTTP 400: \`temperature\` is deprecated for this model.` و توقف benchmark.
+- **رفع:** یک تلاش دوباره بدون `temperature` (از Guard) و به خاطر سپردن مدل؛ `temperature = None` در درخواست فرستاده نمی‌شه.
+- **تست‌ها:** `pytest` ← ۴۵۰۱ سبز، ۲ رد شده؛ `ruff` ← بدون خطا.
+
 ## 2026-11-18 — M10: ساخت خودکار Skill (CLI نصب)
 - **انجام‌شده:** فرمان تازهٔ `automa skill install <candidate-id> [--yes] [--json]`: فقط نامزدی نصب می‌شه که تصمیم ثبت‌شدهٔ دروازه‌اش «قبول» باشه، sha256 متنش همون متن سنجیده‌شده باشه، و نقش‌ها و Skillهای فعلی همون مجموعه‌ای باشن که مقایسه روش انجام شد (اثرانگشت baseline و candidate تصمیم). بعد از پیش‌نمایش و تأیید (پیش‌فرض «نه») بایت‌های دقیق `SKILL.md` اتمی در `<workspace>/skills/<name>/` نوشته می‌شه (پوشهٔ موقت پنهان، گرفتن نام با `mkdir`، یک `rename`)، دوباره بارگذاری و مقایسه می‌شه و در صورت ناهمخوانی حذف می‌شه. هیچ Skill موجودی جایگزین نمی‌شه و `automa.toml` ویرایش نمی‌شه: خط دقیق `[roles.<role>] skills = [...]` چاپ می‌شه.
 - **فایل‌های اصلی:** `src/automa/skill_candidates.py` (`check_install`، `install_candidate`، `InstallCheck`)، `src/automa/cli.py` (`skill install`)، `tests/test_cli_skill_install.py` (۳۸ تست جدید)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D110).

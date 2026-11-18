@@ -52,9 +52,10 @@ def request_to_wire(request: ChatRequest) -> dict[str, Any]:
         "model": request.model,
         "messages": [_message_to_wire(m) for m in request.messages],
         "max_tokens": request.max_tokens,
-        "temperature": request.temperature,
         "stream": False,
     }
+    if request.temperature is not None:
+        body["temperature"] = request.temperature
     if request.tools:
         body["tools"] = [
             {

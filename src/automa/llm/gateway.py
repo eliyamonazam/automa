@@ -36,6 +36,12 @@ from automa.llm.types import (
 _sleep = time.sleep
 
 
+def _rejects_temperature(e: ProviderError) -> bool:
+    """A 400 whose message blames ``temperature`` (e.g. "`temperature` is deprecated
+    for this model", seen live with gpt-5.5 on 1xAi)."""
+    return e.status == 400 and "temperature" in str(e).lower() and not e.maybe_billed
+
+
 def _unanswered(request: ChatRequest, tier: Tier, estimate: CallEstimate) -> LLMResult:
     """A placeholder result for a sent-but-unanswered call, charged at the worst case."""
     response = ChatResponse(
@@ -141,6 +147,9 @@ class LLMGateway:
         self._config = config
         self._provider = provider
         self._guard = guard
+        # Models that rejected the temperature parameter (HTTP 400); later calls to
+        # them omit it (D111).
+        self._no_temperature: set[str] = set()
 
     @classmethod
     def from_config(cls, config: AutomaConfig, *, guard: CallGuard) -> LLMGateway:
@@ -230,6 +239,8 @@ class LLMGateway:
             tools=tools,
             model=model,
         )
+        if request.model in self._no_temperature:
+            request = request.model_copy(update={"temperature": None})
         estimate = self.estimate(request, tier, context or CallContext())
         policy = self._config.provider
         retry = 0
@@ -237,6 +248,12 @@ class LLMGateway:
             try:
                 return self._attempt(request, tier, estimate)
             except ProviderError as e:
+                if _rejects_temperature(e) and request.temperature is not None:
+                    # One more guarded attempt without the parameter; remembered for
+                    # this model so it is never sent again (D111).
+                    self._no_temperature.add(request.model)
+                    request = request.model_copy(update={"temperature": None})
+                    continue
                 if not e.retryable or retry >= policy.max_retries:
                     raise
                 retry += 1

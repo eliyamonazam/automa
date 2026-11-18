@@ -76,7 +76,8 @@ class ChatRequest(_Strict):
     model: str = Field(min_length=1)
     messages: tuple[Message, ...] = Field(min_length=1)
     max_tokens: int = Field(gt=0, le=200_000)
-    temperature: float = Field(default=0.2, ge=0, le=2)
+    # None = not sent (some models, e.g. GPT-5.x reasoning models, reject it; D111).
+    temperature: float | None = Field(default=0.2, ge=0, le=2)
     tools: tuple[ToolSpec, ...] = ()
 
 
