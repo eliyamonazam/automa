@@ -125,6 +125,11 @@ absent, use the program's exit code, e.g. {"command": "grep -q '@import'
 style.css", "exit_code": 1}.
 Each task's checks may only rely on files that this task or the tasks it
 depends_on create.
+Every criterion must be judgeable from the task's final files. The Verifier reads
+text files only and never sees how the work was done, so do not write criteria
+about what an image visibly shows or about the process (how many tool calls,
+retries, "generated only once"); for images use deterministic checks of the file
+(exists, format, minimum size) and keep content wishes in the task description.
 (The // comments above are explanations; JSON must not contain comments.)"""
 
 

@@ -738,3 +738,26 @@ def test_verifier_module_never_touches_provider_or_tools_directly() -> None:
         for a in n.names
     }
     assert "WriteFile" not in imported and "Workspace" not in imported
+
+
+# --- binary files and unverifiable criteria (D118) ------------------------------
+
+
+def test_binary_file_is_shown_as_present_not_unreadable(tmp_path: Path) -> None:
+    from automa.agents.verifier import BINARY_FILE_NOTE, EVAL_SYSTEM_PROMPT
+
+    rig = Rig(tmp_path, [judgment((0, True, "not verifiable from the files"))])
+    (rig.root / "images").mkdir()
+    (rig.root / "images" / "hero.jpg").write_bytes(b"\xff\xd8\xff\xe0" + bytes(range(256)) * 20)
+    task = make_task([{"description": "the image shows kites over a beach"}])
+    rig.verify(task, make_result(files=["images/hero.jpg"]))
+    prompt = rig.prompt()
+    assert BINARY_FILE_NOTE in prompt and "unreadable" not in prompt
+    assert "not verifiable" in EVAL_SYSTEM_PROMPT and "cannot be judged" in EVAL_SYSTEM_PROMPT
+
+
+def test_executive_prompt_forbids_process_and_visual_criteria() -> None:
+    from automa.agents.executive import PLAN_SYSTEM_PROMPT
+
+    assert "never sees how the work was done" in PLAN_SYSTEM_PROMPT
+    assert "what an image visibly shows" in PLAN_SYSTEM_PROMPT
