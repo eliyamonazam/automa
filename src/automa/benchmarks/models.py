@@ -15,6 +15,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     StringConstraints,
     field_validator,
     model_validator,
@@ -61,6 +62,9 @@ class Benchmark(_Strict):
     ] = ""
     budget_usd: float = Field(gt=0, le=MAX_BENCHMARK_BUDGET_USD)
     max_attempts: int = Field(default=4, ge=1, le=MAX_BENCHMARK_ATTEMPTS)
+    # The goal needs the image tool (D104): a run without ``[images] model`` is
+    # refused before a project is created or a cent spent, instead of failing late.
+    needs_images: StrictBool = False
     success_criteria: list[AcceptanceCriterion] = Field(min_length=1, max_length=MAX_LIST_ITEMS)
 
     @field_validator("schema_version")

@@ -39,6 +39,7 @@ from automa.budget.ledger import CostLedger
 from automa.config import AutomaConfig, BudgetLimits, ConfigError
 from automa.events import Event
 from automa.llm.gateway import LLMGateway
+from automa.llm.images import ImageGateway, ImageProvider
 from automa.llm.provider import Provider, ProviderError
 from automa.orchestrator import Orchestrator, OrchestratorSettings, StopReason, usable_roles
 from automa.project import ProjectStatus, ProjectStore
@@ -124,13 +125,25 @@ def run_benchmark(
     quality: QualityLog | None = None,
     project_id: str | None = None,
     clock: Clock | None = None,
+    image_provider: ImageProvider | None = None,
 ) -> BenchmarkRunRecord:
     """Run ``benchmark`` end to end as a new project and return its record.
 
     Raises ``ProjectStoreError`` if the project cannot be created (nothing has been
     spent then). ``KeyboardInterrupt`` propagates (the project stays resumable but
     no record is produced: an interrupted run is not a measurement).
+
+    ``image_provider`` (with ``[images] model`` configured) is wrapped in an
+    ``ImageGateway`` on the run's own BudgetGuard, exactly like ``automa run``
+    (D101). Raises ``ConfigError`` before anything is created when the benchmark
+    ``needs_images`` but image generation is off or no provider is given (D104).
     """
+    if image_provider is not None and not config.images.enabled:
+        raise ConfigError("an image provider needs an [images] model in the configuration")
+    if benchmark.needs_images and image_provider is None:
+        raise ConfigError(
+            f"benchmark {benchmark.id!r} needs image generation: set [images] model in automa.toml"
+        )
     clock = clock or _utc_now
     # Computed before the project exists: the record says which skill set ran (D89).
     fingerprint = skillset_fingerprint(roles, skills)
@@ -169,6 +182,11 @@ def run_benchmark(
             config,
             settings=OrchestratorSettings(max_attempts=benchmark.max_attempts),
             quality=quality,
+            images=(
+                ImageGateway(config, image_provider, guard=guard)
+                if image_provider is not None
+                else None
+            ),
         )
         report = orchestrator.run(pid)
         stop, detail = STOP_FOR_REASON[report.reason], report.detail

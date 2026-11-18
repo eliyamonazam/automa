@@ -3176,6 +3176,7 @@ def bench_list(
         typer.echo(
             f"{b.id}  {b.kind.value:<8}  ${b.budget_usd:.2f}  "
             f"{len(b.success_criteria)} criteria  {b.title}"
+            + ("  [needs images]" if b.needs_images else "")
         )
 
 
@@ -3209,7 +3210,13 @@ def bench_run(
     try:
         # Everything a run needs is checked before a project is created or a cent spent.
         config.model_for(ExecutiveSettings().tier)
+        if benchmark.needs_images and not config.images.enabled:
+            raise ConfigError(
+                f"benchmark {benchmark.id!r} needs image generation: set [images] model "
+                "in automa.toml"
+            )
         provider = make_provider(config)
+        image_provider = make_image_provider(config) if config.images.enabled else None
         roles, skills = _roles_and_skills(config)
     except (ConfigError, RoleError, SkillError) as e:
         raise _fail(str(e), EXIT_CONFIG) from None
@@ -3222,6 +3229,7 @@ def bench_run(
     store = ProjectStore.for_workspace(config.workspace)
     typer.echo(f"benchmark: {benchmark.id} ({benchmark.kind.value}) — {benchmark.title}")
     typer.echo(f"sandbox: {config.sandbox.describe()}")
+    typer.echo(f"images: {_describe_images(config)}")
     quality = _open_quality(config)
     with quality, CostLedger.for_workspace(config.workspace) as ledger:
         try:
@@ -3234,6 +3242,7 @@ def bench_run(
                 roles=roles,
                 skills=skills,
                 quality=quality,
+                image_provider=image_provider,
             )
         except KeyboardInterrupt:
             typer.echo("interrupted: no result recorded (the project is kept and paused)")

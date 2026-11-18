@@ -128,10 +128,16 @@ def _report(words: int = 400, links: int = 2, headings: list[str] | None = None)
 # --- the shipped suite -------------------------------------------------------
 
 
-def test_suite_has_three_benchmarks_one_per_kind(suite: BenchmarkSuite) -> None:
-    assert suite.ids() == ["cli-word-count", "research-brief", "static-landing-page"]
+def test_suite_covers_every_kind(suite: BenchmarkSuite) -> None:
+    assert suite.ids() == [
+        "cli-word-count",
+        "landing-page-with-image",
+        "research-brief",
+        "static-landing-page",
+    ]
     assert {b.kind for b in suite} == set(BenchmarkKind)
-    assert len(suite) == 3
+    assert len(suite) == 4
+    assert [b.id for b in suite if b.needs_images] == ["landing-page-with-image"]
 
 
 def test_shipped_budgets_fit_default_caps(suite: BenchmarkSuite) -> None:

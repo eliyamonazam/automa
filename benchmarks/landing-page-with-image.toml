@@ -1,0 +1,49 @@
+# Benchmark: a landing page with one generated image (kind = "web", needs_images).
+# Needs [images] model in automa.toml (D101/D103); `automa bench run` refuses it otherwise.
+# Success is decided only by the deterministic checks below (D26, D104). The checks
+# are one-line `python3 -c "exec('...')"` programs because command checks run
+# without a shell and must be a single line (D92).
+id = "landing-page-with-image"
+title = "Landing page with a generated hero image for a fictional kite shop"
+kind = "web"
+needs_images = true
+goal = """
+Create a static single-page website for a fictional kite shop called "Lumen Kites",
+with one generated hero image.
+Files: `index.html` and exactly one hero image, created with the image generation tool
+and saved as `images/hero.png` (PNG) or `images/hero.jpg` (JPEG), whichever format the
+tool returns; the image shows colourful kites flying over a beach and is at least
+256x256 pixels. Generate the image only once unless it fails.
+The page must have: `<!DOCTYPE html>` and `lang="en"`; an `<h1>` with the shop name;
+and the hero image shown with an `<img>` whose `src` is the image's relative path
+(`images/hero.png` or `images/hero.jpg`) and whose `alt` text describes it.
+No JavaScript and no external or inline resources (no `http:`/`https:` URLs, no
+`data:` URIs).
+"""
+answer = "No preference: use reasonable defaults. Keep the design simple and readable; one image is enough."
+budget_usd = 1.0
+max_attempts = 4
+
+[[success_criteria]]
+description = "index.html exists"
+check = { type = "file_exists", path = "index.html" }
+
+[[success_criteria]]
+description = 'Valid HTML5 page (doctype, lang="en") with the shop name in an h1'
+check = { type = "command", timeout_s = 30, command = '''python3 -c "exec('import re, sys\nt = open(\"index.html\", encoding=\"utf-8\").read()\nok = t.lstrip().lower().startswith(\"<!doctype html>\") and re.search(\"<html[^>]*lang=.en\", t, re.I) and re.search(\"<h1[^>]*>[^<]*Lumen Kites\", t, re.I)\nsys.exit(0 if ok else 1)')"''' }
+
+[[success_criteria]]
+description = "Exactly one hero image: images/hero.png or images/hero.jpg"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "exec('import os, sys\nP = [p for p in (\"images/hero.png\", \"images/hero.jpg\") if os.path.isfile(p) and not os.path.islink(p)]\nsys.exit(0 if len(P) == 1 else 1)')"''' }
+
+[[success_criteria]]
+description = "The hero image is a real PNG/JPEG matching its extension, at least 256x256 pixels"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "exec('import os, struct, sys\ndef size(d):\n    if d[:8] == bytes([137, 80, 78, 71, 13, 10, 26, 10]) and d[12:16] == b\"IHDR\":\n        return (\"png\",) + struct.unpack(\">II\", d[16:24])\n    if d[:2] != bytes([255, 216]):\n        return None\n    i = 2\n    while i + 9 <= len(d):\n        if d[i] != 255:\n            return None\n        m = d[i + 1]\n        if m == 255:\n            i += 1\n            continue\n        if m == 1 or 208 <= m <= 216:\n            i += 2\n            continue\n        if m in (217, 218):\n            return None\n        n = struct.unpack(\">H\", d[i + 2:i + 4])[0]\n        if 192 <= m <= 207 and m not in (196, 200, 204):\n            h, w = struct.unpack(\">HH\", d[i + 5:i + 9])\n            return (\"jpeg\", w, h)\n        i += 2 + n\n    return None\nP = [p for p in (\"images/hero.png\", \"images/hero.jpg\") if os.path.isfile(p) and not os.path.islink(p)]\nok = len(P) == 1\nif ok:\n    s = size(open(P[0], \"rb\").read())\n    ok = s is not None and s[0] == {\"png\": \"png\", \"jpg\": \"jpeg\"}[P[0][-3:]] and s[1] >= 256 and s[2] >= 256\nsys.exit(0 if ok else 1)')"''' }
+
+[[success_criteria]]
+description = "index.html shows the hero image with an <img> (relative src, non-empty alt)"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "exec('import os, re, sys\nt = open(\"index.html\", encoding=\"utf-8\").read()\nP = [p for p in (\"images/hero.png\", \"images/hero.jpg\") if os.path.isfile(p) and not os.path.islink(p)]\nQ = chr(34) + chr(39)\nok = False\nfor tag in re.findall(\"<img[^>]*>\", t, re.I):\n    src = re.search(\"src[ ]*=[ ]*[\" + Q + \"]([^\" + Q + \"]*)\", tag, re.I)\n    alt = re.search(\"alt[ ]*=[ ]*[\" + Q + \"]([^\" + Q + \"]*)\", tag, re.I)\n    if src and alt and alt.group(1).strip() and src.group(1).strip().removeprefix(\"./\") in P:\n        ok = True\nsys.exit(0 if ok and len(P) == 1 else 1)')"''' }
+
+[[success_criteria]]
+description = "No JavaScript and no external or inline (data:) resources"
+check = { type = "command", timeout_s = 30, command = '''python3 -c "exec('import sys\nt = open(\"index.html\", encoding=\"utf-8\").read().lower()\nbad = (\"<script\", \"javascript:\", \"http:\", \"https:\", \"data:\", \"=\" + chr(34) + \"//\", \"=\" + chr(39) + \"//\", \"url(//\")\nsys.exit(1 if any(b in t for b in bad) else 0)')"''' }
