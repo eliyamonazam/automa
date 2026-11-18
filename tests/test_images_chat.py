@@ -11,13 +11,14 @@ from __future__ import annotations
 import base64
 import json
 import math
+import struct
+import zlib
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 from pydantic import ValidationError
-from tests.test_images import jpeg, png
 
 from automa.budget import BudgetExceeded, BudgetGuard, CostLedger
 from automa.config import (
@@ -59,6 +60,27 @@ CHAT_IMG: dict[str, Any] = {
     "image_max_tokens": 4000,
 }
 WORST = (IMAGE_CHAT_MAX_INPUT_TOKENS * 2 + 4000 * 30) / 1_000_000
+
+
+def png(width: int = 64, height: int = 32) -> bytes:
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    raw = b"".join(b"\x00" + b"\x00\x00\x00" * width for _ in range(height))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
+
+
+def jpeg(width: int = 48, height: int = 40) -> bytes:
+    app0 = b"\xff\xe0" + struct.pack(">H", 16) + b"JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+    sof = b"\xff\xc0" + struct.pack(">HBHHB", 11, 8, height, width, 1) + b"\x01\x11\x00"
+    return b"\xff\xd8" + app0 + sof + b"\xff\xd9"
 
 
 def data_uri(data: bytes, mime: str = "image/png") -> str:
