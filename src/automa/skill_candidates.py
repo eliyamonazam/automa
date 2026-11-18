@@ -8,6 +8,9 @@ A candidate is never installed here. Layout, under ``<workspace>/skill-candidate
     <id>.runs/<side>/      result files of ``automa skill compare`` (baseline/candidate)
     <id>.gate.json         the one recorded gate decision (written once, never replaced)
 
+``install_candidate`` (D110) copies an accepted candidate's measured ``SKILL.md`` to
+``<workspace>/skills/<name>/`` — the only way a candidate leaves staging.
+
 ``<id>`` is ``<UTC stamp>-<name>``. Staging is all-or-nothing: the candidate directory
 is built under a hidden temporary name and moved into place with one ``os.rename``;
 an existing id, a symlinked or non-directory ``skill-candidates`` and a full store are
@@ -23,20 +26,24 @@ import re
 import shutil
 import stat
 import tempfile
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from automa.agents.skill_author import SkillDraft
+from automa.roles import RoleRegistry
 from automa.skill_comparison import (
     SkillComparisonError,
     SkillComparisonResult,
     load_candidate_skill,
 )
 from automa.skill_gate import SkillGateDecision
-from automa.skills import Skill
-from automa.skills.registry import SKILL_FILE
+from automa.skill_variants import SkillVariantError, skillset_fingerprint, with_candidate_skill
+from automa.skills import Skill, SkillError, SkillRegistry, workspace_skills_dir
+from automa.skills.loader import BUILTIN_SKILLS_DIR, load_skills
+from automa.skills.registry import SKILL_FILE, parse_skill
 
 CANDIDATES_DIRNAME = "skill-candidates"
 MAX_CANDIDATES = 100
@@ -351,6 +358,157 @@ def record_gate(
     return gate
 
 
+# --- installing an accepted candidate (D110) ----------------------------------------
+
+
+@dataclass(frozen=True)
+class InstallCheck:
+    """Everything ``install_candidate`` checked; ``target`` is the skill's new folder."""
+
+    record: CandidateRecord
+    gate: GateRecord
+    skill: Skill
+    target: Path
+
+
+def _skills_dir(workspace: str | Path) -> Path:
+    directory = workspace_skills_dir(workspace)
+    if directory.is_symlink():
+        raise SkillCandidateError(f"{directory} must not be a symlink")
+    if directory.exists() and not directory.is_dir():
+        raise SkillCandidateError(f"{directory} is not a directory")
+    return directory
+
+
+def check_install(
+    workspace: str | Path, cid: str, *, roles: RoleRegistry, skills: SkillRegistry
+) -> InstallCheck:
+    """Raise unless candidate ``cid`` may be installed now (nothing is written).
+
+    The candidate must load (metadata valid, ``SKILL.md`` unchanged since drafting),
+    have a recorded gate decision that accepted exactly this text (sha256), and the
+    current roles and skills must be the ones it was measured against (the gate's
+    baseline fingerprint); its folder under ``<workspace>/skills/`` must not exist.
+    """
+    if not isinstance(roles, RoleRegistry):
+        raise TypeError("roles must be a RoleRegistry")
+    if not isinstance(skills, SkillRegistry):
+        raise TypeError("skills must be a SkillRegistry")
+    record, skill = load_candidate(workspace, cid)
+    gate = read_gate(workspace, cid)
+    if gate is None:
+        raise SkillCandidateError(
+            f"candidate {cid} has no recorded gate decision; run: automa skill compare {cid}"
+        )
+    if not gate.accepted or not gate.decision.accepted or gate.decision.reasons:
+        reasons = ", ".join(r.value for r in gate.decision.reasons) or "not accepted"
+        raise SkillCandidateError(
+            f"candidate {cid} was rejected by the benchmark gate ({reasons}); "
+            "only an accepted candidate can be installed"
+        )
+    if gate.name != record.name or gate.role != record.role:
+        raise SkillCandidateError(f"gate decision of {cid} names another skill or role")
+    if gate.skill_sha256 != record.skill_sha256:
+        raise SkillCandidateError(
+            f"candidate {cid}: {SKILL_FILE} is not the text the gate measured (sha256 differs)"
+        )
+    target = _skills_dir(workspace) / record.name
+    if target.exists() or target.is_symlink():
+        raise SkillCandidateError(f"{target} already exists; an installed skill is never replaced")
+    if skillset_fingerprint(roles, skills) != gate.decision.baseline_fingerprint:
+        raise SkillCandidateError(
+            f"candidate {cid}: the roles or skills changed since the comparison (baseline "
+            "fingerprint differs), so the gate's evidence no longer holds; draft and compare "
+            "a new candidate"
+        )
+    try:
+        cand_roles, cand_skills = with_candidate_skill(roles, skills, skill, role=record.role)
+    except SkillVariantError as e:
+        raise SkillCandidateError(f"candidate {cid}: {e}") from None
+    if skillset_fingerprint(cand_roles, cand_skills) != gate.decision.candidate_fingerprint:
+        raise SkillCandidateError(
+            f"candidate {cid}: the skill set with this candidate is not the one the gate "
+            "measured (candidate fingerprint differs)"
+        )
+    return InstallCheck(record=record, gate=gate, skill=skill, target=target)
+
+
+def install_candidate(
+    workspace: str | Path,
+    cid: str,
+    *,
+    roles: RoleRegistry,
+    skills: SkillRegistry,
+    builtin_dir: Path = BUILTIN_SKILLS_DIR,
+) -> InstallCheck:
+    """Install accepted candidate ``cid`` as ``<workspace>/skills/<name>/SKILL.md``.
+
+    Every check of :func:`check_install` is repeated here. The exact measured bytes
+    are written under a hidden temporary folder (ignored by the skill loader), the
+    target name is claimed with ``mkdir`` (fails if it exists) and the folder is
+    moved into place with one ``os.rename``. The workspace skills are then loaded
+    again and must hold exactly the measured skill; otherwise the new folder is
+    removed. No role uses the skill until ``[roles.<role>] skills`` names it.
+    """
+    check = check_install(workspace, cid, roles=roles, skills=skills)
+    record, gate, skill = check.record, check.gate, check.skill
+    source = staging_path(workspace, cid) / record.name / SKILL_FILE
+    data = _read_small_file(source, "candidate skill file")
+    if hashlib.sha256(data).hexdigest() != gate.skill_sha256:
+        raise SkillCandidateError(f"candidate {cid}: {SKILL_FILE} changed while being installed")
+    try:
+        again = parse_skill(data.decode("utf-8"), expected_name=record.name, source=str(source))
+    except (SkillError, UnicodeDecodeError):
+        raise SkillCandidateError(f"candidate {cid}: {SKILL_FILE} no longer parses") from None
+    if again != skill:
+        raise SkillCandidateError(f"candidate {cid}: {SKILL_FILE} changed while being installed")
+
+    directory = _skills_dir(workspace)
+    directory.mkdir(parents=True, exist_ok=True)
+    directory = _skills_dir(workspace)  # still not a symlink after creating it
+    target = directory / record.name
+    tmp = Path(tempfile.mkdtemp(prefix=f".{record.name}.", dir=directory))
+    claimed = moved = False
+    try:
+        with open(tmp / SKILL_FILE, "xb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.mkdir(target)  # claims the name: fails if anything is there
+        except FileExistsError:
+            raise SkillCandidateError(
+                f"{target} already exists; an installed skill is never replaced"
+            ) from None
+        claimed = True
+        os.rename(tmp, target)  # replaces only the empty folder claimed above
+        moved = True
+    finally:
+        if not moved:
+            shutil.rmtree(tmp, ignore_errors=True)
+            if claimed:
+                try:
+                    os.rmdir(target)
+                except OSError:
+                    pass
+    try:
+        installed = load_skills(workspace, builtin_dir=builtin_dir)
+        ok = (
+            record.name in installed
+            and installed.get(record.name) == skill
+            and hashlib.sha256((target / SKILL_FILE).read_bytes()).hexdigest() == gate.skill_sha256
+        )
+        problem = "" if ok else "the installed skill differs from the measured one"
+    except (SkillError, OSError) as e:
+        problem = str(e)
+    if problem:
+        shutil.rmtree(target, ignore_errors=True)
+        raise SkillCandidateError(
+            f"candidate {cid}: installed skill did not load back ({problem}); removed again"
+        )
+    return InstallCheck(record=record, gate=gate, skill=skill, target=target)
+
+
 __all__ = [
     "CANDIDATES_DIRNAME",
     "CANDIDATE_ID_PATTERN",
@@ -359,11 +517,14 @@ __all__ = [
     "RUNS_SUFFIX",
     "CandidateRecord",
     "GateRecord",
+    "InstallCheck",
     "SkillCandidateError",
     "candidate_id",
     "candidates_dir",
+    "check_install",
     "check_room",
     "gate_path",
+    "install_candidate",
     "load_candidate",
     "read_gate",
     "record_gate",

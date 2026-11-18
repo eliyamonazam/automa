@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-18 — M10: ساخت خودکار Skill (CLI نصب)
+- **انجام‌شده:** فرمان تازهٔ `automa skill install <candidate-id> [--yes] [--json]`: فقط نامزدی نصب می‌شه که تصمیم ثبت‌شدهٔ دروازه‌اش «قبول» باشه، sha256 متنش همون متن سنجیده‌شده باشه، و نقش‌ها و Skillهای فعلی همون مجموعه‌ای باشن که مقایسه روش انجام شد (اثرانگشت baseline و candidate تصمیم). بعد از پیش‌نمایش و تأیید (پیش‌فرض «نه») بایت‌های دقیق `SKILL.md` اتمی در `<workspace>/skills/<name>/` نوشته می‌شه (پوشهٔ موقت پنهان، گرفتن نام با `mkdir`، یک `rename`)، دوباره بارگذاری و مقایسه می‌شه و در صورت ناهمخوانی حذف می‌شه. هیچ Skill موجودی جایگزین نمی‌شه و `automa.toml` ویرایش نمی‌شه: خط دقیق `[roles.<role>] skills = [...]` چاپ می‌شه.
+- **فایل‌های اصلی:** `src/automa/skill_candidates.py` (`check_install`، `install_candidate`، `InstallCheck`)، `src/automa/cli.py` (`skill install`)، `tests/test_cli_skill_install.py` (۳۸ تست جدید)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D110).
+- **تست‌ها:** `pytest` ← ۴۴۹۶ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check`، `ruff format --check` و `mypy` روی ماژول‌های تغییرکرده سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و بسته دوباره نصب شد. BudgetGuard، Policy و Approval Gate دست نخوردن.
+- **برای صاحب مخزن:** بعد از یک `automa skill compare` قبول‌شده روی لپتاپ: `automa skill install <id>` و افزودن خط چاپ‌شده به `automa.toml`.
+- **قدم بعدی:** همهٔ موردهای باقی‌مانده منتظر صاحب مخزنن (`[!]`) مگر مورد تازه‌ای اضافه بشه.
+
 ## 2026-11-18 — M10: ساخت خودکار Skill (CLI مقایسه)
 - **انجام‌شده:** فرمان تازهٔ `automa skill compare <candidate-id> --max-usd X [--benchmark ID]... [--runs N] [--yes] [--json]`: نامزد staged رو با بررسی sha256 متن و فراداده می‌خونه، بدترین هزینهٔ همهٔ اجراها رو در برابر `--max-usd` و باقی‌ماندهٔ سقف روزانه می‌سنجه، پیش‌نمایش نشون می‌ده و قبل از هر خرج تأیید می‌گیره؛ بعد `run_skill_comparison` رو اجرا می‌کنه، رکورد هر اجرا رو در `<workspace>/skill-candidates/<id>.runs/` می‌نویسه و تصمیم دروازه رو یک‌بار در `<id>.gate.json` (با sha256 متن سنجیده‌شده) ثبت می‌کنه. هر نامزد فقط یک تصمیم داره؛ مقایسهٔ لغوشده/قطع‌شده تصمیم نداره و قابل تکراره. هیچ نصبی انجام نمی‌شه (D109).
 - **فایل‌های اصلی:** `src/automa/cli.py` (`skill compare`)، `src/automa/skill_candidates.py` (`load_candidate`، `GateRecord`، `record_gate`، `read_gate`، `runs_dir`)، `tests/test_cli_skill_compare.py` (۴۸ تست جدید)، `tests/test_cli.py` (تست ساختاری Provider)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D109).

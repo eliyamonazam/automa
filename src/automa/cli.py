@@ -231,8 +231,10 @@ from automa.skill_candidates import (
     CandidateRecord,
     SkillCandidateError,
     candidates_dir,
+    check_install,
     check_room,
     gate_path,
+    install_candidate,
     load_candidate,
     read_gate,
     record_gate,
@@ -354,7 +356,8 @@ models_app = typer.Typer(
 app.add_typer(models_app, name="models")
 skill_app = typer.Typer(
     help="Automatic skill creation: draft a candidate skill from benchmark failures "
-    "(staged under <workspace>/skill-candidates/, never installed by drafting).",
+    "(staged under <workspace>/skill-candidates/), compare it on the benchmark gate, "
+    "and install an accepted one into <workspace>/skills/ with your confirmation.",
     no_args_is_help=True,
 )
 app.add_typer(skill_app, name="skill")
@@ -4685,6 +4688,83 @@ def _print_comparison(
         typer.echo(f"gate: REJECTED ({reasons})")
     typer.echo(f"recorded: {path}")
     typer.echo("not installed: installing is a separate, confirmed step")
+
+
+def _role_skills_line(config: AutomaConfig, role: str, name: str) -> list[str]:
+    """The ``[roles.<role>]`` lines of automa.toml that make ``role`` use ``name``."""
+    names = [*config.role_skills().get(role, ()), name]
+    return [f"[roles.{role}]", f"skills = {json.dumps(names)}"]
+
+
+@skill_app.command("install")
+def skill_install(
+    cid: Annotated[str, typer.Argument(help="Candidate id (accepted by: automa skill compare).")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask for confirmation.")] = False,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable output (needs --yes).")
+    ] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Install candidate CID into <workspace>/skills/<name>/ after the benchmark gate
+    accepted it.
+
+    Only the exact text the gate measured is installed (sha256 of SKILL.md), only
+    while the roles and skills are still the ones it was measured against, and an
+    existing skill is never replaced. Installing does not edit automa.toml: the skill
+    is used once [roles.<role>] skills names it (the line is printed). No API key, no
+    model call. Exit codes: 0 installed, 1 user error or refused, 2 config.
+    """
+    if as_json and not yes:
+        raise _fail("--json needs --yes (there is no prompt in machine-readable mode)", EXIT_USER)
+    config = _load(config_path)
+    try:
+        roles, skills = _roles_and_skills(config)
+    except (RoleError, SkillError) as e:
+        raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+    try:
+        check = check_install(config.workspace, cid, roles=roles, skills=skills)
+    except SkillCandidateError as e:
+        raise _fail(f"{_safe(str(e))}; nothing was installed", EXIT_USER) from None
+    record, gate = check.record, check.gate
+    toml_lines = _role_skills_line(config, record.role, record.name)
+    if not as_json:
+        typer.echo(f"candidate: {record.id} (skill {record.name} for role {record.role})")
+        typer.echo(f"  {_safe(check.skill.description)}")
+        passed = ", ".join(
+            f"{c.benchmark_id} {c.baseline.passes}/{c.baseline.runs} -> "
+            f"{c.candidate.passes}/{c.candidate.runs}"
+            for c in gate.decision.comparisons
+        )
+        typer.echo(f"gate: ACCEPTED ({passed})")
+        typer.echo(f"sha256: {record.skill_sha256}")
+        typer.echo(f"install to: {check.target / 'SKILL.md'}")
+    if not yes and not typer.confirm(f"Install skill {record.name}?", default=False):
+        typer.echo("cancelled: nothing was installed")
+        raise typer.Exit(EXIT_USER)
+    try:
+        done = install_candidate(config.workspace, cid, roles=roles, skills=skills)
+    except SkillCandidateError as e:
+        raise _fail(f"{_safe(str(e))}; nothing was installed", EXIT_USER) from None
+    skill_md = done.target / "SKILL.md"
+    if as_json:
+        out = {
+            "candidate_id": record.id,
+            "name": record.name,
+            "role": record.role,
+            "skill_sha256": record.skill_sha256,
+            "installed": True,
+            "skill_md": str(skill_md),
+            "role_in_use": False,
+            "automa_toml": "\n".join(toml_lines),
+        }
+        typer.echo(json.dumps(out, ensure_ascii=False, indent=2))
+        return
+    typer.echo(f"installed: {skill_md}")
+    typer.echo(f"not used yet: to give it to role {record.role}, add to automa.toml:")
+    for line in toml_lines:
+        typer.echo(f"  {line}")
 
 
 UNSUPPORTED_PLATFORM_MESSAGE = (
