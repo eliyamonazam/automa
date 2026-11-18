@@ -33,6 +33,14 @@ output_per_mtok = 20.00
 # capabilities = ["text", "code", "vision"]
 # input_per_mtok = 2.00
 # output_per_mtok = 8.00
+# An image model (for the generate_image tool, D100) also needs per_image_usd, the
+# price of one generated image; generate_image refuses an image model without it:
+# [models."example/image-model"]
+# family = "example"
+# capabilities = ["image_out"]
+# input_per_mtok = 0
+# output_per_mtok = 0
+# per_image_usd = 0.04
 # List the catalog with: automa models [--capability vision] [--family openai]
 # Turn a 1xAi price list (id, input and output toman per 1K tokens) into entries to
 # review and paste here (prints only, rounds prices up; D95):

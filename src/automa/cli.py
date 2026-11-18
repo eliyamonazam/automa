@@ -3413,7 +3413,7 @@ _FAMILY_FILTER_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 def _model_json(config: AutomaConfig, model_id: str) -> dict[str, Any]:
     info = config.models[model_id]
-    return {
+    data: dict[str, Any] = {
         "id": model_id,
         "family": info.family,
         "capabilities": [c.value for c in info.capabilities],
@@ -3421,6 +3421,9 @@ def _model_json(config: AutomaConfig, model_id: str) -> dict[str, Any]:
         "output_per_mtok": info.output_per_mtok,
         "tiers": sorted(t.value for t, m in config.tiers.items() if m == model_id),
     }
+    if info.per_image_usd is not None:
+        data["per_image_usd"] = info.per_image_usd
+    return data
 
 
 @models_app.callback(invoke_without_command=True)
@@ -3462,9 +3465,11 @@ def models(
         )
     for e in entries:
         tiers = f"  tiers: {', '.join(e['tiers'])}" if e["tiers"] else ""
+        image = f"  ${e['per_image_usd']:g} per image" if "per_image_usd" in e else ""
         typer.echo(
             f"{e['id']}  family: {e['family']}  capabilities: {', '.join(e['capabilities'])}  "
-            f"${e['input_per_mtok']:g} in / ${e['output_per_mtok']:g} out per 1M tokens{tiers}"
+            f"${e['input_per_mtok']:g} in / ${e['output_per_mtok']:g} out per 1M tokens"
+            f"{image}{tiers}"
         )
     uncatalogued = sorted(config.prices)
     if uncatalogued and capability is None and family is None and not as_json:

@@ -110,6 +110,8 @@ class ModelInfo(_Strict):
     capabilities: tuple[Capability, ...] = Field(min_length=1)
     input_per_mtok: float = Field(ge=0)
     output_per_mtok: float = Field(ge=0)
+    # USD per generated image (``generate_image``, D100); only for ``image_out`` models.
+    per_image_usd: float | None = Field(default=None, ge=0)
 
     @field_validator("family")
     @classmethod
@@ -133,6 +135,17 @@ class ModelInfo(_Strict):
     @classmethod
     def _price(cls, v: Any) -> Any:
         return _price_number(v)
+
+    @field_validator("per_image_usd", mode="before")
+    @classmethod
+    def _image_price(cls, v: Any) -> Any:
+        return None if v is None else _price_number(v)
+
+    @model_validator(mode="after")
+    def _image_price_needs_image_out(self) -> ModelInfo:
+        if self.per_image_usd is not None and Capability.IMAGE_OUT not in self.capabilities:
+            raise ValueError("per_image_usd needs the 'image_out' capability")
+        return self
 
     @property
     def price(self) -> ModelPrice:

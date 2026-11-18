@@ -164,10 +164,16 @@ class Workspace:
 
     def write_text(self, path: str, content: str, *, max_bytes: int = MAX_WRITE_BYTES) -> int:
         """Atomically create or replace a regular file. Returns bytes written."""
-        norm = normalize(path)
+        normalize(path)  # path errors first, as before
         if "\x00" in content:
             raise WorkspaceError("content must not contain NUL characters")
-        data = content.encode("utf-8")
+        return self.write_bytes(path, content.encode("utf-8"), max_bytes=max_bytes)
+
+    def write_bytes(self, path: str, data: bytes, *, max_bytes: int = MAX_WRITE_BYTES) -> int:
+        """Atomically create or replace a regular file with raw bytes. Returns bytes written."""
+        norm = normalize(path)
+        if not isinstance(data, bytes):
+            raise WorkspaceError("data must be bytes")
         if len(data) > max_bytes:
             raise WorkspaceError(f"content larger than {max_bytes} bytes")
         *dirs, name = norm.split("/")

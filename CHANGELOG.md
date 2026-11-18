@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-18 — M11: ساخت تصویر (هسته)
+- **انجام‌شده:** مورد «ساخت تصویر (ابزار)» به سه مورد شکسته شد (هسته، اتصال، مدل‌های chat-محور) و هسته انجام شد: قیمت `per_image_usd` در `[models."<id>"]` (فقط با `image_out`)، `ImageGateway` که هر تصویر رو با همون BudgetGuard مجوز و در همون Ledger ثبت می‌کنه (بدون تلاش دوباره؛ هزینه هرگز کمتر از قیمت)، `OpenAICompatImageProvider` برای `/images/generations` (یک تصویر base64، سقف ۸MiB، بدون proxy محیط، بدون متن خطای درگاه) و ابزار `generate_image` (سطح `write`) که فقط PNG/JPEG واقعی هم‌قالب پسوند با ابعاد معقول رو اتمی در workspace می‌نویسه (`Workspace.write_bytes` تازه). ابزار هنوز در هیچ نقشی نیست. `automa models` قیمت تصویر رو نشون می‌ده (D100).
+- **فایل‌های اصلی:** `src/automa/llm/images.py` (جدید)، `src/automa/tools/images.py` (جدید)، `src/automa/tools/workspace.py`، `src/automa/config.py`، `src/automa/cli.py`، `tests/test_images.py` (۸۳ تست جدید)، `automa.toml.example`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D100).
+- **تست‌ها:** `pytest` ← ۴۰۵۴ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check`، `ruff format --check` و `mypy` روی ماژول‌های تغییرکرده سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و بسته دوباره نصب شد. BudgetGuard و Policy دست نخوردن؛ فراخوانی تصویر در Ledger با `output_tokens = 1` (یعنی یک تصویر) ثبت می‌شه.
+- **برای صاحب مخزن:** برای آماده شدن اجرای واقعی، مدل تصویری 1xAi رو با `capabilities = ["image_out"]` و `per_image_usd` (قیمت یک تصویر به دلار) در `[models]` بذار.
+- **قدم بعدی:** ساخت تصویر (اتصال): بخش `[images]`، نقش `designer` و ساخت ابزار برای هر وظیفه در Orchestrator.
+
 ## 2026-11-18 — M11: Agent انتخاب مدل (وقتی داده کافی نیست)
 - **انجام‌شده:** `ModelSelectorAgent` با `[router] selector = true` (پیش‌فرض خاموش، فقط همراه Router). وقتی Router برای وظیفهٔ تازه داده کافی نداره، یک فراخوانی سطح `small` (حداکثر ۲۰۰ توکن خروجی، از Gateway و BudgetGuard، ثبت در Ledger) از بین مدل‌های سطح‌های نقش/نردبان نقش که از سطح درخواستی گران‌تر نیستن یکی رو انتخاب می‌کنه. پاسخ فقط `{"model", "reason"}` با شناسهٔ مجاز؛ هر چیز دیگه ← مدل پیش‌فرض. نتیجه برای (نقش، سطح درخواستی) در طول اجرا cache می‌شه (وظایف موازی هم یک بار)؛ خطای بودجه/درگاه مثل Worker اجرا رو متوقف می‌کنه. رویداد `router.selector` و خط `model selector:` در `automa run` (D99).
 - **فایل‌های اصلی:** `src/automa/agents/model_selector.py` (جدید)، `src/automa/orchestrator.py` (`selector=`)، `src/automa/config.py` (`RouterConfig.selector`)، `src/automa/cli.py`، `tests/test_model_selector.py` (۷۵ تست جدید)، `automa.toml.example`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D99).

@@ -20,6 +20,7 @@ from automa.tools.github import (
     describe_github_request,
     github_api_url,
 )
+from automa.tools.images import GenerateImage, GenerateImageArgs, image_info
 from automa.tools.policy import Decision, PermissionPolicy, PolicyDecision
 from automa.tools.sandbox import DockerSandbox, SandboxError, SandboxMode
 from automa.tools.search import (
@@ -42,6 +43,8 @@ def default_tools(sandbox: DockerSandbox | None = None) -> list[Tool]:
     call needs the user's approval (D72, D73). ``web_search`` is not included: no
     real search service is chosen yet (D74). ``github_read`` is ``external`` too:
     only the ``researcher`` role lists it and every call needs approval (D75, D76).
+    ``generate_image`` is not included: it needs an ``ImageGateway`` and a project
+    context, and no role lists it yet (D100).
     """
     return [
         *(cls() for cls in FILE_TOOLS),
@@ -72,6 +75,8 @@ __all__ = [
     "FetchUrl",
     "FetchUrlArgs",
     "FakeSearchProvider",
+    "GenerateImage",
+    "GenerateImageArgs",
     "GitHubRead",
     "GitHubReadArgs",
     "GitHubRequestView",
@@ -104,5 +109,6 @@ __all__ = [
     "describe_fetch_request",
     "describe_github_request",
     "github_api_url",
+    "image_info",
     "tools_factory",
 ]
