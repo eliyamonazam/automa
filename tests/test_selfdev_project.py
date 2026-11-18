@@ -482,12 +482,19 @@ def test_real_repository_snapshot(tmp_path: Path) -> None:
         created = create_selfdev_project(store, REPO_ROOT, project_id="self-real")
     except SnapshotError as e:  # e.g. a shallow/partial checkout without blobs
         pytest.skip(str(e))
-    files = store.files_dir("self-real")
+    head = git(REPO_ROOT, "rev-parse", "HEAD")
+    if created is None:
+        # Every roadmap item is done or waiting for the owner: no project is created,
+        # so check the snapshot itself.
+        assert store.list_ids() == []
+        files = tmp_path / "snap"
+        files.mkdir()
+        assert snapshot_repo(REPO_ROOT, files).commit == head
+    else:
+        files = store.files_dir("self-real")
+        assert created.snapshot.commit == head
     assert (files / "CLAUDE.md").is_file()
     assert (files / "src" / "automa" / "selfdev.py").is_file()
-    head = git(REPO_ROOT, "rev-parse", "HEAD")
-    if created is not None:
-        assert created.snapshot.commit == head
     assert not (files / ".git").exists()
     assert not (files / ".env").exists()
 
