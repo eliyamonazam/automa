@@ -164,10 +164,15 @@ class OpenAICompatProvider:
                 f"network error: {type(exc).__name__}", retryable=True, maybe_billed=True
             ) from None
         if resp.status_code >= 400:
+            suffix = self._error_suffix(resp)
+            # "max_tokens ... limit was reached": the model produced (and the gateway
+            # probably billed) a full reply before failing, so count it (D117).
+            ran_out = resp.status_code == 400 and "max_tokens" in suffix.lower()
             raise ProviderError(
-                f"provider returned HTTP {resp.status_code}{self._error_suffix(resp)}",
+                f"provider returned HTTP {resp.status_code}{suffix}",
                 status=resp.status_code,
                 retryable=resp.status_code in _RETRYABLE_STATUS,
+                maybe_billed=ran_out,
                 retry_after_s=_retry_after(resp),
             )
         try:

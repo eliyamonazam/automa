@@ -353,3 +353,57 @@ def test_wire_omits_temperature_when_none():
     req = ChatRequest(model="m", messages=(Message.user("hi"),), max_tokens=5, temperature=None)
     assert "temperature" not in request_to_wire(req)
     assert request_to_wire(req.model_copy(update={"temperature": 0.2}))["temperature"] == 0.2
+
+
+# --- reply did not fit in max_tokens (D117) ----------------------------------------
+
+
+def out_of_room() -> ProviderError:
+    # Verbatim from a live Claude call on 1xAi (the provider marks it maybe_billed).
+    return ProviderError(
+        "provider returned HTTP 400: Could not finish the message because max_tokens or "
+        "model output limit was reached. Please try again with higher max_tokens.",
+        status=400,
+        maybe_billed=True,
+    )
+
+
+def test_output_limit_retries_with_a_larger_cap(ledger: CostLedger, sleeps: list[float]):
+    g, fake, guard = gw(ledger, out_of_room(), "ok")
+    assert call(g).text == "ok"
+    assert [r.max_tokens for r in fake.requests] == [10, 20]
+    assert sleeps == []
+    # The failed attempt may have been billed: charged at its worst case.
+    entries = ledger.entries()
+    assert len(entries) == 2 and entries[0].cost_nusd == WORST
+    assert guard.pending_nusd() == 0
+
+
+def test_output_limit_grows_at_most_twice(ledger: CostLedger, sleeps: list[float]):
+    g, fake, _ = gw(ledger, out_of_room(), out_of_room(), out_of_room(), "ok")
+    with pytest.raises(ProviderError, match="max_tokens"):
+        call(g)
+    assert [r.max_tokens for r in fake.requests] == [10, 20, 40]
+
+
+def test_grown_request_is_authorized_at_its_new_worst_case(ledger: CostLedger, sleeps: list[float]):
+    g, _, guard = gw(ledger, out_of_room(), "ok")
+    seen: list[int] = []
+    real = guard.authorize
+
+    def spy(estimate):  # type: ignore[no-untyped-def]
+        seen.append(estimate.max_output_tokens)
+        return real(estimate)
+
+    guard.authorize = spy  # type: ignore[method-assign]
+    call(g)
+    assert seen == [10, 20]
+
+
+def test_provider_marks_output_limit_as_maybe_billed():
+    msg = (
+        "Could not finish the message because max_tokens or model output limit was "
+        "reached. Please try again with higher max_tokens."
+    )
+    e = raised(lambda r: httpx.Response(400, json={"error": {"message": msg}}))
+    assert e.maybe_billed and not e.retryable

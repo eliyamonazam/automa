@@ -36,6 +36,23 @@ from automa.llm.types import (
 _sleep = time.sleep
 
 
+# Output cap used when a model ran out of room (D117): doubled from the caller's
+# value at most twice, never above this.
+MAX_GROWN_OUTPUT_TOKENS = 16_000
+
+
+def _hit_output_limit(e: ProviderError) -> bool:
+    """A 400 saying the reply did not fit in ``max_tokens`` (seen live on 1xAi with
+    Claude: "Could not finish the message because max_tokens or model output limit
+    was reached. Please try again with higher max_tokens.")."""
+    text = str(e).lower()
+    return (
+        e.status == 400
+        and "max_tokens" in text
+        and ("limit was reached" in text or "higher max_tokens" in text)
+    )
+
+
 def _rejects_temperature(e: ProviderError) -> bool:
     """A 400 whose message blames ``temperature`` (e.g. "`temperature` is deprecated
     for this model", seen live with gpt-5.5 on 1xAi)."""
@@ -244,10 +261,25 @@ class LLMGateway:
         estimate = self.estimate(request, tier, context or CallContext())
         policy = self._config.provider
         retry = 0
+        grown = 0
         while True:
             try:
                 return self._attempt(request, tier, estimate)
             except ProviderError as e:
+                if (
+                    _hit_output_limit(e)
+                    and grown < 2
+                    and request.max_tokens < MAX_GROWN_OUTPUT_TOKENS
+                ):
+                    # The reply needed more room (e.g. a whole report in one
+                    # write_file call). Retry with a larger cap; the new worst case
+                    # is authorized by the guard like any call (D117).
+                    grown += 1
+                    request = request.model_copy(
+                        update={"max_tokens": min(request.max_tokens * 2, MAX_GROWN_OUTPUT_TOKENS)}
+                    )
+                    estimate = self.estimate(request, tier, estimate.context)
+                    continue
                 if _rejects_temperature(e) and request.temperature is not None:
                     # One more guarded attempt without the parameter; remembered for
                     # this model so it is never sent again (D111).
