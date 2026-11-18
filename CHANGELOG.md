@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-18 — M10: ساخت خودکار Skill (CLI مقایسه)
+- **انجام‌شده:** فرمان تازهٔ `automa skill compare <candidate-id> --max-usd X [--benchmark ID]... [--runs N] [--yes] [--json]`: نامزد staged رو با بررسی sha256 متن و فراداده می‌خونه، بدترین هزینهٔ همهٔ اجراها رو در برابر `--max-usd` و باقی‌ماندهٔ سقف روزانه می‌سنجه، پیش‌نمایش نشون می‌ده و قبل از هر خرج تأیید می‌گیره؛ بعد `run_skill_comparison` رو اجرا می‌کنه، رکورد هر اجرا رو در `<workspace>/skill-candidates/<id>.runs/` می‌نویسه و تصمیم دروازه رو یک‌بار در `<id>.gate.json` (با sha256 متن سنجیده‌شده) ثبت می‌کنه. هر نامزد فقط یک تصمیم داره؛ مقایسهٔ لغوشده/قطع‌شده تصمیم نداره و قابل تکراره. هیچ نصبی انجام نمی‌شه (D109).
+- **فایل‌های اصلی:** `src/automa/cli.py` (`skill compare`)، `src/automa/skill_candidates.py` (`load_candidate`، `GateRecord`، `record_gate`، `read_gate`، `runs_dir`)، `tests/test_cli_skill_compare.py` (۴۸ تست جدید)، `tests/test_cli.py` (تست ساختاری Provider)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D109).
+- **تست‌ها:** `pytest` ← ۴۴۵۸ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check`، `ruff format --check` و `mypy` روی ماژول‌های تغییرکرده سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و بسته دوباره نصب شد. یک تست در اولین اجرا شکست خورد چون شناسهٔ پروژه‌ها مهر زمانی یک‌ثانیه‌ای داره و دو مقایسه در یک ثانیه با هم برخورد می‌کردن (رفتار درست: «already exists; try again»)؛ تست یک ثانیه صبر می‌کنه. BudgetGuard، Policy و Approval Gate دست نخوردن.
+- **برای صاحب مخزن:** کاری لازم نیست. برای آزمون واقعی روی لپتاپ (بعد از `automa skill draft`): `automa skill compare <id> --max-usd 3` (با ۳ اجرا در هر طرف برای `cli-word-count` بدترین هزینه ۳ دلاره).
+- **قدم بعدی:** ساخت خودکار Skill (CLI نصب): `automa skill install`.
+
 ## 2026-11-18 — M10: ساخت خودکار Skill (CLI ساخت نامزد)
 - **انجام‌شده:** مورد CLI به سه مورد شکسته شد (ساخت نامزد، مقایسه، نصب) و اولی انجام شد: فرمان تازهٔ `automa skill draft --role ROLE [--benchmark ID]... [--suite] [--results] [--json]` از نتایج ثبت‌شدهٔ benchmark تحلیل شکست می‌سازه، `SkillAuthorAgent` رو پشت gateway با BudgetGuard صدا می‌زنه و نامزد رو اتمی در `<workspace>/skill-candidates/<id>/<name>/SKILL.md` با فرادادهٔ `<id>.json` (نقش، benchmarkها، sha256، هزینه) می‌نویسه. نقش/benchmark ناشناخته، نبود شکست، فایل نتیجهٔ خراب، پوشهٔ symlink و انبار پر قبل از هر فراخوانی رد می‌شن؛ در هر خطا چیزی staged نمی‌شه. هیچ نصبی انجام نمی‌شه (D108).
 - **فایل‌های اصلی:** `src/automa/skill_candidates.py` (جدید)، `src/automa/cli.py` (گروه `skill`)، `tests/test_cli_skill_draft.py` (۴۲ تست جدید)، `tests/test_cli.py` (شمارش مسیرهای gateway)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D108).

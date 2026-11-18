@@ -438,6 +438,22 @@ def test_cli_provider_only_reaches_a_gateway() -> None:
         if k.arg == "provider" and isinstance(k.value, ast.Name)
     }
     assert len(bench_args) == 1
+    # ``skill compare`` hands it to ``run_skill_comparison``, which only passes it on to
+    # ``run_benchmark`` for each run (checked in test_skill_comparison.py)
+    compare_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "run_skill_comparison"
+    ]
+    assert len(compare_calls) == 1
+    bench_args |= {
+        id(k.value)
+        for k in compare_calls[0].keywords
+        if k.arg == "provider" and isinstance(k.value, ast.Name)
+    }
+    assert len(bench_args) == 2
     # one guarded gateway per model-calling path: Executive planning (shared by ``new``
     # and ``self new`` via ``_plan_with_executive``), ``run``, ``review run`` and
     # ``self propose`` and ``skill draft`` …

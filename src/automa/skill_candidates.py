@@ -5,6 +5,8 @@ A candidate is never installed here. Layout, under ``<workspace>/skill-candidate
     <id>/<name>/SKILL.md   the staging directory ``<id>/`` read by
                            ``automa.skill_comparison.load_candidate_skill``
     <id>.json              metadata (role, benchmarks, digest, attempts, cost, sha256)
+    <id>.runs/<side>/      result files of ``automa skill compare`` (baseline/candidate)
+    <id>.gate.json         the one recorded gate decision (written once, never replaced)
 
 ``<id>`` is ``<UTC stamp>-<name>``. Staging is all-or-nothing: the candidate directory
 is built under a hidden temporary name and moved into place with one ``os.rename``;
@@ -19,19 +21,29 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from automa.agents.skill_author import SkillDraft
-from automa.skill_comparison import SkillComparisonError, load_candidate_skill
+from automa.skill_comparison import (
+    SkillComparisonError,
+    SkillComparisonResult,
+    load_candidate_skill,
+)
+from automa.skill_gate import SkillGateDecision
+from automa.skills import Skill
 from automa.skills.registry import SKILL_FILE
 
 CANDIDATES_DIRNAME = "skill-candidates"
 MAX_CANDIDATES = 100
 METADATA_SUFFIX = ".json"
+GATE_SUFFIX = ".gate.json"
+RUNS_SUFFIX = ".runs"
+_MAX_META_BYTES = 1 << 20
 CANDIDATE_ID_PATTERN = r"^[0-9]{8}-[0-9]{6}-[a-z0-9]+(?:-[a-z0-9]+)*$"
 _ID_RE = re.compile(CANDIDATE_ID_PATTERN)
 _MAX_ID = 80
@@ -86,7 +98,8 @@ def _existing_dir(workspace: str | Path) -> Path | None:
 
 
 def _count(base: Path) -> int:
-    return sum(1 for e in os.scandir(base) if not e.name.startswith(".") and e.is_dir())
+    # Only candidate directories count (not ``<id>.runs`` or hidden temporary ones).
+    return sum(1 for e in os.scandir(base) if _ID_RE.fullmatch(e.name) and e.is_dir())
 
 
 def check_room(workspace: str | Path) -> None:
@@ -167,15 +180,195 @@ def stage_draft(draft: SkillDraft, *, workspace: str | Path, cost_nusd: int) -> 
     return record
 
 
+# --- reading a staged candidate and recording its gate decision (D109) -------------
+
+
+def _read_small_file(path: Path, what: str) -> bytes:
+    """Bytes of a regular, non-symlinked file of at most 1 MiB (fails closed)."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        raise SkillCandidateError(f"{what} not found: {path}") from None
+    except OSError as e:
+        raise SkillCandidateError(f"cannot read {what} {path} ({e.strerror})") from None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise SkillCandidateError(f"{what} is not a regular file: {path}")
+        if st.st_size > _MAX_META_BYTES:
+            raise SkillCandidateError(f"{what} is too large: {path}")
+        with os.fdopen(fd, "rb") as f:
+            fd = -1
+            data = f.read(_MAX_META_BYTES + 1)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    if len(data) > _MAX_META_BYTES:
+        raise SkillCandidateError(f"{what} is too large: {path}")
+    return data
+
+
+def skill_file_sha256(workspace: str | Path, record: CandidateRecord) -> str:
+    """SHA-256 of the staged ``SKILL.md`` bytes as they are on disk now."""
+    path = staging_path(workspace, record.id) / record.name / SKILL_FILE
+    return hashlib.sha256(_read_small_file(path, "candidate skill file")).hexdigest()
+
+
+def load_candidate(workspace: str | Path, cid: str) -> tuple[CandidateRecord, Skill]:
+    """The metadata and the skill of staged candidate ``cid`` (fails closed).
+
+    The metadata must be valid and name this id; the staged ``SKILL.md`` must still
+    have the recorded ``skill_sha256`` (before and after it is parsed) and hold the
+    recorded skill name.
+    """
+    staging = staging_path(workspace, cid)
+    base = _existing_dir(workspace)
+    if base is None:
+        raise SkillCandidateError(f"unknown candidate {cid!r} (no {CANDIDATES_DIRNAME}/)")
+    meta = base / f"{cid}{METADATA_SUFFIX}"
+    if not (staging.exists() or staging.is_symlink()) and not (meta.exists() or meta.is_symlink()):
+        raise SkillCandidateError(f"unknown candidate {cid!r}")
+    try:
+        record = CandidateRecord.model_validate_json(_read_small_file(meta, "candidate metadata"))
+    except (ValidationError, ValueError):
+        raise SkillCandidateError(f"invalid candidate metadata {meta.name}") from None
+    if record.id != cid:
+        raise SkillCandidateError(f"candidate metadata {meta.name} names another id")
+    if skill_file_sha256(workspace, record) != record.skill_sha256:
+        raise SkillCandidateError(
+            f"candidate {cid}: {SKILL_FILE} changed since it was drafted (sha256 differs)"
+        )
+    try:
+        skill = load_candidate_skill(staging, workspace=Path(workspace))
+    except SkillComparisonError as e:
+        raise SkillCandidateError(f"candidate {cid}: {e}") from None
+    if skill.name != record.name:
+        raise SkillCandidateError(f"candidate {cid}: skill name differs from its metadata")
+    if skill_file_sha256(workspace, record) != record.skill_sha256:
+        raise SkillCandidateError(f"candidate {cid}: {SKILL_FILE} changed while being read")
+    return record, skill
+
+
+class GateRecord(BaseModel):
+    """The gate decision of one candidate (``<id>.gate.json``), written exactly once."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    candidate_id: str = Field(pattern=CANDIDATE_ID_PATTERN, max_length=_MAX_ID)
+    name: str
+    role: str
+    skill_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    benchmarks: list[str]
+    runs_per_side: int = Field(ge=1)
+    accepted: bool
+    decision: SkillGateDecision
+    spent_nusd: int = Field(ge=0)
+    max_total_nusd: int = Field(ge=0)
+    limit_nusd: int = Field(ge=0)
+    baseline_projects: list[str]
+    candidate_projects: list[str]
+    created_at: datetime
+
+
+def gate_path(workspace: str | Path, cid: str) -> Path:
+    staging_path(workspace, cid)  # validates the id
+    return candidates_dir(workspace) / f"{cid}{GATE_SUFFIX}"
+
+
+def runs_dir(workspace: str | Path, cid: str) -> Path:
+    """``<id>.runs/``: the comparison's result files (``<side>/<benchmark>/…``)."""
+    staging_path(workspace, cid)
+    return candidates_dir(workspace) / f"{cid}{RUNS_SUFFIX}"
+
+
+def read_gate(workspace: str | Path, cid: str) -> GateRecord | None:
+    """The recorded decision of ``cid``; ``None`` if none; a broken file is an error."""
+    path = gate_path(workspace, cid)
+    if not (path.exists() or path.is_symlink()):
+        return None
+    try:
+        gate = GateRecord.model_validate_json(_read_small_file(path, "gate decision"))
+    except (ValidationError, ValueError):
+        raise SkillCandidateError(f"invalid gate decision {path.name}") from None
+    if gate.candidate_id != cid:
+        raise SkillCandidateError(f"gate decision {path.name} names another candidate")
+    return gate
+
+
+def record_gate(
+    workspace: str | Path,
+    record: CandidateRecord,
+    result: SkillComparisonResult,
+    *,
+    created_at: datetime,
+) -> GateRecord:
+    """Write the gate decision of a finished (not aborted) comparison; never overwrites."""
+    if result.decision is None or result.aborted is not None:
+        raise SkillCandidateError("an aborted comparison has no decision to record")
+    if result.plan.candidate != record.name or result.plan.role != record.role:
+        raise SkillCandidateError("the comparison was not run for this candidate")
+    if skill_file_sha256(workspace, record) != record.skill_sha256:
+        raise SkillCandidateError(
+            f"candidate {record.id}: {SKILL_FILE} changed during the comparison; "
+            "no decision recorded"
+        )
+    gate = GateRecord(
+        candidate_id=record.id,
+        name=record.name,
+        role=record.role,
+        skill_sha256=record.skill_sha256,
+        benchmarks=list(result.plan.benchmarks),
+        runs_per_side=result.plan.runs_per_side,
+        accepted=result.decision.accepted,
+        decision=result.decision,
+        spent_nusd=result.spent_nusd,
+        max_total_nusd=result.plan.max_total_nusd,
+        limit_nusd=result.plan.limit_nusd,
+        baseline_projects=[r.project_id for r in result.baseline],
+        candidate_projects=[r.project_id for r in result.candidate],
+        created_at=created_at,
+    )
+    path = gate_path(workspace, record.id)
+    text = json.dumps(gate.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tmp, path)  # fails if a decision exists: written once
+        except FileExistsError:
+            raise SkillCandidateError(
+                f"candidate {record.id} already has a recorded gate decision"
+            ) from None
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+    return gate
+
+
 __all__ = [
     "CANDIDATES_DIRNAME",
     "CANDIDATE_ID_PATTERN",
+    "GATE_SUFFIX",
     "MAX_CANDIDATES",
+    "RUNS_SUFFIX",
     "CandidateRecord",
+    "GateRecord",
     "SkillCandidateError",
     "candidate_id",
     "candidates_dir",
     "check_room",
+    "gate_path",
+    "load_candidate",
+    "read_gate",
+    "record_gate",
+    "runs_dir",
+    "skill_file_sha256",
     "stage_draft",
     "staging_path",
 ]

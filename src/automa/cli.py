@@ -117,6 +117,7 @@ from automa.benchmarks import (
     BenchmarkError,
     BenchmarkReport,
     BenchmarkResultError,
+    BenchmarkRunRecord,
     BenchmarkSuite,
     build_report,
     prepare_results_dir,
@@ -124,7 +125,7 @@ from automa.benchmarks import (
     write_result,
 )
 from automa.budget.guard import BudgetError, BudgetExceeded, BudgetGuard, cap_to_nusd
-from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError, nusd_to_usd
+from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError, nusd_to_usd, usd_to_nusd
 from automa.config import (
     MAX_PARALLEL,
     AutomaConfig,
@@ -227,12 +228,27 @@ from automa.selfdev_project import (
 from automa.selfdev_proposals import ProposalDecision as ItemProposalDecision
 from automa.selfdev_proposals import ProposalSet, ProposalStore, ProposalStoreError
 from automa.skill_candidates import (
+    CandidateRecord,
     SkillCandidateError,
     candidates_dir,
     check_room,
+    gate_path,
+    load_candidate,
+    read_gate,
+    record_gate,
+    runs_dir,
     stage_draft,
     staging_path,
 )
+from automa.skill_comparison import (
+    INFRA_STOPS,
+    ComparisonSide,
+    SkillComparisonError,
+    SkillComparisonResult,
+    plan_skill_comparison,
+    run_skill_comparison,
+)
+from automa.skill_gate import DEFAULT_MIN_RUNS, SkillGatePolicy
 from automa.skills import (
     Skill,
     SkillError,
@@ -4424,6 +4440,251 @@ def skill_draft(
         "not installed: no role uses it until it passes the benchmark gate "
         f"(candidates live in {candidates_dir(config.workspace)})"
     )
+
+
+class _RecordWriteFailed(Exception):
+    """A comparison run's result file could not be written (the comparison stops)."""
+
+
+def _compare_exit_code(result: SkillComparisonResult) -> int:
+    if result.aborted is None:
+        return EXIT_OK if result.accepted else EXIT_BENCH_FAILED
+    last = [*result.baseline, *result.candidate]
+    if any(r.stop in INFRA_STOPS for r in last):
+        return EXIT_PROVIDER
+    return EXIT_BUDGET
+
+
+@skill_app.command("compare")
+def skill_compare(
+    cid: Annotated[str, typer.Argument(help="Candidate id (from: automa skill draft).")],
+    max_usd: Annotated[
+        float,
+        typer.Option("--max-usd", help="Cap on the whole comparison (all runs together)."),
+    ],
+    benchmark_ids: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--benchmark",
+            help="Benchmark to compare on (repeatable; default: those it was drafted from).",
+        ),
+    ] = None,
+    runs: Annotated[
+        int, typer.Option("--runs", help="Runs per side and benchmark (at least the gate's).")
+    ] = DEFAULT_MIN_RUNS,
+    suite_dir: Annotated[
+        Path, typer.Option("--suite", help="Directory of <id>.toml benchmark files.")
+    ] = DEFAULT_SUITE_DIR,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Do not ask before spending.")] = False,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Machine-readable output (needs --yes).")
+    ] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Measure staged candidate CID against the current skills on the benchmark suite
+    and record the gate decision next to it (<id>.gate.json). Never installs.
+
+    Every run is a normal benchmark run (its own project and BudgetGuard). The
+    worst-case cost of all runs is shown and must fit --max-usd and what is left of
+    today's daily cap; nothing is spent before you confirm. A candidate gets one
+    recorded decision. Exit codes: 0 accepted, 8 rejected, 1 user error, 2 config,
+    3 stopped by a cap (no decision), 5 stopped by the provider/tool layer (no
+    decision), 130 interrupted (no decision).
+    """
+    if as_json and not yes:
+        raise _fail("--json needs --yes (there is no prompt in machine-readable mode)", EXIT_USER)
+    config = _load(config_path)
+    try:
+        config.model_for(ExecutiveSettings().tier)
+    except ConfigError as e:
+        raise _fail(str(e), EXIT_CONFIG) from None
+    try:
+        roles, skills = _roles_and_skills(config)
+    except (RoleError, SkillError) as e:
+        raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+    try:
+        record, candidate = load_candidate(config.workspace, cid)
+        existing = read_gate(config.workspace, cid)
+    except SkillCandidateError as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    if existing is not None:
+        verdict = "accepted" if existing.accepted else "rejected"
+        raise _fail(
+            f"candidate {cid} already has a recorded gate decision ({verdict}); a candidate "
+            "is compared once (draft a new one to try again)",
+            EXIT_USER,
+        )
+    suite = _suite(suite_dir)
+    wanted = list(benchmark_ids) if benchmark_ids else list(record.benchmarks)
+    try:
+        benches = [suite.get(b) for b in wanted]
+    except BenchmarkError as e:
+        raise _fail(f"{_safe(str(e))} (known: {', '.join(suite.ids())})", EXIT_USER) from None
+    needing = [b.id for b in benches if b.needs_images]
+    if needing and not config.images.enabled:
+        raise _fail(
+            f"benchmarks {needing} need image generation: set [images] model in automa.toml",
+            EXIT_CONFIG,
+        )
+    policy = SkillGatePolicy()
+    store = ProjectStore.for_workspace(config.workspace)
+    with CostLedger.for_workspace(config.workspace) as ledger:
+        try:
+            plan, _r, _s = plan_skill_comparison(
+                benches,
+                candidate=candidate,
+                role=record.role,
+                runs=runs,
+                max_total_usd=max_usd,
+                config=config,
+                store=store,
+                ledger=ledger,
+                roles=roles,
+                skills=skills,
+                policy=policy,
+                images_available=bool(needing),
+            )
+        except SkillComparisonError as e:
+            raise _fail(f"{_safe(str(e))}; nothing was spent", EXIT_USER) from None
+        daily_left = usd_to_nusd(config.limits.daily_usd) - ledger.spent_nusd(day=ledger.today())
+    try:
+        provider = make_provider(config)
+        image_provider = make_image_provider(config) if needing else None
+    except ConfigError as e:
+        raise _fail(str(e), EXIT_CONFIG) from None
+    _require_sandbox(config)
+    runs_root = runs_dir(config.workspace, cid)
+    try:
+        for side in ComparisonSide:
+            side_dir = prepare_results_dir(runs_root, side.value)
+            for b in benches:
+                prepare_results_dir(side_dir, b.id)
+    except BenchmarkResultError as e:
+        raise _fail(f"{e}; nothing was spent", EXIT_USER) from None
+
+    if not as_json:
+        typer.echo(f"candidate: {record.id} (skill {record.name} for role {record.role})")
+        typer.echo(f"benchmarks: {', '.join(plan.benchmarks)}")
+        typer.echo(
+            f"runs: {len(plan.runs)} ({plan.runs_per_side} per side and benchmark, "
+            "baseline and candidate interleaved)"
+        )
+        typer.echo(
+            f"worst-case cost: {_usd(plan.max_total_nusd)} "
+            f"(cap {_usd(plan.limit_nusd)}, left today {_usd(max(daily_left, 0))})"
+        )
+        typer.echo(f"sandbox: {config.sandbox.describe()}")
+        if needing:
+            typer.echo(f"images: {_describe_images(config)}")
+    if not yes and not typer.confirm(
+        f"Spend up to {_usd(plan.max_total_nusd)} on {len(plan.runs)} benchmark runs?",
+        default=False,
+    ):
+        typer.echo("cancelled: nothing was spent")
+        raise typer.Exit(EXIT_USER)
+
+    def on_record(side: ComparisonSide, rec: BenchmarkRunRecord) -> None:
+        try:
+            write_result(runs_root / side.value, rec)
+        except BenchmarkResultError as e:
+            raise _RecordWriteFailed(str(e)) from None
+        if not as_json:
+            typer.echo(
+                f"  {side.value:<9} {rec.benchmark_id}  "
+                f"{'PASS' if rec.passed else 'FAIL'}  score {rec.score:.2f}  "
+                f"{_usd(rec.cost_nusd)}  stop {rec.stop.value}"
+            )
+
+    with CostLedger.for_workspace(config.workspace) as ledger:
+        try:
+            result = run_skill_comparison(
+                benches,
+                candidate=candidate,
+                role=record.role,
+                runs=runs,
+                max_total_usd=max_usd,
+                config=config,
+                provider=provider,
+                store=store,
+                ledger=ledger,
+                roles=roles,
+                skills=skills,
+                policy=policy,
+                image_provider=image_provider,
+                on_record=on_record,
+            )
+        except KeyboardInterrupt:
+            typer.echo("interrupted: no gate decision recorded (finished runs are kept)")
+            raise typer.Exit(EXIT_INTERRUPTED) from None
+        except _RecordWriteFailed as e:
+            raise _fail(
+                f"could not record a run: {e}; comparison stopped, no gate decision recorded",
+                EXIT_USER,
+            ) from None
+        except (SkillComparisonError, ConfigError) as e:
+            raise _fail(f"{_safe(str(e))}; no gate decision recorded", EXIT_USER) from None
+        except (ProjectStoreError, OrchestratorError) as e:
+            raise _fail(f"{e}; no gate decision recorded", EXIT_USER) from None
+    gate = None
+    if result.decision is not None:
+        try:
+            gate = record_gate(config.workspace, record, result, created_at=datetime.now(UTC))
+        except SkillCandidateError as e:
+            raise _fail(_safe(str(e)), EXIT_USER) from None
+    _print_comparison(record, result, gate is not None, as_json, config.workspace)
+    raise typer.Exit(_compare_exit_code(result))
+
+
+def _print_comparison(
+    record: CandidateRecord,
+    result: SkillComparisonResult,
+    recorded: bool,
+    as_json: bool,
+    workspace: Path,
+) -> None:
+    path = gate_path(workspace, record.id)
+    if as_json:
+        out = {
+            "candidate_id": record.id,
+            "name": record.name,
+            "role": record.role,
+            "benchmarks": list(result.plan.benchmarks),
+            "runs_per_side": result.plan.runs_per_side,
+            "spent_nusd": result.spent_nusd,
+            "max_total_nusd": result.plan.max_total_nusd,
+            "aborted": result.aborted,
+            "accepted": result.accepted,
+            "decision": None
+            if result.decision is None
+            else result.decision.model_dump(mode="json"),
+            "gate_file": str(path) if recorded else None,
+            "installed": False,
+        }
+        typer.echo(json.dumps(out, ensure_ascii=False, indent=2))
+        return
+    typer.echo(f"spent: {_usd(result.spent_nusd)} of {_usd(result.plan.limit_nusd)}")
+    if result.decision is None:
+        typer.echo(f"aborted: {_safe(result.aborted or '')}")
+        typer.echo("no gate decision recorded; the comparison can be run again")
+        return
+    for c in result.decision.comparisons:
+        b, k = c.baseline, c.candidate
+        typer.echo(
+            f"  {c.benchmark_id}: baseline {b.passes}/{b.runs} passed, candidate "
+            f"{k.passes}/{k.runs} passed"
+            + (" [regressed]" if c.regressed else "")
+            + (" [improved]" if c.improved else "")
+            + (" [over cost]" if c.over_cost else "")
+        )
+    if result.accepted:
+        typer.echo("gate: ACCEPTED")
+    else:
+        reasons = ", ".join(r.value for r in result.decision.reasons)
+        typer.echo(f"gate: REJECTED ({reasons})")
+    typer.echo(f"recorded: {path}")
+    typer.echo("not installed: installing is a separate, confirmed step")
 
 
 UNSUPPORTED_PLATFORM_MESSAGE = (
