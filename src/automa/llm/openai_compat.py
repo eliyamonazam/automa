@@ -184,23 +184,30 @@ class OpenAICompatProvider:
 
     def _error_suffix(self, resp: httpx.Response) -> str:
         """``: <gateway message>`` (redacted, single line, bounded) or ``""``."""
-        message = _error_message(resp)
-        if not message:
-            return ""
-        key = self._client.headers.get("Authorization", "").removeprefix("Bearer ")
-        if key:
-            message = message.replace(key, "[redacted]")
-        message = _SECRETISH.sub("[redacted]", message)
-        message = " ".join(message.split())  # no newlines / control layout
-        message = "".join(ch for ch in message if ch.isprintable())
-        if len(message) > _MAX_ERROR_MESSAGE:
-            message = message[:_MAX_ERROR_MESSAGE] + " [...]"
-        return f": {message}" if message else ""
+        return error_suffix(resp, self._client.headers.get("Authorization", ""))
+
+
+def error_suffix(resp: httpx.Response, authorization: str = "") -> str:
+    """``: <gateway message>`` from an error response: the API key (from the
+    ``Authorization`` header value) and anything token-like redacted, one line,
+    at most ``_MAX_ERROR_MESSAGE`` characters; ``""`` when there is no message."""
+    message = _error_message(resp)
+    if not message:
+        return ""
+    key = authorization.removeprefix("Bearer ")
+    if key:
+        message = message.replace(key, "[redacted]")
+    message = _SECRETISH.sub("[redacted]", message)
+    message = " ".join(message.split())  # no newlines / control layout
+    message = "".join(ch for ch in message if ch.isprintable())
+    if len(message) > _MAX_ERROR_MESSAGE:
+        message = message[:_MAX_ERROR_MESSAGE] + " [...]"
+    return f": {message}" if message else ""
 
 
 _MAX_ERROR_MESSAGE = 300
 # Anything that looks like a bearer token or API key in a gateway's error text.
-_SECRETISH = re.compile(r"(?i)(bearer\s+\S+|\b(?:sk|1xai|key)[-_][A-Za-z0-9_\-]{8,})")
+_SECRETISH = re.compile(r"(?i)(bearer\s+\S+|\b(?:sk|1xai|key)[-_][A-Za-z0-9_\-]{4,})")
 
 
 def _error_message(resp: httpx.Response) -> str:

@@ -51,7 +51,7 @@ from automa.config import (
     Tier,
 )
 from automa.llm.gateway import CallContext, CallEstimate, CallGuard, LLMGateway, compute_cost
-from automa.llm.openai_compat import _RETRYABLE_STATUS, _retry_after
+from automa.llm.openai_compat import _RETRYABLE_STATUS, _retry_after, error_suffix
 from automa.llm.provider import ProviderError
 from automa.llm.types import ChatResponse, LLMResult, Message, Usage
 
@@ -344,7 +344,7 @@ class OpenAICompatImageProvider:
             with self._client.stream("POST", path, json=body_json) as resp:
                 status = resp.status_code
                 retry_after = _retry_after(resp)
-                body = self._read_bounded(resp) if status < 400 else b""
+                body = self._read_bounded(resp) if status < 400 else self._read_error(resp)
         except ProviderError:
             raise
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
@@ -358,8 +358,13 @@ class OpenAICompatImageProvider:
                 f"network error: {type(exc).__name__}", retryable=True, maybe_billed=True
             ) from None
         if status >= 400:
+            # The gateway's own reason (redacted), e.g. which field it rejected (D114).
+            detail = error_suffix(
+                httpx.Response(status, content=body),
+                self._client.headers.get("Authorization", ""),
+            )
             raise ProviderError(
-                f"image endpoint returned HTTP {status}",
+                f"image endpoint returned HTTP {status}{detail}",
                 status=status,
                 retryable=status in _RETRYABLE_STATUS,
                 retry_after_s=retry_after,
@@ -371,13 +376,30 @@ class OpenAICompatImageProvider:
                 "image endpoint returned non-JSON body", maybe_billed=True
             ) from None
         if isinstance(data, dict) and data.get("error"):
-            raise ProviderError("image endpoint returned an error object", status=status)
+            detail = error_suffix(
+                httpx.Response(status, content=body),
+                self._client.headers.get("Authorization", ""),
+            )
+            raise ProviderError(f"image endpoint returned an error object{detail}", status=status)
         parse = chat_image_response_from_wire if chat else image_response_from_wire
         try:
             return parse(data, fallback_model=request.model)
         except ProviderError as e:
             # The endpoint answered 2xx: the image may have been billed anyway.
             raise ProviderError(str(e), status=status, maybe_billed=True) from None
+
+    @staticmethod
+    def _read_error(resp: httpx.Response) -> bytes:
+        """At most 16 KiB of an error body (only its message is kept)."""
+        out = bytearray()
+        try:
+            for chunk in resp.iter_bytes():
+                out += chunk
+                if len(out) >= 16_384:
+                    break
+        except httpx.HTTPError:
+            pass
+        return bytes(out[:16_384])
 
     @staticmethod
     def _read_bounded(resp: httpx.Response) -> bytes:
