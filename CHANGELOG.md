@@ -1,5 +1,11 @@
 # گزارش تغییرات
 
+## 2026-11-18 — ساخت تصویر از مسیر بومی Gemini (خارج از نقشه راه، D115)
+- **یافته (آزمون‌های واقعی):** مسیر چت 1xAi برای Gemini تصویری `Unhandled generated data mime type: image/jpeg`؛ `/v1/images` گفت فقط `/gemini/v1beta/models/{model}:generateContent`؛ آزمون مستقیم با Bearer تصویر ساخت.
+- **رفع:** `image_api = "gemini"` با درخواست و پارس پاسخ بومی، مصرف از `usageMetadata`، همون Guard و سقف‌ها.
+- **فایل‌ها:** `src/automa/config.py`، `src/automa/llm/images.py`، `src/automa/cli.py`، `tests/test_images_gemini.py` (۱۸ تست).
+- **تست‌ها:** `pytest` ← ۴۵۲۳ سبز، ۲ رد شده؛ `ruff` ← بدون خطا.
+
 ## 2026-11-18 — پیام خطای درگاه در فراخوانی‌های تصویر (خارج از نقشه راه، D114)
 - **یافته (آزمون واقعی):** `landing-page-with-image` با `gemini-3.1-flash-image` روی 1xAi: هر ۵ فراخوانی `HTTP 400` بدون دلیل؛ ۴ تلاش، ۰٫۴۸۱۹ دلار، هیچ فایلی ساخته نشد. `research-brief` بعد از D112: ۲۰ صفحه متفاوت و توقف برای تأیید (رفع در D113).
 - **رفع:** پیام درگاه (با حذف کلید) در `ProviderError` تصویر. شکل درست درخواست تصویر 1xAi هنوز نامعلومه و با یک اسکریپت آزمون روی لپتاپ صاحب مخزن پیدا می‌شه.

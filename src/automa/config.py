@@ -88,6 +88,15 @@ class ImageApi(StrEnum):
 
     IMAGES = "images"  # POST /images/generations, priced per image
     CHAT = "chat"  # POST /chat/completions returning a base64 image, priced per token
+    # Google's native route on the gateway (D115): POST {root}/gemini/v1beta/models/
+    # {model}:generateContent, image in candidates[].content.parts[].inlineData,
+    # priced per token. 1xAi serves Google image models only this way.
+    GEMINI = "gemini"
+
+    @property
+    def token_priced(self) -> bool:
+        """Priced by token usage with an output-token cap (``image_max_tokens``)."""
+        return self is not ImageApi.IMAGES
 
 
 # Worst-case prompt tokens of a chat-based image call: the prompt (at most 1000
@@ -169,10 +178,10 @@ class ModelInfo(_Strict):
             raise ValueError("image_api needs the 'image_out' capability")
         if self.image_max_tokens is not None and not image_out:
             raise ValueError("image_max_tokens needs the 'image_out' capability")
-        if self.image_api is ImageApi.CHAT and self.image_max_tokens is None:
-            raise ValueError('image_api = "chat" needs image_max_tokens')
+        if self.image_api.token_priced and self.image_max_tokens is None:
+            raise ValueError(f'image_api = "{self.image_api.value}" needs image_max_tokens')
         if self.image_api is ImageApi.IMAGES and self.image_max_tokens is not None:
-            raise ValueError('image_max_tokens is only for image_api = "chat"')
+            raise ValueError('image_max_tokens is only for image_api = "chat" or "gemini"')
         return self
 
     def image_worst_case_usd(self) -> float | None:

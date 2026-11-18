@@ -924,7 +924,8 @@ def _describe_images(config: AutomaConfig) -> str:
     info = config.models[config.images.model or ""]
     if info.image_max_tokens is not None:
         return (
-            f"{config.images.model} (chat-based, up to ${price:.4f} per image at token "
+            f"{config.images.model} ({info.image_api.value}-based, up to ${price:.4f} per image "
+            "at token "
             f"prices with max {info.image_max_tokens} output tokens, at most "
             f"{config.images.max_per_task} per task attempt; counted by the budget)"
         )
@@ -3552,7 +3553,7 @@ def models(
         image = f"  ${e['per_image_usd']:g} per image" if "per_image_usd" in e else ""
         if "image_api" in e:
             image += (
-                f"  images via chat (max {e['image_max_tokens']} tokens, "
+                f"  images via {e['image_api']} (max {e['image_max_tokens']} tokens, "
                 f"up to ${e['image_worst_case_usd']:.4f} per image)"
             )
         typer.echo(

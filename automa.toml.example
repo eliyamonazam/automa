@@ -53,6 +53,16 @@ output_per_mtok = 20.00
 # output_per_mtok = 30.00
 # image_api = "chat"
 # image_max_tokens = 4000
+# A Google image model on a gateway that serves it only natively (1xAi, D115):
+# image_api = "gemini" posts to {root}/gemini/v1beta/models/{model}:generateContent
+# (root = base_url without /v1); priced per token like "chat".
+# [models."gemini-3.1-flash-image"]
+# family = "google"
+# capabilities = ["text", "image_out"]
+# input_per_mtok = 0.501548
+# output_per_mtok = 60.030961
+# image_api = "gemini"
+# image_max_tokens = 3000
 # List the catalog with: automa models [--capability vision] [--family openai]
 # Turn a 1xAi price list (id, input and output toman per 1K tokens) into entries to
 # review and paste here (prints only, rounds prices up; D95):

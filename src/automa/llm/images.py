@@ -138,7 +138,7 @@ class FakeImageProvider:
             model=request.model,
             data=item,
             reported_cost_usd=self._reported,
-            usage=self._usage if request.api is ImageApi.CHAT else None,
+            usage=self._usage if request.api.token_priced else None,
         )
 
 
@@ -264,6 +264,79 @@ def chat_image_response_from_wire(data: Any, *, fallback_model: str) -> ImageRes
         raise ProviderError(f"malformed image response: {type(exc).__name__}") from None
 
 
+_MODEL_PATH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\-]{0,127}")
+
+
+def gemini_image_request_to_wire(request: ImageRequest) -> dict[str, Any]:
+    """JSON body for Google's native ``:generateContent`` asking for one image (D115)."""
+    if request.max_tokens is None:
+        raise ValueError("a gemini image request needs max_tokens")
+    return {
+        "contents": [{"role": "user", "parts": [{"text": chat_image_prompt(request)}]}],
+        "generationConfig": {
+            "responseModalities": ["IMAGE", "TEXT"],
+            "maxOutputTokens": request.max_tokens,
+        },
+    }
+
+
+def gemini_image_response_from_wire(data: Any, *, fallback_model: str) -> ImageResponse:
+    """Parse a native Gemini ``generateContent`` reply carrying an inline image.
+
+    Seen live on 1xAi: ``candidates[0].content.parts[0].inlineData`` with
+    ``mimeType`` image/jpeg and base64 ``data`` (plus a large ``thoughtSignature``),
+    and ``usageMetadata`` {promptTokenCount, candidatesTokenCount, totalTokenCount}.
+    The first PNG/JPEG part is the image. Output tokens are the larger of
+    candidates (+ thoughts) and total - prompt, so hidden tokens are never
+    under-counted (D107). Raises ``ProviderError`` (no body text) without an image.
+    """
+    try:
+        candidates = data["candidates"]
+        if not isinstance(candidates, list) or not candidates:
+            raise ValueError("no candidates")
+        image: bytes | None = None
+        for cand in candidates:
+            parts = ((cand or {}).get("content") or {}).get("parts") or []
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                inline = part.get("inlineData") or part.get("inline_data")
+                if not isinstance(inline, dict):
+                    continue
+                mime = str(inline.get("mimeType") or inline.get("mime_type") or "")
+                b64 = inline.get("data")
+                if mime not in ("image/png", "image/jpeg", "image/jpg") or not isinstance(b64, str):
+                    continue
+                if len(b64) > MAX_IMAGE_BYTES * 4 // 3 + 4:
+                    raise ProviderError("the generated image is too large")
+                image = base64.b64decode("".join(b64.split()), validate=True)
+                break
+            if image is not None:
+                break
+        if image is None:
+            raise ProviderError("the gemini response contained no inline PNG/JPEG image")
+        meta = data.get("usageMetadata") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        prompt = _token_count(meta.get("promptTokenCount"))
+        output = _token_count(meta.get("candidatesTokenCount")) + _token_count(
+            meta.get("thoughtsTokenCount")
+        )
+        total = _token_count(meta.get("totalTokenCount"))
+        usage = Usage(input_tokens=prompt, output_tokens=max(output, total - prompt))
+        model = data.get("modelVersion")
+        return ImageResponse(
+            model=model if isinstance(model, str) and model else fallback_model,
+            data=image,
+            reported_cost_usd=None,
+            usage=usage,
+        )
+    except ProviderError:
+        raise
+    except (KeyError, IndexError, TypeError, ValueError, AttributeError, binascii.Error) as exc:
+        raise ProviderError(f"malformed image response: {type(exc).__name__}") from None
+
+
 def _token_count(v: Any) -> int:
     if isinstance(v, bool) or not isinstance(v, int) or v < 0:
         return 0
@@ -337,9 +410,16 @@ class OpenAICompatImageProvider:
         self.close()
 
     def generate(self, request: ImageRequest) -> ImageResponse:
-        chat = request.api is ImageApi.CHAT
-        path = "chat/completions" if chat else "images/generations"
-        body_json = chat_image_request_to_wire(request) if chat else image_request_to_wire(request)
+        api = request.api
+        if api is ImageApi.GEMINI:
+            path = self._gemini_url(request.model)
+            body_json = gemini_image_request_to_wire(request)
+        elif api is ImageApi.CHAT:
+            path = "chat/completions"
+            body_json = chat_image_request_to_wire(request)
+        else:
+            path = "images/generations"
+            body_json = image_request_to_wire(request)
         try:
             with self._client.stream("POST", path, json=body_json) as resp:
                 status = resp.status_code
@@ -381,12 +461,24 @@ class OpenAICompatImageProvider:
                 self._client.headers.get("Authorization", ""),
             )
             raise ProviderError(f"image endpoint returned an error object{detail}", status=status)
-        parse = chat_image_response_from_wire if chat else image_response_from_wire
+        parse = {
+            ImageApi.GEMINI: gemini_image_response_from_wire,
+            ImageApi.CHAT: chat_image_response_from_wire,
+        }.get(api, image_response_from_wire)
         try:
             return parse(data, fallback_model=request.model)
         except ProviderError as e:
             # The endpoint answered 2xx: the image may have been billed anyway.
             raise ProviderError(str(e), status=status, maybe_billed=True) from None
+
+    def _gemini_url(self, model: str) -> str:
+        """``{root}/gemini/v1beta/models/{model}:generateContent``, root = base URL
+        without a trailing ``/v1`` (1xAi: https://1xai.ir/v1 -> https://1xai.ir)."""
+        if not _MODEL_PATH_RE.fullmatch(model):
+            raise ProviderError("image model id is not safe in a URL path")
+        base = str(self._client.base_url).rstrip("/")
+        root = base[: -len("/v1")] if base.endswith("/v1") else base
+        return f"{root}/gemini/v1beta/models/{model}:generateContent"
 
     @staticmethod
     def _read_error(resp: httpx.Response) -> bytes:
@@ -461,7 +553,7 @@ class ImageGateway:
 
     def estimate(self, model: str, context: CallContext, *, tier: Tier) -> CallEstimate:
         info = self._image_info(model)
-        chat = info.image_api is ImageApi.CHAT
+        chat = info.image_api.token_priced
         return CallEstimate(
             tier=tier,
             model=model,
@@ -474,9 +566,9 @@ class ImageGateway:
     def _wire_request(self, request: ImageRequest) -> ImageRequest:
         """``request`` with the catalog's endpoint and token cap (callers cannot pick)."""
         info = self._image_info(request.model)
-        if info.image_api is ImageApi.CHAT:
+        if info.image_api.token_priced:
             return request.model_copy(
-                update={"api": ImageApi.CHAT, "max_tokens": info.image_max_tokens}
+                update={"api": info.image_api, "max_tokens": info.image_max_tokens}
             )
         return request.model_copy(update={"api": ImageApi.IMAGES, "max_tokens": None})
 
@@ -484,7 +576,7 @@ class ImageGateway:
         self, info: ModelInfo, estimate: CallEstimate, response: ImageResponse
     ) -> float:
         cost = estimate.max_cost_usd
-        if info.image_api is ImageApi.CHAT:
+        if info.image_api.token_priced:
             usage = response.usage or Usage()
             if usage.output_tokens == 0:
                 # No (output) usage reported: an image was made, assume the worst case.
@@ -536,7 +628,7 @@ class ImageGateway:
                 response.model,
                 response.reported_cost_usd,
                 cost=cost,
-                usage=response.usage if info.image_api is ImageApi.CHAT else None,
+                usage=response.usage if info.image_api.token_priced else None,
             ),
         )
         return ImageResult(model=request.model, data=response.data, cost_usd=cost)
