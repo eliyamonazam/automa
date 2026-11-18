@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-18 — M10: ساخت خودکار Skill (CLI ساخت نامزد)
+- **انجام‌شده:** مورد CLI به سه مورد شکسته شد (ساخت نامزد، مقایسه، نصب) و اولی انجام شد: فرمان تازهٔ `automa skill draft --role ROLE [--benchmark ID]... [--suite] [--results] [--json]` از نتایج ثبت‌شدهٔ benchmark تحلیل شکست می‌سازه، `SkillAuthorAgent` رو پشت gateway با BudgetGuard صدا می‌زنه و نامزد رو اتمی در `<workspace>/skill-candidates/<id>/<name>/SKILL.md` با فرادادهٔ `<id>.json` (نقش، benchmarkها، sha256، هزینه) می‌نویسه. نقش/benchmark ناشناخته، نبود شکست، فایل نتیجهٔ خراب، پوشهٔ symlink و انبار پر قبل از هر فراخوانی رد می‌شن؛ در هر خطا چیزی staged نمی‌شه. هیچ نصبی انجام نمی‌شه (D108).
+- **فایل‌های اصلی:** `src/automa/skill_candidates.py` (جدید)، `src/automa/cli.py` (گروه `skill`)، `tests/test_cli_skill_draft.py` (۴۲ تست جدید)، `tests/test_cli.py` (شمارش مسیرهای gateway)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D108).
+- **تست‌ها:** `pytest` ← ۴۴۱۰ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check`، `ruff format --check` و `mypy` روی ماژول‌های تغییرکرده سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود. BudgetGuard، Policy و Approval Gate دست نخوردن.
+- **برای صاحب مخزن:** کاری لازم نیست.
+- **قدم بعدی:** ساخت خودکار Skill (CLI مقایسه): `automa skill compare`.
+
 ## 2026-11-18 — شمارش توکن‌های پنهان مدل‌های استدلالی (خارج از نقشه راه، D107)
 - **یافته (آزمون واقعی):** `gemini-3.1-pro-preview` روی 1xAi: `prompt 4، completion 0، total 21` و tool calling ناموفق (با سقف ۱۰۰ توکن، همه توکن‌ها صرف «فکر کردن» شد). `gpt-5.5`: هر سه آزمون قبول.
 - **رفع:** اختلاف `total_tokens` با جمع ورودی و خروجی، خروجی حساب می‌شه تا Ledger و Guard هزینه رو کمتر از واقعیت نشمرن.

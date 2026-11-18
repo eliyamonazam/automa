@@ -105,6 +105,13 @@ from automa.agents.proposer import (
     ProposalFailed,
     ProposalSettings,
 )
+from automa.agents.skill_author import DEFAULT_BUDGET_ID as SKILL_AUTHOR_BUDGET_ID
+from automa.agents.skill_author import (
+    SkillAuthorAgent,
+    SkillAuthorError,
+    SkillAuthorFailed,
+    SkillAuthorSettings,
+)
 from automa.bench import run_benchmark
 from automa.benchmarks import (
     BenchmarkError,
@@ -219,6 +226,13 @@ from automa.selfdev_project import (
 )
 from automa.selfdev_proposals import ProposalDecision as ItemProposalDecision
 from automa.selfdev_proposals import ProposalSet, ProposalStore, ProposalStoreError
+from automa.skill_candidates import (
+    SkillCandidateError,
+    candidates_dir,
+    check_room,
+    stage_draft,
+    staging_path,
+)
 from automa.skills import (
     Skill,
     SkillError,
@@ -322,6 +336,12 @@ models_app = typer.Typer(
     help="Model catalog: list catalogued models; turn a gateway price list into entries.",
 )
 app.add_typer(models_app, name="models")
+skill_app = typer.Typer(
+    help="Automatic skill creation: draft a candidate skill from benchmark failures "
+    "(staged under <workspace>/skill-candidates/, never installed by drafting).",
+    no_args_is_help=True,
+)
+app.add_typer(skill_app, name="skill")
 
 DEFAULT_SUITE_DIR = Path("benchmarks")
 RESULTS_DIRNAME = "results"
@@ -4270,6 +4290,140 @@ def self_reject(
     """Reject proposed roadmap items: only the decision is recorded. A decision is
     final. No API key, no model call."""
     _self_decide(set_id, numbers, accept=False, yes=yes, config_path=config_path)
+
+
+# -- automatic skill creation (M10, D108) ----------------------------------------
+
+# Events of skill drafting (budget warnings, skill.draft_*): not a project's log.
+SKILL_AUTHOR_EVENTS = Path("skill-author") / "events.jsonl"
+
+
+@skill_app.command("draft")
+def skill_draft(
+    role_name: Annotated[
+        str, typer.Option("--role", help="The role the new skill is written for.")
+    ],
+    benchmark_ids: Annotated[
+        list[str] | None,
+        typer.Option("--benchmark", help="Only learn from this benchmark id (repeatable)."),
+    ] = None,
+    suite_dir: Annotated[
+        Path, typer.Option("--suite", help="Directory of <id>.toml benchmark files.")
+    ] = DEFAULT_SUITE_DIR,
+    results_dir: Annotated[
+        Path | None,
+        typer.Option("--results", help="Recorded results (default: <suite>/results)."),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Ask the model for one new candidate skill for ROLE from the recorded benchmark
+    failures, and stage it under <workspace>/skill-candidates/<id>/.
+
+    Drafting never installs: the candidate is not in <workspace>/skills/ and no role
+    uses it. Everything is checked before the one guarded model call path (BudgetGuard,
+    budget id "skill-author"). Exit codes: 1 user error (unknown role/benchmark, no
+    failures, unusable result files), 2 config, 3 budget stop, 4 no valid reply,
+    5 provider error; nothing is staged on any error.
+    """
+    config = _load(config_path)
+    settings = SkillAuthorSettings()
+    try:
+        config.model_for(settings.tier)
+    except ConfigError as e:
+        raise _fail(str(e), EXIT_CONFIG) from None
+    try:
+        roles, skills = _roles_and_skills(config)
+    except (RoleError, SkillError) as e:
+        raise _fail(_safe(str(e)), EXIT_CONFIG) from None
+    if role_name not in roles:
+        known = ", ".join(sorted(roles.names()))
+        raise _fail(f"unknown role {_safe(role_name)!r} (known: {known})", EXIT_USER)
+    role = roles.get(role_name)
+    suite: BenchmarkSuite | None
+    try:
+        suite = BenchmarkSuite.from_dir(suite_dir)
+    except BenchmarkError as e:
+        if results_dir is None:
+            raise _fail(f"benchmark suite: {e}", EXIT_USER) from None
+        suite = None
+    results = results_dir if results_dir is not None else suite_dir / RESULTS_DIRNAME
+    try:
+        scan = scan_results(results)
+    except BenchmarkResultError as e:
+        raise _fail(str(e), EXIT_USER) from None
+    if scan.problems:
+        # Learning from a partial picture could hide the real failures: refuse.
+        first = scan.problems[0]
+        raise _fail(
+            f"{len(scan.problems)} unusable result file(s), e.g. {_safe(str(first.path))}: "
+            f"{_safe(first.reason)}; fix or remove them (see: automa bench report)",
+            EXIT_USER,
+        )
+    report = build_report(scan.records, suite=suite, problems=scan.problems)
+    try:
+        check_room(config.workspace)
+    except SkillCandidateError as e:
+        raise _fail(f"skill candidates: {_safe(str(e))}; nothing was staged", EXIT_USER) from None
+    try:
+        provider = make_provider(config)
+    except ConfigError as e:
+        raise _fail(str(e), EXIT_CONFIG) from None
+    events = JsonlEventLog(Path(config.workspace) / SKILL_AUTHOR_EVENTS)
+    with CostLedger.for_workspace(config.workspace) as ledger:
+        before = ledger.spent_nusd(project_id=SKILL_AUTHOR_BUDGET_ID)
+        guard = BudgetGuard(config.limits, ledger, events=events)
+        gateway = LLMGateway(config, provider, guard=guard)
+        agent = SkillAuthorAgent(gateway, settings=settings, events=events)
+        try:
+            draft = agent.draft(
+                report,
+                role=role,
+                skills=skills,
+                suite=suite,
+                benchmark_ids=list(benchmark_ids) if benchmark_ids else None,
+            )
+        except BudgetError as e:
+            detail = f" ({e.scope.value} cap)" if isinstance(e, BudgetExceeded) else ""
+            raise _fail(f"budget stop{detail}: {e}; nothing was staged", EXIT_BUDGET) from None
+        except SkillAuthorFailed as e:
+            raise _fail(f"{e}\n{_safe(e.details)}\nnothing was staged", EXIT_PLANNING) from None
+        except SkillAuthorError as e:
+            raise _fail(f"{_safe(str(e))}; nothing was staged", EXIT_USER) from None
+        except ProviderError as e:
+            raise _fail(f"provider error: {e}; nothing was staged", EXIT_PROVIDER) from None
+        finally:
+            spent = ledger.spent_nusd(project_id=SKILL_AUTHOR_BUDGET_ID) - before
+            if not as_json:
+                typer.echo(f"cost: {_usd(spent)}")
+    try:
+        record = stage_draft(draft, workspace=config.workspace, cost_nusd=spent)
+    except SkillCandidateError as e:
+        raise _fail(f"skill candidates: {_safe(str(e))}; nothing was staged", EXIT_USER) from None
+    staging = staging_path(config.workspace, record.id)
+    if as_json:
+        out = {
+            **record.model_dump(mode="json"),
+            "staging": str(staging),
+            "skill_md": str(staging / record.name / "SKILL.md"),
+            "description": draft.skill.description,
+            "body_chars": len(draft.skill.body),
+            "installed": False,
+        }
+        typer.echo(json.dumps(out, ensure_ascii=False, indent=2))
+        return
+    typer.echo(f"candidate: {record.id}")
+    typer.echo(f"skill: {record.name} for role {record.role} ({len(draft.skill.body)} chars)")
+    typer.echo(f"  {_safe(draft.skill.description)}")
+    typer.echo(f"learned from: {', '.join(record.benchmarks)}")
+    typer.echo(f"attempts: {record.attempts}")
+    typer.echo(f"staged at: {staging / record.name / 'SKILL.md'}")
+    typer.echo(
+        "not installed: no role uses it until it passes the benchmark gate "
+        f"(candidates live in {candidates_dir(config.workspace)})"
+    )
 
 
 UNSUPPORTED_PLATFORM_MESSAGE = (
