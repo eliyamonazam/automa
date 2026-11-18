@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-18 — M11: ساخت تصویر (مدل‌های chat-محور)
+- **انجام‌شده:** مدل تصویری می‌تونه در کاتالوگ `image_api = "chat"` و `image_max_tokens` داشته باشه (بدون نیاز به `per_image_usd`). `ImageGateway` برای این مدل‌ها از `/chat/completions` با `max_tokens` کاتالوگ تصویر می‌گیره؛ BudgetGuard قبل از ارسال بدترین حالت (۱۲۰۰ توکن ورودی + `image_max_tokens` خروجی به قیمت توکنی) رو مجوز می‌ده و بعد توکن‌های واقعی گزارش‌شده (بدون گزارش ← بدترین حالت؛ هرگز کمتر از `usage.cost` یا `per_image_usd`) ثبت می‌شه. فقط تصویر inline PNG/JPEG (`data:` URI در `images`، بخش‌های `content` یا markdown) پذیرفته می‌شه؛ URL راه دور هرگز دریافت نمی‌شه. همون بررسی قالب/ابعاد `generate_image`. `[images]`، برآورد، خط `images:` و `automa models` بدترین حالت رو نشون می‌دن (D103).
+- **فایل‌های اصلی:** `src/automa/config.py` (`ImageApi`، `image_max_tokens`، `image_worst_case_usd`)، `src/automa/llm/images.py`، `src/automa/cli.py`، `tests/test_images_chat.py` (۷۵ تست جدید)، `automa.toml.example`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D103).
+- **تست‌ها:** `pytest` ← ۴۱۹۱ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check` و `ruff format --check` سبز؛ `mypy` روی ماژول‌های تغییرکرده سبز (دو خطای قدیمی در `benchmarks/report.py` و `tools/executor.py` بی‌تغییر).
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و بسته دوباره نصب شد. BudgetGuard، Policy و Approval Gate دست نخوردن.
+- **برای صاحب مخزن:** اگه مدل تصویری 1xAi فقط چت‌محوره (مثلاً Gemini Image)، در `[models."<id>"]` بذار `capabilities = ["text", "image_out"]`، `image_api = "chat"` و `image_max_tokens = 4000` (یا هر سقفی که می‌خوای)، و `[images] model = "<id>"`؛ `automa models` بدترین هزینهٔ هر تصویر رو نشون می‌ده.
+- **قدم بعدی:** benchmark تصویری (`benchmarks/landing-page-with-image.toml`).
+
 ## 2026-11-18 — `automa models import` برای صفحه کپی‌شده 1xAi (خارج از نقشه راه، D102)
 - **مشکل (فایل واقعی):** متن صفحه قیمت 1xAi که از مرورگر کپی شده (هر خانه در یک خط) با «expected 3 fields» رد می‌شد.
 - **رفع:** تشخیص و پارس خودکار همین فرمت؛ رد و گزارش مدل‌های بی‌قیمت و غیر چت؛ خانواده برای `ft:`، MiniMax و Hunyuan. روی فایل واقعی: ۲۶۱ مدل وارد، ۶۸ رد با دلیل.

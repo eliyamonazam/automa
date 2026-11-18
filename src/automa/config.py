@@ -83,6 +83,20 @@ class Capability(StrEnum):
     IMAGE_OUT = "image_out"
 
 
+class ImageApi(StrEnum):
+    """Which endpoint an ``image_out`` model generates images through (D103)."""
+
+    IMAGES = "images"  # POST /images/generations, priced per image
+    CHAT = "chat"  # POST /chat/completions returning a base64 image, priced per token
+
+
+# Worst-case prompt tokens of a chat-based image call: the prompt (at most 1000
+# characters, D100) at 2 characters per token is 500, plus the size hint and the
+# message overhead; 1200 leaves a wide margin (checked in tests, D103).
+IMAGE_CHAT_MAX_INPUT_TOKENS = 1200
+MAX_IMAGE_CHAT_TOKENS = 65536
+
+
 # A model id as the gateway knows it: printable ASCII, no whitespace or quotes.
 _MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
 MODEL_ID_RE = _MODEL_ID_RE  # public name for importers (D95)
@@ -113,6 +127,10 @@ class ModelInfo(_Strict):
     output_per_mtok: float = Field(ge=0)
     # USD per generated image (``generate_image``, D100); only for ``image_out`` models.
     per_image_usd: float | None = Field(default=None, ge=0)
+    # Chat-based image models (D103): ``image_api = "chat"`` with ``image_max_tokens``,
+    # the output-token cap of one image call (its worst case at the token prices).
+    image_api: ImageApi = ImageApi.IMAGES
+    image_max_tokens: StrictInt | None = Field(default=None, ge=1, le=MAX_IMAGE_CHAT_TOKENS)
 
     @field_validator("family")
     @classmethod
@@ -146,7 +164,35 @@ class ModelInfo(_Strict):
     def _image_price_needs_image_out(self) -> ModelInfo:
         if self.per_image_usd is not None and Capability.IMAGE_OUT not in self.capabilities:
             raise ValueError("per_image_usd needs the 'image_out' capability")
+        image_out = Capability.IMAGE_OUT in self.capabilities
+        if "image_api" in self.model_fields_set and not image_out:
+            raise ValueError("image_api needs the 'image_out' capability")
+        if self.image_max_tokens is not None and not image_out:
+            raise ValueError("image_max_tokens needs the 'image_out' capability")
+        if self.image_api is ImageApi.CHAT and self.image_max_tokens is None:
+            raise ValueError('image_api = "chat" needs image_max_tokens')
+        if self.image_api is ImageApi.IMAGES and self.image_max_tokens is not None:
+            raise ValueError('image_max_tokens is only for image_api = "chat"')
         return self
+
+    def image_worst_case_usd(self) -> float | None:
+        """Upper bound in USD of one image call, ``None`` if it cannot be bounded.
+
+        ``images``: the ``per_image_usd`` price. ``chat``: the token prices at
+        ``IMAGE_CHAT_MAX_INPUT_TOKENS`` input and ``image_max_tokens`` output, and
+        never below ``per_image_usd`` when that is also set (D103).
+        """
+        if Capability.IMAGE_OUT not in self.capabilities:
+            return None
+        if self.image_api is ImageApi.IMAGES:
+            return self.per_image_usd
+        if self.image_max_tokens is None:  # pragma: no cover - checked by the validator
+            return None
+        tokens = (
+            IMAGE_CHAT_MAX_INPUT_TOKENS * self.input_per_mtok
+            + self.image_max_tokens * self.output_per_mtok
+        ) / 1_000_000
+        return tokens if self.per_image_usd is None else max(tokens, self.per_image_usd)
 
     @property
     def price(self) -> ModelPrice:
@@ -577,21 +623,25 @@ class AutomaConfig(_Strict):
             raise ValueError(f"[images] model '{model}' is not in the [models] catalog")
         if not info.has(Capability.IMAGE_OUT):
             raise ValueError(f"[images] model '{model}' has no 'image_out' capability")
-        if info.per_image_usd is None:
+        price = info.image_worst_case_usd()
+        if price is None:
             raise ValueError(f"[images] model '{model}' has no per_image_usd price")
-        if info.per_image_usd > self.limits.per_call_usd:
+        if price > self.limits.per_call_usd:
             # The BudgetGuard would refuse every image: say so now, not mid-run.
             raise ValueError(
-                f"[images] model '{model}' costs ${info.per_image_usd} per image, above "
+                f"[images] model '{model}' costs up to ${price:.6g} per image, above "
                 f"[limits] per_call_usd (${self.limits.per_call_usd})"
             )
 
     def image_price(self) -> float | None:
-        """USD per image of the ``[images]`` model, ``None`` when image generation is off."""
+        """Worst-case USD per image of the ``[images]`` model (D103).
+
+        ``None`` when image generation is off.
+        """
         model = self.images.model
         if model is None:
             return None
-        price = self.models[model].per_image_usd
+        price = self.models[model].image_worst_case_usd()
         if price is None:  # pragma: no cover - checked at load time
             raise ConfigError(f"no per_image_usd price for image model '{model}'")
         return price

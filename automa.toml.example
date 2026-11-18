@@ -41,6 +41,18 @@ output_per_mtok = 20.00
 # input_per_mtok = 0
 # output_per_mtok = 0
 # per_image_usd = 0.04
+# A chat-based image model (answers on /chat/completions with a base64 image, D103)
+# is priced by its token prices instead: image_api = "chat" plus image_max_tokens,
+# the output-token cap of one image call. Its worst case per image is
+# (1200 input + image_max_tokens output) tokens at those prices (per_image_usd, if
+# also set, is a floor); `automa models` shows it.
+# [models."example/chat-image-model"]
+# family = "google"
+# capabilities = ["text", "image_out"]
+# input_per_mtok = 0.30
+# output_per_mtok = 30.00
+# image_api = "chat"
+# image_max_tokens = 4000
 # List the catalog with: automa models [--capability vision] [--family openai]
 # Turn a 1xAi price list (id, input and output toman per 1K tokens) into entries to
 # review and paste here (prints only, rounds prices up; D95):
@@ -58,7 +70,8 @@ output_per_mtok = 20.00
 
 # Image generation (optional, D101): the built-in "designer" role may call
 # generate_image with this catalogued image model (needs "image_out" and
-# per_image_usd, at most [limits] per_call_usd). Every image is authorized and
+# per_image_usd, or image_api = "chat" with image_max_tokens; its worst case per
+# image at most [limits] per_call_usd). Every image is authorized and
 # recorded by the BudgetGuard like any model call. Unset = off: the Executive is not
 # offered the designer role, and a designer task stops the run before any call.
 # max_per_task: images one task attempt may generate (1..20).

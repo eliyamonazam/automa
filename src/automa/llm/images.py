@@ -15,6 +15,15 @@ One request is exactly one image; image calls are never retried automatically
 (each retry would be a new paid image). In the ledger an image call has
 ``input_tokens = 0`` and ``output_tokens = 1`` (one image).
 
+Chat-based image models (``image_api = "chat"``, D103) answer on
+``/chat/completions`` with a base64 ``data:`` URI. They are priced by the catalog's
+token prices: the guard authorizes ``IMAGE_CHAT_MAX_INPUT_TOKENS`` input plus
+``image_max_tokens`` output (sent as ``max_tokens``), and the recorded cost is the
+reported token usage at those prices (the worst case when usage is missing), never
+below the reported cost or ``per_image_usd``. Their ledger row carries the real
+token counts. Only inline ``data:image/png`` or ``data:image/jpeg`` images are
+accepted; a remote image URL is never fetched.
+
 ``FakeImageProvider`` serves tests; ``OpenAICompatImageProvider`` talks HTTP and
 takes an ``httpx`` transport so tests never touch the network.
 """
@@ -24,6 +33,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
 from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
@@ -31,8 +41,16 @@ from typing import Any, Protocol, runtime_checkable
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-from automa.config import AutomaConfig, Capability, ConfigError, Tier
-from automa.llm.gateway import CallContext, CallEstimate, CallGuard, LLMGateway
+from automa.config import (
+    IMAGE_CHAT_MAX_INPUT_TOKENS,
+    AutomaConfig,
+    Capability,
+    ConfigError,
+    ImageApi,
+    ModelInfo,
+    Tier,
+)
+from automa.llm.gateway import CallContext, CallEstimate, CallGuard, LLMGateway, compute_cost
 from automa.llm.openai_compat import _RETRYABLE_STATUS, _retry_after
 from automa.llm.provider import ProviderError
 from automa.llm.types import ChatResponse, LLMResult, Message, Usage
@@ -60,6 +78,9 @@ class ImageRequest(BaseModel):
     model: str = Field(min_length=1)
     prompt: str = Field(min_length=1, max_length=MAX_IMAGE_PROMPT_CHARS)
     size: ImageSize = ImageSize.SQUARE
+    # Set by ``ImageGateway`` from the catalog (D103); callers leave the defaults.
+    api: ImageApi = ImageApi.IMAGES
+    max_tokens: int | None = Field(default=None, ge=1)
 
 
 class ImageResponse(BaseModel):
@@ -70,6 +91,8 @@ class ImageResponse(BaseModel):
     model: str
     data: bytes = Field(min_length=1, max_length=MAX_IMAGE_BYTES)
     reported_cost_usd: float | None = Field(default=None, ge=0)
+    # Token usage of a chat-based image call (D103); ``None`` for ``/images``.
+    usage: Usage | None = None
 
 
 class ImageResult(BaseModel):
@@ -97,9 +120,11 @@ class FakeImageProvider:
         images: Sequence[bytes | Exception] = (),
         *,
         reported_cost_usd: float | None = None,
+        usage: Usage | None = None,
     ) -> None:
         self._queue = list(images)
         self._reported = reported_cost_usd
+        self._usage = usage
         self.requests: list[ImageRequest] = []
 
     def generate(self, request: ImageRequest) -> ImageResponse:
@@ -109,7 +134,12 @@ class FakeImageProvider:
         item = self._queue.pop(0)
         if isinstance(item, Exception):
             raise item
-        return ImageResponse(model=request.model, data=item, reported_cost_usd=self._reported)
+        return ImageResponse(
+            model=request.model,
+            data=item,
+            reported_cost_usd=self._reported,
+            usage=self._usage if request.api is ImageApi.CHAT else None,
+        )
 
 
 def image_request_to_wire(request: ImageRequest) -> dict[str, Any]:
@@ -121,6 +151,123 @@ def image_request_to_wire(request: ImageRequest) -> dict[str, Any]:
         "size": request.size.value,
         "response_format": "b64_json",
     }
+
+
+def chat_image_prompt(request: ImageRequest) -> str:
+    """The user message of a chat-based image call: the prompt plus the size wanted."""
+    return f"{request.prompt}\n\nGenerate exactly one image of {request.size.value} pixels."
+
+
+def chat_image_request_to_wire(request: ImageRequest) -> dict[str, Any]:
+    """JSON body for ``POST /chat/completions`` asking for one image (D103)."""
+    if request.max_tokens is None:
+        raise ValueError("a chat-based image request needs max_tokens")
+    return {
+        "model": request.model,
+        "messages": [{"role": "user", "content": chat_image_prompt(request)}],
+        "max_tokens": request.max_tokens,
+        "modalities": ["image", "text"],
+        "n": 1,
+        "stream": False,
+    }
+
+
+# An inline PNG/JPEG data URI (base64 alphabet only, so no markup can sneak in).
+_DATA_URI_RE = re.compile(r"data:image/(png|jpe?g);base64,([A-Za-z0-9+/=\s]+)")
+
+
+def _decode_data_uri(url: Any) -> bytes | None:
+    if not isinstance(url, str):
+        return None
+    m = _DATA_URI_RE.fullmatch(url.strip())
+    if m is None:
+        return None
+    b64 = "".join(m.group(2).split())
+    if len(b64) > MAX_IMAGE_BYTES * 4 // 3 + 4:
+        raise ProviderError("image larger than the accepted size")
+    raw = base64.b64decode(b64, validate=True)
+    if len(raw) > MAX_IMAGE_BYTES:
+        raise ProviderError("image larger than the accepted size")
+    return raw
+
+
+def _image_part_url(part: Any) -> Any:
+    if not isinstance(part, dict) or part.get("type") != "image_url":
+        return None
+    inner = part.get("image_url")
+    return inner.get("url") if isinstance(inner, dict) else inner
+
+
+def _chat_images(message: dict[str, Any]) -> list[bytes]:
+    """Inline images of a chat message, in order (``images``, content parts, markdown)."""
+    found: list[bytes] = []
+    images = message.get("images")
+    if isinstance(images, list):
+        for part in images:
+            raw = _decode_data_uri(_image_part_url(part))
+            if raw is not None:
+                found.append(raw)
+    content = message.get("content")
+    if isinstance(content, list):
+        for part in content:
+            raw = _decode_data_uri(_image_part_url(part))
+            if raw is not None:
+                found.append(raw)
+    elif isinstance(content, str) and not found:
+        for m in _DATA_URI_RE.finditer(content):
+            raw = _decode_data_uri(m.group(0))
+            if raw is not None:
+                found.append(raw)
+                break
+    return found
+
+
+def chat_image_response_from_wire(data: Any, *, fallback_model: str) -> ImageResponse:
+    """Parse a chat completion carrying one inline image (D103).
+
+    The first inline PNG/JPEG ``data:`` URI is the image (a paid call is not thrown
+    away because a gateway sent two); remote URLs are ignored, never fetched.
+    Raises ``ProviderError`` (no body text) when there is no usable image.
+    """
+    try:
+        choices = data["choices"]
+        if not isinstance(choices, list) or not choices:
+            raise ValueError("no choices")
+        message = choices[0]["message"]
+        if not isinstance(message, dict):
+            raise ValueError("message is not an object")
+        images = _chat_images(message)
+        if not images:
+            raise ProviderError("the chat response contained no inline PNG/JPEG image")
+        raw_usage = data.get("usage") or {}
+        if not isinstance(raw_usage, dict):
+            raw_usage = {}
+        cost = raw_usage.get("cost")
+        reported: float | None = None
+        if isinstance(cost, int | float) and not isinstance(cost, bool):
+            reported = float(cost) if 0 <= cost < float("inf") else None
+        usage = Usage(
+            input_tokens=_token_count(raw_usage.get("prompt_tokens")),
+            output_tokens=_token_count(raw_usage.get("completion_tokens")),
+            reported_cost_usd=reported,
+        )
+        model = data.get("model")
+        return ImageResponse(
+            model=model if isinstance(model, str) and model else fallback_model,
+            data=images[0],
+            reported_cost_usd=reported,
+            usage=usage,
+        )
+    except ProviderError:
+        raise
+    except (KeyError, IndexError, TypeError, ValueError, AttributeError, binascii.Error) as exc:
+        raise ProviderError(f"malformed image response: {type(exc).__name__}") from None
+
+
+def _token_count(v: Any) -> int:
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        return 0
+    return v
 
 
 def image_response_from_wire(data: Any, *, fallback_model: str) -> ImageResponse:
@@ -190,10 +337,11 @@ class OpenAICompatImageProvider:
         self.close()
 
     def generate(self, request: ImageRequest) -> ImageResponse:
+        chat = request.api is ImageApi.CHAT
+        path = "chat/completions" if chat else "images/generations"
+        body_json = chat_image_request_to_wire(request) if chat else image_request_to_wire(request)
         try:
-            with self._client.stream(
-                "POST", "images/generations", json=image_request_to_wire(request)
-            ) as resp:
+            with self._client.stream("POST", path, json=body_json) as resp:
                 status = resp.status_code
                 retry_after = _retry_after(resp)
                 body = self._read_bounded(resp) if status < 400 else b""
@@ -224,8 +372,9 @@ class OpenAICompatImageProvider:
             ) from None
         if isinstance(data, dict) and data.get("error"):
             raise ProviderError("image endpoint returned an error object", status=status)
+        parse = chat_image_response_from_wire if chat else image_response_from_wire
         try:
-            return image_response_from_wire(data, fallback_model=request.model)
+            return parse(data, fallback_model=request.model)
         except ProviderError as e:
             # The endpoint answered 2xx: the image may have been billed anyway.
             raise ProviderError(str(e), status=status, maybe_billed=True) from None
@@ -265,8 +414,7 @@ class ImageGateway:
         """Whether ``gateway`` spends through the very same ``CallGuard`` (D101)."""
         return isinstance(gateway, LLMGateway) and gateway._guard is self._guard
 
-    def price_per_image(self, model: str) -> float:
-        """USD per image of ``model``; ``ConfigError`` unless it is a priced image model."""
+    def _image_info(self, model: str) -> ModelInfo:
         if not isinstance(model, str) or not model:
             raise ConfigError("image model must be a non-empty model id")
         info = self._config.model_info(model)
@@ -274,19 +422,61 @@ class ImageGateway:
             raise ConfigError(f"image model '{model}' is not in the [models] catalog")
         if not info.has(Capability.IMAGE_OUT):
             raise ConfigError(f"model '{model}' has no 'image_out' capability")
-        if info.per_image_usd is None:
+        if info.image_worst_case_usd() is None:
             raise ConfigError(f"no per_image_usd price configured for image model '{model}'")
-        return info.per_image_usd
+        return info
+
+    def price_per_image(self, model: str) -> float:
+        """Worst-case USD per image of ``model``; ``ConfigError`` unless it is priced."""
+        price = self._image_info(model).image_worst_case_usd()
+        if price is None:  # pragma: no cover - refused by _image_info
+            raise ConfigError(f"no price configured for image model '{model}'")
+        return price
+
+    def api_for(self, model: str) -> ImageApi:
+        """The endpoint ``model`` generates images through (D103)."""
+        return self._image_info(model).image_api
 
     def estimate(self, model: str, context: CallContext, *, tier: Tier) -> CallEstimate:
+        info = self._image_info(model)
+        chat = info.image_api is ImageApi.CHAT
         return CallEstimate(
             tier=tier,
             model=model,
-            max_input_tokens=0,
-            max_output_tokens=1,
+            max_input_tokens=IMAGE_CHAT_MAX_INPUT_TOKENS if chat else 0,
+            max_output_tokens=(info.image_max_tokens or 1) if chat else 1,
             max_cost_usd=self.price_per_image(model),
             context=context,
         )
+
+    def _wire_request(self, request: ImageRequest) -> ImageRequest:
+        """``request`` with the catalog's endpoint and token cap (callers cannot pick)."""
+        info = self._image_info(request.model)
+        if info.image_api is ImageApi.CHAT:
+            return request.model_copy(
+                update={"api": ImageApi.CHAT, "max_tokens": info.image_max_tokens}
+            )
+        return request.model_copy(update={"api": ImageApi.IMAGES, "max_tokens": None})
+
+    def _actual_cost(
+        self, info: ModelInfo, estimate: CallEstimate, response: ImageResponse
+    ) -> float:
+        cost = estimate.max_cost_usd
+        if info.image_api is ImageApi.CHAT:
+            usage = response.usage or Usage()
+            if usage.output_tokens == 0:
+                # No (output) usage reported: an image was made, assume the worst case.
+                cost = estimate.max_cost_usd
+            else:
+                inp = usage.input_tokens or estimate.max_input_tokens
+                cost = compute_cost(
+                    Usage(input_tokens=inp, output_tokens=usage.output_tokens), info.price
+                )
+                if info.per_image_usd is not None:
+                    cost = max(cost, info.per_image_usd)
+        if response.reported_cost_usd is not None:
+            cost = max(cost, response.reported_cost_usd)
+        return cost
 
     def generate(
         self,
@@ -297,6 +487,8 @@ class ImageGateway:
     ) -> ImageResult:
         """Generate one image. Raises ``ConfigError``, a budget error or ``ProviderError``."""
         estimate = self.estimate(request.model, context, tier=tier)
+        info = self._image_info(request.model)
+        request = self._wire_request(request)
         self._guard.authorize(estimate)
         try:
             response = self._provider.generate(request)
@@ -309,12 +501,21 @@ class ImageGateway:
         except BaseException:
             self._guard.release(estimate)
             raise
-        cost = estimate.max_cost_usd
-        if response.reported_cost_usd is not None:
-            cost = max(cost, response.reported_cost_usd)
+        try:
+            cost = self._actual_cost(info, estimate, response)
+        except Exception:
+            # Paid but unpriceable: never leave it unrecorded.
+            self._guard.record(estimate, _image_ledger_result(estimate, response.model, None))
+            raise
         self._guard.record(
             estimate,
-            _image_ledger_result(estimate, response.model, response.reported_cost_usd, cost=cost),
+            _image_ledger_result(
+                estimate,
+                response.model,
+                response.reported_cost_usd,
+                cost=cost,
+                usage=response.usage if info.image_api is ImageApi.CHAT else None,
+            ),
         )
         return ImageResult(model=request.model, data=response.data, cost_usd=cost)
 
@@ -325,12 +526,32 @@ def _image_ledger_result(
     reported_cost_usd: float | None,
     *,
     cost: float | None = None,
+    usage: Usage | None = None,
 ) -> LLMResult:
-    """The ledger row of an image call: 0 input tokens, 1 output unit (one image)."""
+    """The ledger row of an image call.
+
+    ``/images``: 0 input tokens and 1 output unit (one image). Chat-based (D103):
+    the reported token counts, or the estimate's worst case when none came back.
+    """
+    if estimate.max_input_tokens > 0:  # chat-based
+        if usage is None or usage.output_tokens == 0:
+            row = Usage(
+                input_tokens=estimate.max_input_tokens,
+                output_tokens=estimate.max_output_tokens,
+                reported_cost_usd=reported_cost_usd,
+            )
+        else:
+            row = Usage(
+                input_tokens=usage.input_tokens or estimate.max_input_tokens,
+                output_tokens=usage.output_tokens,
+                reported_cost_usd=reported_cost_usd,
+            )
+    else:
+        row = Usage(input_tokens=0, output_tokens=1, reported_cost_usd=reported_cost_usd)
     response = ChatResponse(
         model=response_model,
         message=Message.assistant(""),
-        usage=Usage(input_tokens=0, output_tokens=1, reported_cost_usd=reported_cost_usd),
+        usage=row,
     )
     return LLMResult(
         tier=estimate.tier,

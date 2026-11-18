@@ -882,6 +882,13 @@ def _describe_images(config: AutomaConfig) -> str:
     price = config.image_price()
     if price is None:
         return "off (set [images] model to let the designer role generate images)"
+    info = config.models[config.images.model or ""]
+    if info.image_max_tokens is not None:
+        return (
+            f"{config.images.model} (chat-based, up to ${price:.4f} per image at token "
+            f"prices with max {info.image_max_tokens} output tokens, at most "
+            f"{config.images.max_per_task} per task attempt; counted by the budget)"
+        )
     return (
         f"{config.images.model} (${price:.4f} per image, at most "
         f"{config.images.max_per_task} per task attempt; counted by the budget)"
@@ -3447,6 +3454,11 @@ def _model_json(config: AutomaConfig, model_id: str) -> dict[str, Any]:
     }
     if info.per_image_usd is not None:
         data["per_image_usd"] = info.per_image_usd
+    if info.image_max_tokens is not None:
+        # Chat-based image model (D103): priced per token, bounded by this cap.
+        data["image_api"] = info.image_api.value
+        data["image_max_tokens"] = info.image_max_tokens
+        data["image_worst_case_usd"] = info.image_worst_case_usd()
     return data
 
 
@@ -3490,6 +3502,11 @@ def models(
     for e in entries:
         tiers = f"  tiers: {', '.join(e['tiers'])}" if e["tiers"] else ""
         image = f"  ${e['per_image_usd']:g} per image" if "per_image_usd" in e else ""
+        if "image_api" in e:
+            image += (
+                f"  images via chat (max {e['image_max_tokens']} tokens, "
+                f"up to ${e['image_worst_case_usd']:.4f} per image)"
+            )
         typer.echo(
             f"{e['id']}  family: {e['family']}  capabilities: {', '.join(e['capabilities'])}  "
             f"${e['input_per_mtok']:g} in / ${e['output_per_mtok']:g} out per 1M tokens"
