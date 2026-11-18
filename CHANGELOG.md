@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-18 — M10: ساخت خودکار Skill (Agent نویسنده)
+- **انجام‌شده:** ماژول تازهٔ `automa.agents.skill_author`: `SkillAuthorAgent.draft(report, role=, skills=, suite=, benchmark_ids=)` از تحلیل شکست benchmarkها (`BenchmarkReport`) یک digest محدود و قطعی می‌سازه (فقط benchmarkهای ناموفق، بدترین اول؛ هدف، علت‌ها و معیارهای شکست‌خورده؛ escape کامل) و از `LLMGateway` با BudgetGuard یک `SKILL.md` نامزد می‌گیره. `parse_skill_draft` پاسخ رو سخت‌گیرانه بررسی می‌کنه (همون `parse_skill`، رد `allowed-tools`/مجوز و `license`، نام تازه، فقط نویسهٔ قابل‌دیدن، سقف بدنه) و پاسخ نامعتبر با بازخورد دوباره پرسیده می‌شه. خروجی `SkillDraft` با متن canonical (`render_skill_md`) که بی‌تغییر با `parse_skill` و `SkillRegistry.from_dir` برمی‌گرده. هیچ فایلی نوشته نمی‌شه (D106).
+- **فایل‌های اصلی:** `src/automa/agents/skill_author.py` (جدید)، `src/automa/agents/__init__.py`، `tests/test_skill_author.py` (۵۳ تست جدید)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D106).
+- **تست‌ها:** `pytest` ← ۴۳۶۲ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check`، `ruff format --check` و `mypy` روی ماژول تازه سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و بسته دوباره نصب شد. BudgetGuard، Policy و Approval Gate دست نخوردن.
+- **برای صاحب مخزن:** کاری لازم نیست.
+- **قدم بعدی:** ساخت خودکار Skill (CLI): ساخت نامزد، اجرای مقایسه و نصب با تأیید کاربر.
+
 ## 2026-11-18 — M10: ساخت خودکار Skill (اجرای مقایسه‌ای، اجراکننده)
 - **انجام‌شده:** ماژول تازهٔ `automa.skill_comparison`: `load_candidate_skill` نامزد رو فقط از پوشهٔ staging جدا از `<workspace>/skills/` و Skillهای داخلی می‌خونه (دقیقاً یک `<name>/` فقط با `SKILL.md`؛ هر چیز دیگه ← خطا). `plan_skill_comparison` قبل از هر خرج همه چیز رو می‌سنجه: نسخهٔ نامزد با `with_candidate_skill`، `runs` بین `min_runs` دروازه و ۲۰، شناسه‌های پروژهٔ یکتا `skc-…`، و بدترین هزینهٔ کل (جمع سقف تنگ‌شدهٔ هر اجرا) در برابر `max_total_usd` و باقی‌ماندهٔ سقف روزانه. `run_skill_comparison` اجراها رو درهم (پایه، نامزد، …) با `run_benchmark` معمولی اجرا می‌کنه، قبل از هر اجرا سقف‌ها رو دوباره می‌سنجه، با خطای زیرساخت (provider/tool_layer/config) یا تموم شدن سقف روزانه بدون تصمیم لغو می‌کنه و در پایان رکوردها رو به `evaluate_skill_gate` می‌ده. لاگ کیفیت نوشته نمی‌شه و هیچ Skillی نصب نمی‌شه (D105).
 - **فایل‌های اصلی:** `src/automa/skill_comparison.py` (جدید)، `tests/test_skill_comparison.py` (۶۱ تست جدید)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D105).

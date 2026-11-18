@@ -29,6 +29,16 @@ from automa.agents.reviewer import (
     parse_review,
     project_digest,
 )
+from automa.agents.skill_author import (
+    SkillAuthorAgent,
+    SkillAuthorError,
+    SkillAuthorFailed,
+    SkillAuthorSettings,
+    SkillDraft,
+    SkillDraftRejected,
+    parse_skill_draft,
+    render_skill_md,
+)
 from automa.agents.verifier import (
     Evaluation,
     VerificationFailed,
@@ -43,6 +53,14 @@ from automa.agents.verifier import (
 from automa.agents.worker import WorkerAgent, WorkerSettings, task_message
 
 __all__ = [
+    "SkillAuthorAgent",
+    "SkillAuthorError",
+    "SkillAuthorFailed",
+    "SkillAuthorSettings",
+    "SkillDraft",
+    "SkillDraftRejected",
+    "parse_skill_draft",
+    "render_skill_md",
     "proposal_digest",
     "ProposalSettings",
     "ProposalRun",
