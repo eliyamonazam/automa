@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-18 — M11: کاتالوگ مدل (CLI)
+- **انجام‌شده:** فرمان فقط‌خواندنی `automa models [--capability C] [--family F] [--json]` (با نمایش سطح‌هایی که هر مدل رو استفاده می‌کنن و مدل‌های فقط-`[prices]`)، و `automa models import --format 1xai FILE --rate TOMAN_PER_USD` که فهرست قیمت متنی 1xAi (تومان به ازای ۱K توکن) رو به بخش‌های `[models."<id>"]` تبدیل و چاپ می‌کنه: حساب دهدهی دقیق، گرد کردن رو به بالا (۶ رقم)، رقم فارسی و جداکننده هزارگان، خانواده از پیشوند شناسه، توانایی محافظه‌کارانه، خطای دقیق با شماره خط، هشدار برای مدل‌های از قبل قیمت‌دار با `--config`. `automa.toml` هرگز نوشته نمی‌شه (D95).
+- **فایل‌های اصلی:** `src/automa/model_import.py` (جدید)، `src/automa/cli.py`، `src/automa/config.py` (نام عمومی `MODEL_ID_RE`)، `tests/test_model_import.py` (۷۸ تست)، `tests/test_cli_models.py` (۲۵ تست)، `automa.toml.example`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D95).
+- **تست‌ها:** `pytest` ← ۳۷۶۱ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check`، `ruff format --check` و `mypy` روی ماژول‌های تغییرکرده سبز.
+- **برای صاحب مخزن:** فهرست قیمت 1xAi رو در یک فایل متنی (هر خط: شناسه، قیمت ورودی، قیمت خروجی) بذار و `automa models import --format 1xai prices.txt --rate 323000 --config automa.toml` رو اجرا کن؛ خانواده/توانایی‌ها رو بازبینی و در `automa.toml` بچسبون.
+- **قدم بعدی:** ارزیاب از خانواده دیگر (`[verifier] prefer_other_family`).
+
 ## 2026-11-18 — M11: کاتالوگ مدل (داده و تنظیمات)
 - **انجام‌شده:** بخش اختیاری `[models."<id>"]` در `automa.toml` با `family`، `capabilities` (`text`/`code`/`vision`/`image_out`) و قیمت. `price_for` قیمت رو از `[prices]` یا کاتالوگ می‌خونه، پس سطح‌ها می‌تونن مدل کاتالوگ رو نام ببرن و BudgetGuard همون‌طور هزینه رو می‌سنجه. قیمت دوگانه، مدل سطح بی‌قیمت و مدل سطح بدون `text` رد می‌شن. متدهای کمکی `model_info`، `family_of` و `catalog(capability=, family=)` برای موردهای بعدی M11. `[prices]` قبلی بی‌تغییر کار می‌کنه (D94).
 - **فایل‌های اصلی:** `src/automa/config.py`، `tests/test_model_catalog.py` (۵۲ تست جدید، شامل هزینه‌گیری Gateway با قیمت کاتالوگ روی FakeProvider)، `automa.toml.example`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D94).

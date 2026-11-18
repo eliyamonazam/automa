@@ -33,6 +33,10 @@ output_per_mtok = 20.00
 # capabilities = ["text", "code", "vision"]
 # input_per_mtok = 2.00
 # output_per_mtok = 8.00
+# List the catalog with: automa models [--capability vision] [--family openai]
+# Turn a 1xAi price list (id, input and output toman per 1K tokens) into entries to
+# review and paste here (prints only, rounds prices up; D95):
+#   automa models import --format 1xai prices.txt --rate 323000
 
 # Hard caps in USD. Reaching a cap stops the run; per_call must not exceed the others.
 [limits]

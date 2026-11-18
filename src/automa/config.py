@@ -85,6 +85,7 @@ class Capability(StrEnum):
 
 # A model id as the gateway knows it: printable ASCII, no whitespace or quotes.
 _MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
+MODEL_ID_RE = _MODEL_ID_RE  # public name for importers (D95)
 _FAMILY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 MAX_CATALOG_MODELS = 500
 

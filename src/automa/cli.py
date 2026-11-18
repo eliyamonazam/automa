@@ -39,6 +39,9 @@ router built from a snapshot of the quality log (D59, D60); ``bench run`` never 
 ``self next`` shows, read-only, the next open item of Automa's own ``ROADMAP.md``, the
 ``[!]`` items waiting for the owner and the goal text built for it; it needs no config
 or API key, makes no model call and creates nothing (D81).
+``models [--capability C] [--family F] [--json]`` lists the model catalog read-only;
+``models import --format 1xai FILE --rate TOMAN_PER_USD`` prints catalog sections from
+a gateway price list (prices rounded up) and never writes ``automa.toml`` (D95).
 
 Exit codes (stable, for scripts):
 
@@ -70,6 +73,7 @@ import sys
 import unicodedata
 from collections.abc import Callable
 from datetime import UTC, date, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, NamedTuple
 
@@ -116,6 +120,7 @@ from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError, nusd_to_u
 from automa.config import (
     MAX_PARALLEL,
     AutomaConfig,
+    Capability,
     ConfigError,
     Tier,
     describe_parallel,
@@ -156,6 +161,13 @@ from automa.memory import (
 )
 from automa.memory.models import normalize_text
 from automa.memory.store import MAX_ENTRIES_PER_LAYER
+from automa.model_import import (
+    MAX_PRICE_LIST_BYTES,
+    PriceListError,
+    parse_1xai_price_list,
+    parse_rate,
+    render_catalog_toml,
+)
 from automa.orchestrator import (
     Orchestrator,
     OrchestratorError,
@@ -301,6 +313,10 @@ self_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(self_app, name="self")
+models_app = typer.Typer(
+    help="Model catalog: list catalogued models; turn a gateway price list into entries.",
+)
+app.add_typer(models_app, name="models")
 
 DEFAULT_SUITE_DIR = Path("benchmarks")
 RESULTS_DIRNAME = "results"
@@ -3370,6 +3386,128 @@ def quality(
         return
     for line in _quality_lines(stats):
         typer.echo(line)
+
+
+class PriceListFormat(StrEnum):
+    ONEXAI = "1xai"
+
+
+_FAMILY_FILTER_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+
+
+def _model_json(config: AutomaConfig, model_id: str) -> dict[str, Any]:
+    info = config.models[model_id]
+    return {
+        "id": model_id,
+        "family": info.family,
+        "capabilities": [c.value for c in info.capabilities],
+        "input_per_mtok": info.input_per_mtok,
+        "output_per_mtok": info.output_per_mtok,
+        "tiers": sorted(t.value for t, m in config.tiers.items() if m == model_id),
+    }
+
+
+@models_app.callback(invoke_without_command=True)
+def models(
+    ctx: typer.Context,
+    capability: Annotated[
+        Capability | None, typer.Option("--capability", help="Only models with this capability.")
+    ] = None,
+    family: Annotated[
+        str | None, typer.Option("--family", help="Only models of this family (maker).")
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Machine-readable output.")] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """The model catalog (the models sections of automa.toml), sorted by id.
+
+    Read-only: no API key, no model call, no files written (D95).
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    if family is not None and not _FAMILY_FILTER_RE.fullmatch(family):
+        raise _fail(f"invalid family {_safe(family)!r}", EXIT_USER)
+    config = _load(config_path)
+    entries = [
+        _model_json(config, mid) for mid, _ in config.catalog(capability=capability, family=family)
+    ]
+    if as_json:
+        typer.echo(json.dumps(entries, ensure_ascii=False, indent=2))
+        return
+    if not entries:
+        filtered = capability is not None or family is not None
+        typer.echo(
+            "no catalogued model matches the filter"
+            if filtered
+            else 'the model catalog is empty; add [models."<id>"] sections to automa.toml '
+            "(automa models import turns a gateway price list into them)"
+        )
+    for e in entries:
+        tiers = f"  tiers: {', '.join(e['tiers'])}" if e["tiers"] else ""
+        typer.echo(
+            f"{e['id']}  family: {e['family']}  capabilities: {', '.join(e['capabilities'])}  "
+            f"${e['input_per_mtok']:g} in / ${e['output_per_mtok']:g} out per 1M tokens{tiers}"
+        )
+    uncatalogued = sorted(config.prices)
+    if uncatalogued and capability is None and family is None and not as_json:
+        typer.echo(f"priced in [prices] only (not catalogued): {', '.join(uncatalogued)}")
+
+
+@models_app.command("import")
+def models_import(
+    price_list: Annotated[Path, typer.Argument(help="Text price list of the gateway.")],
+    rate: Annotated[str, typer.Option("--rate", help="Toman per USD (e.g. 323000).")],
+    fmt: Annotated[
+        PriceListFormat, typer.Option("--format", help="Price list format.")
+    ] = PriceListFormat.ONEXAI,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Warn about models this automa.toml already prices."),
+    ] = None,
+) -> None:
+    """Print model catalog sections for automa.toml from a 1xAi price list (id, input and output
+    toman per 1K tokens). Prices become USD per 1M tokens, rounded up; family and
+    capabilities are guesses to review. Prints only: automa.toml is never written (D95).
+    """
+    try:
+        rate_value = parse_rate(rate)
+    except PriceListError as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    if not price_list.is_file():
+        raise _fail(f"price list not found: {_safe(str(price_list))}", EXIT_USER)
+    try:
+        if price_list.stat().st_size > MAX_PRICE_LIST_BYTES:
+            raise _fail(f"price list is larger than {MAX_PRICE_LIST_BYTES} bytes", EXIT_USER)
+        text = price_list.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        raise _fail("price list is not UTF-8 text", EXIT_USER) from None
+    except OSError as e:
+        raise _fail(f"cannot read price list: {_safe(str(e))}", EXIT_USER) from None
+    known: AutomaConfig | None = _load(config_path) if config_path is not None else None
+    # One format today (``fmt`` is validated by the enum); new formats get a branch here.
+    try:
+        imported = parse_1xai_price_list(text, rate=rate_value)
+        out = render_catalog_toml(imported, rate=rate_value)
+    except PriceListError as e:
+        raise _fail(_safe(str(e)), EXIT_USER) from None
+    if known is not None:
+        for m in imported:
+            where = (
+                "[prices]"
+                if m.model_id in known.prices
+                else "[models]"
+                if m.model_id in known.models
+                else None
+            )
+            if where is not None:
+                typer.echo(
+                    f"warning: {m.model_id} is already priced in {where} of {config_path}; "
+                    "keep one entry (a model priced twice does not load)",
+                    err=True,
+                )
+    typer.echo(out, nl=False)
 
 
 _ROUTE_REASONS: dict[RouteReason, str] = {
