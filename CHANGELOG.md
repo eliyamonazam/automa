@@ -1,5 +1,11 @@
 # گزارش تغییرات
 
+## 2026-11-18 — `automa models import` برای صفحه کپی‌شده 1xAi (خارج از نقشه راه، D102)
+- **مشکل (فایل واقعی):** متن صفحه قیمت 1xAi که از مرورگر کپی شده (هر خانه در یک خط) با «expected 3 fields» رد می‌شد.
+- **رفع:** تشخیص و پارس خودکار همین فرمت؛ رد و گزارش مدل‌های بی‌قیمت و غیر چت؛ خانواده برای `ft:`، MiniMax و Hunyuan. روی فایل واقعی: ۲۶۱ مدل وارد، ۶۸ رد با دلیل.
+- **فایل‌ها:** `src/automa/model_import.py`، `src/automa/cli.py`، `tests/test_model_import_page.py`.
+- **تست‌ها:** `pytest` ← ۴۱۱۶ سبز، ۲ رد شده (معمولی و حالت شبیه CI)؛ `ruff` ← بدون خطا.
+
 ## 2026-11-18 — M11: ساخت تصویر (اتصال)
 - **انجام‌شده:** بخش `[images]` (`model` از کاتالوگ با `image_out` و `per_image_usd` حداکثر `per_call_usd`؛ `max_per_task` پیش‌فرض ۴) و نقش داخلی تازهٔ `designer` (خواندن/نوشتن فایل و `generate_image`، بدون اجرای فرمان یا وب). `automa run` با `[images] model` یک `ImageGateway` روی همون BudgetGuard می‌سازه؛ Orchestrator برای هر تلاش وظیفهٔ designer ابزار تازه با پروژه/وظیفه/سطح همون تلاش و سقف تعداد تصویر می‌سازه، و گارد جدا رو رد می‌کنه. بدون `[images]`، نقش designer به Executive پیشنهاد نمی‌شه و وظیفه‌اش قبل از هر فراخوانی با خطای تنظیمات متوقف می‌شه. برآورد هزینه تصویرها رو حساب می‌کنه. بررسی `file_exists` حالا فایل باینری (تصویر) رو هم می‌پذیره (D101).
 - **فایل‌های اصلی:** `src/automa/orchestrator.py` (`images=`، `usable_roles`)، `src/automa/config.py` (`ImagesConfig`)، `src/automa/roles/builtin/designer.toml` (جدید)، `src/automa/tools/images.py` (`max_calls`)، `src/automa/llm/factory.py`، `src/automa/finance/estimate.py`، `src/automa/agents/verifier.py`، `src/automa/cli.py`، `src/automa/bench.py`، `tests/test_images_wiring.py` (۵۵ تست جدید)، `automa.toml.example`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D101).

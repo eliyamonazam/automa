@@ -166,6 +166,8 @@ from automa.memory.store import MAX_ENTRIES_PER_LAYER
 from automa.model_import import (
     MAX_PRICE_LIST_BYTES,
     PriceListError,
+    looks_like_page_copy,
+    parse_1xai_page_copy,
     parse_1xai_price_list,
     parse_rate,
     render_catalog_toml,
@@ -3530,8 +3532,12 @@ def models_import(
         raise _fail(f"cannot read price list: {_safe(str(e))}", EXIT_USER) from None
     known: AutomaConfig | None = _load(config_path) if config_path is not None else None
     # One format today (``fmt`` is validated by the enum); new formats get a branch here.
+    skipped: list[str] = []
     try:
-        imported = parse_1xai_price_list(text, rate=rate_value)
+        if looks_like_page_copy(text):
+            imported, skipped = parse_1xai_page_copy(text, rate=rate_value)
+        else:
+            imported = parse_1xai_price_list(text, rate=rate_value)
         out = render_catalog_toml(imported, rate=rate_value)
     except PriceListError as e:
         raise _fail(_safe(str(e)), EXIT_USER) from None
@@ -3550,6 +3556,16 @@ def models_import(
                     "keep one entry (a model priced twice does not load)",
                     err=True,
                 )
+    if skipped:
+        typer.echo(
+            f"note: imported {len(imported)} model(s) from the copied price page; "
+            f"skipped {len(skipped)}:",
+            err=True,
+        )
+        for line in skipped[:50]:
+            typer.echo(f"  {_safe(line)}", err=True)
+        if len(skipped) > 50:
+            typer.echo(f"  ... and {len(skipped) - 50} more", err=True)
     typer.echo(out, nl=False)
 
 

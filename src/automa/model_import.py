@@ -4,7 +4,10 @@ Pure functions: no model call, no network, no file written. ``automa models impo
 reads the file, calls :func:`parse_1xai_price_list` and prints :func:`render_catalog_toml`;
 the owner reviews the printed entries and pastes them into ``automa.toml`` by hand.
 
-The 1xAi format is one model per line: the model id, then the input and the output
+The pricing page copied from the 1xAi website (one table cell per line) is also
+accepted: see :func:`parse_1xai_page_copy`, used when :func:`looks_like_page_copy`.
+
+The 1xAi line format is one model per line: the model id, then the input and the output
 price in toman per 1,000 tokens. Fields are separated by ``|``, tabs, ``;``, commas
 (when the line has exactly three comma-separated fields) or whitespace. Persian and
 Arabic-Indic digits and the thousands separators ``,``/``٬``/``_`` are accepted inside
@@ -66,6 +69,8 @@ _FAMILY_PREFIXES: dict[str, str] = {
     "moonshot": "moonshot",
     "glm": "zhipu",
     "flux": "bfl",
+    "minimax": "minimax",
+    "hunyuan": "tencent",
 }
 # A "vendor/" prefix as some gateways spell it -> family.
 _VENDOR_FAMILIES: dict[str, str] = {
@@ -108,7 +113,7 @@ class ImportedModel:
 
 def guess_family(model_id: str) -> str:
     """The family for ``model_id`` from its prefix, or ``UNKNOWN_FAMILY``."""
-    lower = model_id.lower()
+    lower = model_id.lower().removeprefix("ft:")  # fine-tuned: same maker
     if "/" in lower:
         vendor, _, rest = lower.partition("/")
         if vendor in _VENDOR_FAMILIES:
@@ -171,6 +176,111 @@ def _split(line: str) -> list[str]:
         if len(parts) == 3 and all(parts):
             return parts
     return line.split()
+
+
+# Ids that are not chat/completion models (audio, speech, embeddings, realtime, ...).
+# Skipped when importing the page copy, which lists every model 1xAi sells.
+_NON_CHAT_MARKERS = (
+    "embedding",
+    "tts",
+    "audio",
+    "realtime",
+    "transcribe",
+    "-live",
+    "live-",
+    "robotics",
+    "computer-use",
+    "search-api",
+    "deep-research",
+    "babbage",
+    "davinci",
+    "-instruct",
+)
+_NO_PRICE = frozenset({"—", "-", "–", "N/A", "n/a"})
+
+
+def looks_like_page_copy(text: str) -> bool:
+    """True when ``text`` is the 1xAi pricing page copied from a browser: one table
+    cell per line (id, input, output, window, ...), with Persian headings between
+    sections. The line format has the id and both prices on one line instead."""
+    lines = [ln.strip() for ln in text.lstrip("\ufeff").splitlines() if ln.strip()]
+    if len(lines) < 6:
+        return False
+    singles = sum(1 for ln in lines if len(ln.split()) == 1)
+    return singles / len(lines) > 0.7 and not any("|" in ln or "\t" in ln for ln in lines)
+
+
+def _is_model_id(token: str) -> bool:
+    return bool(MODEL_ID_RE.fullmatch(token)) and any(c.isalpha() for c in token)
+
+
+def parse_1xai_page_copy(text: str, *, rate: Decimal) -> tuple[list[ImportedModel], list[str]]:
+    """Parse the 1xAi pricing page copied from a browser (one cell per line).
+
+    A model is a line holding a valid id followed directly by two price lines
+    (input, output toman per 1K tokens); every other line (headings, descriptions,
+    counts, context windows, button labels) is ignored. Models whose output price
+    is missing ("—") and non-chat models (audio, speech, embeddings, realtime, ...)
+    are skipped and reported in the second return value, never guessed.
+    """
+    if rate <= 0:
+        raise PriceListError("rate must be positive")
+    if len(text.encode("utf-8")) > MAX_PRICE_LIST_BYTES:
+        raise PriceListError(f"price list is larger than {MAX_PRICE_LIST_BYTES} bytes")
+    lines = [
+        (n, ln.strip())
+        for n, ln in enumerate(text.lstrip("\ufeff").splitlines(), start=1)
+        if ln.strip()
+    ]
+    models: list[ImportedModel] = []
+    skipped: list[str] = []
+    seen: dict[str, int] = {}
+    i = 0
+    while i < len(lines):
+        lineno, token = lines[i]
+        if i + 2 < len(lines) and _is_model_id(token):
+            in_raw, out_raw = lines[i + 1][1], lines[i + 2][1]
+            in_t = _number(in_raw)
+            out_t = _number(out_raw)
+            if in_t is not None and (out_t is not None or out_raw in _NO_PRICE):
+                i += 3
+                lower = token.lower()
+                if out_t is None:
+                    skipped.append(f"{token}: no output price")
+                    continue
+                if any(m in lower for m in _NON_CHAT_MARKERS):
+                    skipped.append(f"{token}: not a chat model")
+                    continue
+                if in_t > MAX_TOMAN_PER_KTOK or out_t > MAX_TOMAN_PER_KTOK:
+                    raise PriceListError(f"line {lineno}: price is implausibly large")
+                if token in seen:
+                    skipped.append(f"{token}: repeated (line {lineno}), first kept")
+                    continue
+                seen[token] = lineno
+                family = guess_family(token)
+                info = ModelInfo(
+                    family=family,
+                    capabilities=guess_capabilities(token, family),
+                    input_per_mtok=float(toman_per_ktok_to_usd_per_mtok(in_t, rate)),
+                    output_per_mtok=float(toman_per_ktok_to_usd_per_mtok(out_t, rate)),
+                )
+                models.append(
+                    ImportedModel(
+                        model_id=token,
+                        info=info,
+                        line=lineno,
+                        input_toman_per_ktok=in_t,
+                        output_toman_per_ktok=out_t,
+                        family_guessed=family == UNKNOWN_FAMILY,
+                    )
+                )
+                continue
+        i += 1
+    if not models:
+        raise PriceListError("no models found in the copied price page")
+    if len(models) > MAX_CATALOG_MODELS:
+        raise PriceListError(f"at most {MAX_CATALOG_MODELS} models in the catalog")
+    return models, skipped
 
 
 def parse_1xai_price_list(text: str, *, rate: Decimal) -> list[ImportedModel]:
