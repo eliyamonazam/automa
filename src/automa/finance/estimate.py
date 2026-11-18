@@ -208,7 +208,7 @@ def _expected(
     for i, tier in enumerate(schedule):
         if reach <= 0.0:
             break
-        st = stats.get((role, config.model_for(tier)))
+        st = stats.get((role, config.model_for_role(role, tier)))
         if st is None or st.attempts < min_samples:
             return None
         if not (first_done and i == 0):
@@ -291,11 +291,12 @@ def estimate_plan(
             raise ConfigError(f"no model configured for tier '{prog.tier.value}'")
         if not prog.fresh:
             start = prog.tier if prog.tier is not None else requested
-        elif router is not None:
+        elif router is not None and not config.role_models(task.role):
+            # The orchestrator never routes a role with its own model list (D97).
             start = router.route(task.role, requested).tier
         else:
             start = requested
-        model = config.model_for(start)
+        model = config.model_for_role(task.role, start)
         st = by_key.get((task.role, model))
         left = max(0, s.max_attempts - prog.attempts)
         per_attempt = min(role.max_steps, s.worker_max_steps) + s.verifier_calls

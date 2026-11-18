@@ -225,6 +225,12 @@ class Orchestrator:
             raise TypeError("roles must be a RoleRegistry")
         if not isinstance(config, AutomaConfig):
             raise TypeError("config must be an AutomaConfig")
+        unknown = sorted(
+            name for name in config.roles if config.role_models(name) and name not in roles
+        )
+        if unknown:
+            # A model list for a role that does not exist would be silently ignored.
+            raise ConfigError(f"[roles.<name>] models for unknown role(s): {', '.join(unknown)}")
         if quality is not None and not isinstance(quality, QualityLog):
             raise TypeError("quality must be a QualityLog")
         if router is not None:
@@ -470,19 +476,34 @@ class Orchestrator:
             return 0
 
         requested = task.tier or role.tier
+        role_ladder = self._config.role_models(task.role)
         if state.tier is not None:
             tier = state.tier  # already chosen (routed or escalated): never re-route
+        elif self._router is not None and not history and role_ladder:
+            # The router's evidence is per tier model, not per role model (D97).
+            tier = requested
+            self._emit(
+                project_id,
+                "router.skipped",
+                {"task": task.id, "role": task.role, "reason": "role_models"},
+            )
         elif self._router is not None and not history:
             tier = self._route(self._router, project_id, task, requested)
         else:
             tier = requested
+        try:
+            model: str | None = self._config.model_for_role(task.role, tier)
+        except ConfigError:
+            model = None  # unconfigured tier: the worker stops before any call, as before
         attempt = len(history) + 1
         feedback: list[Issue] = list(last_verdict.issues) if last_verdict is not None else []
-        self._save_state(project_id, plan, task.id, TaskStatus.RUNNING, tier, None)
+        self._save_state(project_id, plan, task.id, TaskStatus.RUNNING, tier, None, model=model)
         self._emit(
             project_id,
             "orchestrator.attempt",
-            {"task": task.id, "attempt": attempt, "tier": tier.value},
+            {"task": task.id, "attempt": attempt, "tier": tier.value}
+            | ({"model": model} if model is not None else {})
+            | ({"model_source": "role"} if role_ladder else {}),
         )
         executor = self._executor(project_id, role.policy(), task_id=task.id, claims=claims)
         try:
@@ -494,11 +515,18 @@ class Orchestrator:
                 attempt=attempt,
                 feedback=feedback,
                 tier=tier,
+                model=model if role_ladder else None,
             )
         except BaseException as e:
             # Nothing stored for this attempt: the task goes back to pending.
             self._save_state(
-                project_id, plan, task.id, TaskStatus.PENDING, tier, _short(f"worker: {e}")
+                project_id,
+                plan,
+                task.id,
+                TaskStatus.PENDING,
+                tier,
+                _short(f"worker: {e}"),
+                model=model,
             )
             stop = self._stop_for(e, task.id)
             if stop is None:
@@ -754,8 +782,12 @@ class Orchestrator:
         status: TaskStatus,
         tier: Tier | None,
         error: str | None,
+        *,
+        model: str | None = None,
     ) -> TaskState:
         current = self._store.load_task_state(project_id, task_id)
+        if model is None and current is not None:
+            model = current.model  # keep the last attempt's model visible
         return self._store.save_task_state(
             project_id,
             TaskState(
@@ -763,6 +795,7 @@ class Orchestrator:
                 status=status,
                 attempts=self._store.attempt_count(project_id, task_id),
                 tier=tier,
+                model=model,
                 plan_version=plan.version,
                 error=error,
                 updated_at=self._clock(),

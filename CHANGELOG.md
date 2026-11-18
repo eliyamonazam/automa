@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-18 — M11: انتخاب مدل برای هر نقش (قانون‌محور)
+- **انجام‌شده:** `[roles.<name>]` حالا `models` (نردبان مدل نقش، ضعیف‌ترین اول) و `capabilities` (توانایی‌های لازم) می‌گیره؛ همهٔ مدل‌ها باید در کاتالوگ با قیمت، `text` و توانایی‌های لازم باشن. `AutomaConfig.model_for_role` خالص و قطعیه: جایگاه سطح بین سطح‌های پیکربندی‌شده عضو فهرست رو انتخاب می‌کنه (سطح بالاتر ← آخرین عضو)، پس ارتقای سطح همچنان کار می‌کنه و هرگز مدل ضعیف‌تری نمی‌ده. Orchestrator مدل هر تلاش رو به Worker می‌ده (`WorkerAgent.run(model=…)` ← `LLMGateway.complete(model=…)` با همون BudgetGuard و Ledger)، و در `TaskState.model` و رویدادهای `orchestrator.attempt`/`worker.started` ثبت می‌کنه. Router برای نقش دارای فهرست مدل اجرا نمی‌شه (`router.skipped`) و برآورد هزینه هم مدل نقش رو استفاده می‌کنه. فهرست مدل برای نقش ناموجود خطاست (D97).
+- **فایل‌های اصلی:** `src/automa/config.py` (`RoleSettings`، `model_for_role`)، `src/automa/agents/worker.py`، `src/automa/orchestrator.py`، `src/automa/plan/models.py` (`TaskState.model`)، `src/automa/finance/estimate.py`، `tests/test_role_models.py` (۴۸ تست جدید)، `automa.toml.example`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D97).
+- **تست‌ها:** `pytest` ← ۳۸۶۶ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check`، `ruff format --check` و `mypy` روی ماژول‌های تغییرکرده سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و وابستگی‌ها دوباره نصب شدن. تست اجرای موازی اول ناپایدار بود (ترتیب پاسخ‌های FakeProvider بین رشته‌ها)؛ با پاسخ‌دهی به ازای وظیفه درست شد.
+- **برای صاحب مخزن:** برای استفاده، مثلاً `[roles.developer] models = ["<مدل ارزون کد>", "<مدل قوی>"]` و `capabilities = ["code"]` بذار (مدل‌ها با قیمت در `[models]`).
+- **قدم بعدی:** انتخاب مدل داده‌محور (گسترش Router از سطح به مدل).
+
 ## 2026-11-18 — M11: ارزیاب از خانواده دیگر
 - **انجام‌شده:** بخش `[verifier]` با `prefer_other_family` و `models`؛ ارزیابی مدلی Verifier روی اولین مدل فهرست با خانواده‌ای غیر از مدل Worker اجرا می‌شه (اگه خانوادهٔ Worker نامعلوم بود یا مدل دگرخانواده نبود، مدل سطح مثل قبل، با رویداد `verifier.evaluator` و دلیل). `LLMGateway.complete(model=…)` مدل مشخص قیمت‌دار رو با همون BudgetGuard و Ledger می‌پذیره. مدل و خانوادهٔ ارزیاب در `Verdict` (`evaluator_model`/`evaluator_family`) و در لاگ کیفیت (`verifier_model`/`verifier_family`، طرح نسخهٔ ۲ با مهاجرت خودکار از نسخهٔ ۱) ثبت می‌شه (D96).
 - **فایل‌های اصلی:** `src/automa/config.py` (`VerifierConfig`)، `src/automa/llm/gateway.py` (`model`، `check_model`)، `src/automa/agents/verifier.py` (`choose_evaluator`)، `src/automa/plan/models.py` (`Verdict`)، `src/automa/quality.py` (طرح ۲)، `tests/test_verifier_family.py` (۵۷ تست جدید)، `automa.toml.example`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D96).

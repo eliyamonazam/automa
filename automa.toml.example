@@ -80,10 +80,20 @@ max_parallel = 1
 
 # Extra skills for built-in roles (names of folders in <workspace>/skills/ or built-in
 # skills). Text only: a skill adds instructions to the role's system prompt and never
-# changes its tools, risk level or budget; only `skills` is accepted here. Each skill's
-# text is sent with every step, so it adds input cost. At most 8 skills per role.
+# changes its tools, risk level or budget. Each skill's text is sent with every step,
+# so it adds input cost. At most 8 skills per role.
 # [roles.writer]
 # skills = ["house-style"]
+#
+# Per-role models (M11, D97): the role's own model ladder, weakest first. A task's tier
+# picks the entry at that tier's position among the configured [tiers] (small, medium,
+# large; higher tiers than the list is long use the last entry), so escalation still
+# climbs. Every model must be in [models] with a price, `text` and each capability
+# listed in `capabilities`. Calls still go through the BudgetGuard with that model's
+# price. The data router does not route a role that has its own models (yet).
+# [roles.developer]
+# models = ["deepseek/deepseek-v4", "anthropic/claude-sonnet-5-5"]
+# capabilities = ["code"]
 
 # Memory (automa memory list|add|forget). in_prompts: automa new/run add the relevant
 # memory (your preferences, this project's memory, lessons) to the system prompts as

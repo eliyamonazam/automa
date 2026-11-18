@@ -444,6 +444,9 @@ class TaskState(_Strict):
     status: TaskStatus = TaskStatus.PENDING
     attempts: int = Field(default=0, ge=0, le=MAX_TASK_ATTEMPTS)
     tier: Tier | None = None
+    # The model of the current/last attempt (D97): from the role's model list or the
+    # tier. Recorded for visibility only; it is recomputed from the config each attempt.
+    model: str | None = Field(default=None, min_length=1, max_length=200)
     plan_version: int = Field(default=1, ge=1)
     error: Text | None = None
     updated_at: UtcDatetime

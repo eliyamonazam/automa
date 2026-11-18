@@ -233,8 +233,14 @@ class WorkerAgent:
         attempt: int = 1,
         feedback: Sequence[Issue] = (),
         tier: Tier | None = None,
+        model: str | None = None,
     ) -> TaskResult:
-        """Run one attempt at ``task``. ``tier`` overrides task/role tier (escalation)."""
+        """Run one attempt at ``task``. ``tier`` overrides task/role tier (escalation).
+
+        ``model`` (D97) runs the attempt on that model instead of the tier's; the
+        gateway checks it has a price (and ``text`` if catalogued) and every call
+        goes through the same BudgetGuard. The tier is still recorded.
+        """
         if not isinstance(task, Task):
             raise TypeError("task must be a Task")
         if not isinstance(role, Role):
@@ -256,7 +262,11 @@ class WorkerAgent:
 
         s = self._settings
         tier = tier or task.tier or role.tier
-        model = self._gateway.config.model_for(tier)
+        if model is None:
+            model = self._gateway.config.model_for(tier)
+        else:
+            # Checked before any call: an unpriced model never reaches the provider.
+            model = self._gateway.check_model(model)
         max_steps = min(role.max_steps, s.max_steps)
         tools = [_tool_spec(spec) for spec in executor.specs()]
         context = CallContext(project_id=project_id, task_id=task.id)
@@ -276,6 +286,7 @@ class WorkerAgent:
                 "role": role.name,
                 "attempt": attempt,
                 "tier": tier.value,
+                "model": model,
                 "skills": list(role.skills),
                 "memory": _memory_count(self._memory),
             },
@@ -290,6 +301,7 @@ class WorkerAgent:
             result = self._gateway.complete(
                 messages,
                 tier=tier,
+                model=model,
                 max_tokens=s.step_max_tokens,
                 temperature=s.temperature,
                 tools=tools,

@@ -5,7 +5,7 @@ Sources, from lowest to highest precedence:
 1. Built-in defaults (conservative, finite budget limits).
 2. ``automa.toml`` (non-secret settings: tiers, prices, model catalog, limits,
    workspace, sandbox, orchestrator, extra skills for built-in roles, memory in
-   prompts, router, cross-family verifier).
+   prompts, router, cross-family verifier, per-role models).
 3. ``.env`` file in the working directory.
 4. Process environment variables.
 
@@ -299,15 +299,24 @@ def describe_parallel(max_parallel: int) -> str:
 _ROLE_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 
-class RoleSettings(_Strict):
-    """``[roles.<name>]`` in automa.toml: skills added to a built-in role (D47).
+MAX_ROLE_MODELS = 10
 
-    Only ``skills`` is accepted: the file cannot change a role's tools, risk level,
-    tier, steps or instructions (``extra="forbid"``). Skill names, the per-role cap
-    and the existence of each skill are checked when the roles are loaded.
+
+class RoleSettings(_Strict):
+    """``[roles.<name>]`` in automa.toml: skills and models of a built-in role (D47, D97).
+
+    ``skills`` are added to the role. ``models`` is the role's own model ladder (weakest
+    first): the task's tier picks the entry at the tier's position among the configured
+    tiers (the last entry for higher tiers), so escalation still climbs. Every listed
+    model must be in the ``[models]`` catalog (so it has a price and capabilities), have
+    ``text`` and every capability in ``capabilities``. The file cannot change a role's
+    tools, risk level, tier, steps or instructions (``extra="forbid"``). Skill names, the
+    per-role cap and the existence of each skill are checked when the roles are loaded.
     """
 
     skills: tuple[str, ...] = ()
+    models: tuple[str, ...] = ()
+    capabilities: tuple[Capability, ...] = ()
 
     @field_validator("skills", mode="before")
     @classmethod
@@ -315,6 +324,37 @@ class RoleSettings(_Strict):
         if isinstance(v, str):
             raise ValueError("skills must be a list of names, not a string")
         return v
+
+    @field_validator("models", mode="before")
+    @classmethod
+    def _model_list(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            raise ValueError("models must be a list of model ids, not a string")
+        if isinstance(v, list | tuple):
+            if len(v) > MAX_ROLE_MODELS:
+                raise ValueError(f"at most {MAX_ROLE_MODELS} models per role")
+            bad = [repr(m) for m in v if not isinstance(m, str) or not _MODEL_ID_RE.fullmatch(m)]
+            if bad:
+                raise ValueError(f"invalid model ids: {', '.join(bad)}")
+            if len(set(v)) != len(v):
+                raise ValueError("models must not repeat")
+        return v
+
+    @field_validator("capabilities", mode="before")
+    @classmethod
+    def _capability_list(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            raise ValueError("capabilities must be a list, not a string")
+        if isinstance(v, list | tuple) and len(set(map(str, v))) != len(v):
+            raise ValueError("capabilities must not repeat")
+        return v
+
+    @model_validator(mode="after")
+    def _capabilities_need_models(self) -> RoleSettings:
+        if self.capabilities and not self.models:
+            # Tier models are shared by every role; requirements apply to the role's list.
+            raise ValueError("capabilities need a non-empty models list")
+        return self
 
 
 class MemoryConfig(_Strict):
@@ -456,7 +496,25 @@ class AutomaConfig(_Strict):
             # Roles talk to their tier's model; a model without text output cannot serve one.
             raise ValueError(f"tier model(s) without the 'text' capability: {', '.join(textless)}")
         self._check_verifier()
+        self._check_role_models()
         return self
+
+    def _check_role_models(self) -> None:
+        for name, rs in sorted(self.roles.items()):
+            where = f"[roles.{name}]"
+            uncatalogued = [m for m in rs.models if m not in self.models]
+            if uncatalogued:
+                # Capabilities (to check) and a price (to cap) both come from the catalog.
+                raise ValueError(
+                    f"{where} model(s) not in the [models] catalog: {', '.join(uncatalogued)}"
+                )
+            for cap in (Capability.TEXT, *rs.capabilities):
+                lacking = [m for m in rs.models if not self.models[m].has(cap)]
+                if lacking:
+                    raise ValueError(
+                        f"{where} model(s) without the '{cap.value}' capability: "
+                        f"{', '.join(lacking)}"
+                    )
 
     def _check_verifier(self) -> None:
         v = self.verifier
@@ -480,6 +538,27 @@ class AutomaConfig(_Strict):
             return self.tiers[tier]
         except KeyError:
             raise ConfigError(f"no model configured for tier '{tier.value}'") from None
+
+    def role_models(self, role: str) -> tuple[str, ...]:
+        """The model ladder of ``role`` from ``[roles.<name>] models`` (empty: none)."""
+        rs = self.roles.get(role)
+        return () if rs is None else rs.models
+
+    def model_for_role(self, role: str, tier: Tier) -> str:
+        """The model a task of ``role`` runs on at ``tier`` (pure, D97).
+
+        Without a model list for the role this is ``model_for(tier)``. With one, the
+        tier must still be configured (as before); its position among the configured
+        tiers (lowest first) picks the list entry, and higher tiers than the list is
+        long use its last entry. So the choice is deterministic and escalating a tier
+        never picks a weaker model of the role.
+        """
+        ladder = self.role_models(role)
+        if not ladder:
+            return self.model_for(tier)
+        self.model_for(tier)  # an unconfigured tier stays a ConfigError
+        configured = [t for t in Tier if t in self.tiers]
+        return ladder[min(configured.index(tier), len(ladder) - 1)]
 
     def price_for(self, model: str) -> ModelPrice:
         """Return the configured price for ``model`` (from ``[prices]`` or the catalog)."""
