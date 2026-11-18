@@ -67,6 +67,8 @@ from automa.agents.worker import WorkerAgent
 from automa.budget.guard import BudgetError
 from automa.config import MAX_PARALLEL, AutomaConfig, ConfigError, SandboxMode, Tier
 from automa.events import Event
+from automa.llm.gateway import CallContext
+from automa.llm.images import ImageGateway
 from automa.llm.provider import ProviderError
 from automa.plan.models import (
     MAX_TASK_ATTEMPTS,
@@ -80,12 +82,14 @@ from automa.plan.models import (
 )
 from automa.project.store import ProjectStatus, ProjectStore
 from automa.quality import QualityError, QualityLog, QualityRecord
+from automa.roles.models import Role
 from automa.roles.registry import RoleError, RoleRegistry
 from automa.router import RouteDecision, Router
 from automa.tools import RunCommand, tools_factory
 from automa.tools.base import Tool
 from automa.tools.claims import PathClaims, paths_overlap
 from automa.tools.executor import ApprovalRequired, ToolExecutor, ToolLayerError
+from automa.tools.images import GenerateImage
 from automa.tools.policy import PermissionPolicy
 from automa.tools.web_reads import AutoReadPolicy
 from automa.tools.workspace import Workspace
@@ -205,6 +209,25 @@ def _path_conflict(
     return None
 
 
+IMAGE_TOOL = GenerateImage.name
+
+
+def uses_images(role: Role) -> bool:
+    """Whether ``role`` lists the paid ``generate_image`` tool (D101)."""
+    return IMAGE_TOOL in role.tools
+
+
+def usable_roles(roles: RoleRegistry, config: AutomaConfig) -> frozenset[str]:
+    """Role names a plan may use under ``config`` (what the Executive is offered, D101).
+
+    With image generation off (no ``[images] model``), roles that list
+    ``generate_image`` are left out: a task of such a role could not run.
+    """
+    if config.images.enabled:
+        return roles.names()
+    return frozenset(r.name for r in roles if not uses_images(r))
+
+
 class Orchestrator:
     """Runs a planned project: worker → verifier → retry/escalate, state saved each step."""
 
@@ -222,6 +245,7 @@ class Orchestrator:
         quality: QualityLog | None = None,
         router: Router | None = None,
         selector: ModelSelectorAgent | None = None,
+        images: ImageGateway | None = None,
     ):
         if not isinstance(store, ProjectStore):
             raise TypeError("store must be a ProjectStore")
@@ -257,6 +281,16 @@ class Orchestrator:
                 raise ValueError("selector was built from a different configuration")
             if Tier.SMALL not in config.tiers:
                 raise ConfigError("the model selector needs a model for the 'small' tier")
+        if images is not None:
+            if not isinstance(images, ImageGateway):
+                raise TypeError("images must be an ImageGateway")
+            if images.config != config:
+                raise ValueError("image gateway was built from a different configuration")
+            if not config.images.enabled:
+                raise ValueError("an image gateway needs an [images] model in the configuration")
+            if not images.shares_guard_with(worker.gateway):
+                # Image spending must count against the same caps as every model call.
+                raise ValueError("the image gateway must use the worker's BudgetGuard")
         self._store = store
         self._worker = worker
         self._verifier = verifier
@@ -269,6 +303,7 @@ class Orchestrator:
         self._quality = quality
         self._router = router
         self._selector = selector
+        self._images = images
         self._make_tools()  # a factory that ignores a required sandbox fails here
 
     @property
@@ -493,6 +528,15 @@ class Orchestrator:
         if last_verdict is not None and not last_verdict.passed and len(history) >= s.max_attempts:
             self._fail(project_id, plan, task, len(history))
             return 0
+        if uses_images(role) and self._images is None:
+            # Stop before any call instead of letting the worker pay for steps it
+            # cannot finish (the unconfigured tool refuses every image).
+            reason = (
+                "image generation is off: set [images] model in automa.toml"
+                if not self._config.images.enabled
+                else "image generation is not wired into this run"
+            )
+            raise _Stop(StopReason.CONFIG, f"role {role.name!r} needs images: {reason}", task.id)
 
         requested = task.tier or role.tier
         role_ladder = self._config.role_models(task.role)
@@ -516,7 +560,13 @@ class Orchestrator:
             | ({"model": model} if model is not None else {})
             | ({"model_source": "role"} if role_ladder else {}),
         )
-        executor = self._executor(project_id, role.policy(), task_id=task.id, claims=claims)
+        executor = self._executor(
+            project_id,
+            role.policy(),
+            task_id=task.id,
+            claims=claims,
+            image_tier=tier if uses_images(role) else None,
+        )
         try:
             result = self._worker.run(
                 task,
@@ -776,6 +826,28 @@ class Orchestrator:
                     )
         return tools
 
+    def _with_image_tool(
+        self, tools: list[Tool], project_id: str, task_id: str, tier: Tier
+    ) -> list[Tool]:
+        """``tools`` with ``generate_image`` bound to this task attempt (D101).
+
+        A fresh instance per attempt: same ``ImageGateway`` (so the same BudgetGuard
+        and ledger), the project/task ``CallContext``, the task's tier and the
+        ``[images] max_per_task`` limit. Any other instance of the tool is dropped.
+        """
+        images = self._images
+        model = self._config.images.model
+        if images is None or model is None:
+            return tools
+        bound = GenerateImage(
+            images,
+            model=model,
+            context=CallContext(project_id=project_id, task_id=task_id),
+            tier=tier,
+            max_calls=self._config.images.max_per_task,
+        )
+        return [t for t in tools if t.name != IMAGE_TOOL] + [bound]
+
     def _executor(
         self,
         project_id: str,
@@ -783,10 +855,14 @@ class Orchestrator:
         *,
         task_id: str | None = None,
         claims: PathClaims | None = None,
+        image_tier: Tier | None = None,
     ) -> ToolExecutor:
         workspace = Workspace(self._store.files_dir(project_id))
+        tools = self._make_tools()
+        if image_tier is not None and task_id is not None:
+            tools = self._with_image_tool(tools, project_id, task_id, image_tier)
         return ToolExecutor(
-            self._make_tools(),
+            tools,
             policy,
             workspace,
             self._store.events(project_id),

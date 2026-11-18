@@ -88,6 +88,7 @@ _MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
 MODEL_ID_RE = _MODEL_ID_RE  # public name for importers (D95)
 _FAMILY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 MAX_CATALOG_MODELS = 500
+MAX_IMAGES_PER_TASK = 20
 
 
 def _price_number(v: Any) -> Any:
@@ -415,6 +416,32 @@ class RouterConfig(_Strict):
 MAX_VERIFIER_MODELS = 20
 
 
+class ImagesConfig(_Strict):
+    """``[images]`` in automa.toml: image generation for roles that list it (D101).
+
+    ``model``: the catalogued image model ``generate_image`` uses (``image_out``
+    capability and a ``per_image_usd`` price, at most ``[limits] per_call_usd``).
+    Unset (the default) means image generation is off: roles that list
+    ``generate_image`` are not offered to the Executive and a task of such a role
+    stops the run with a configuration error before any call.
+    ``max_per_task``: images one task attempt may generate (on top of the budget).
+    """
+
+    model: str | None = None
+    max_per_task: StrictInt = Field(default=4, ge=1, le=MAX_IMAGES_PER_TASK)
+
+    @field_validator("model")
+    @classmethod
+    def _model_id(cls, v: str | None) -> str | None:
+        if v is not None and not _MODEL_ID_RE.fullmatch(v):
+            raise ValueError("invalid model id")
+        return v
+
+    @property
+    def enabled(self) -> bool:
+        return self.model is not None
+
+
 class VerifierConfig(_Strict):
     """``[verifier]`` in automa.toml: the cross-family evaluator (D96).
 
@@ -464,6 +491,7 @@ class AutomaConfig(_Strict):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     router: RouterConfig = Field(default_factory=RouterConfig)
     verifier: VerifierConfig = Field(default_factory=VerifierConfig)
+    images: ImagesConfig = Field(default_factory=ImagesConfig)
 
     @field_validator("roles")
     @classmethod
@@ -516,6 +544,7 @@ class AutomaConfig(_Strict):
             raise ValueError(f"tier model(s) without the 'text' capability: {', '.join(textless)}")
         self._check_verifier()
         self._check_role_models()
+        self._check_images()
         if self.router.selector and Tier.SMALL not in self.tiers:
             # The selector call runs on the small tier (D99).
             raise ValueError("[router] selector = true needs a model for the 'small' tier")
@@ -537,6 +566,35 @@ class AutomaConfig(_Strict):
                         f"{where} model(s) without the '{cap.value}' capability: "
                         f"{', '.join(lacking)}"
                     )
+
+    def _check_images(self) -> None:
+        model = self.images.model
+        if model is None:
+            return
+        info = self.models.get(model)
+        if info is None:
+            # Capabilities (to check) and a price (to cap) both come from the catalog.
+            raise ValueError(f"[images] model '{model}' is not in the [models] catalog")
+        if not info.has(Capability.IMAGE_OUT):
+            raise ValueError(f"[images] model '{model}' has no 'image_out' capability")
+        if info.per_image_usd is None:
+            raise ValueError(f"[images] model '{model}' has no per_image_usd price")
+        if info.per_image_usd > self.limits.per_call_usd:
+            # The BudgetGuard would refuse every image: say so now, not mid-run.
+            raise ValueError(
+                f"[images] model '{model}' costs ${info.per_image_usd} per image, above "
+                f"[limits] per_call_usd (${self.limits.per_call_usd})"
+            )
+
+    def image_price(self) -> float | None:
+        """USD per image of the ``[images]`` model, ``None`` when image generation is off."""
+        model = self.images.model
+        if model is None:
+            return None
+        price = self.models[model].per_image_usd
+        if price is None:  # pragma: no cover - checked at load time
+            raise ConfigError(f"no per_image_usd price for image model '{model}'")
+        return price
 
     def _check_verifier(self) -> None:
         v = self.verifier

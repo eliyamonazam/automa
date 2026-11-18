@@ -8,6 +8,7 @@ ever be wrapped in an ``LLMGateway``; it is never called directly.
 from __future__ import annotations
 
 from automa.config import AutomaConfig
+from automa.llm.images import ImageProvider, OpenAICompatImageProvider
 from automa.llm.openai_compat import OpenAICompatProvider
 from automa.llm.provider import Provider
 
@@ -15,5 +16,15 @@ from automa.llm.provider import Provider
 def provider_from_config(config: AutomaConfig) -> Provider:
     """OpenAI-compatible HTTP provider for ``config``. Raises ``ConfigError`` without a key."""
     return OpenAICompatProvider(
+        config.base_url, config.require_api_key(), timeout_s=config.provider.timeout_s
+    )
+
+
+def image_provider_from_config(config: AutomaConfig) -> ImageProvider:
+    """OpenAI-compatible image provider on the same endpoint and key (D101).
+
+    Only ever wrapped in an ``ImageGateway``. Raises ``ConfigError`` without a key.
+    """
+    return OpenAICompatImageProvider(
         config.base_url, config.require_api_key(), timeout_s=config.provider.timeout_s
     )

@@ -49,7 +49,7 @@ from automa.tools.workspace import WorkspaceError, normalize
 Clock = Callable[[], datetime]
 
 # Tools whose successful call means "this file was produced/changed".
-FILE_PRODUCING_TOOLS = frozenset({"write_file"})
+FILE_PRODUCING_TOOLS = frozenset({"write_file", "generate_image"})
 
 NUDGE_EMPTY = (
     "Your reply was empty. Either call a tool to continue the work, or reply with a "
@@ -218,6 +218,11 @@ class WorkerAgent:
         self._settings = settings or WorkerSettings()
         self._events = events
         self._clock = clock
+
+    @property
+    def gateway(self) -> LLMGateway:
+        """The guarded gateway every call of this worker goes through."""
+        return self._gateway
 
     @property
     def settings(self) -> WorkerSettings:

@@ -72,8 +72,8 @@ class Net(Tool):
 
 def test_builtin_roles_exist_and_validate_against_real_tools() -> None:
     reg = RoleRegistry.builtin(tools=default_tools())
-    assert reg.names() == {"researcher", "architect", "developer", "writer"}
-    assert len(reg) == 4
+    assert reg.names() == {"researcher", "architect", "designer", "developer", "writer"}
+    assert len(reg) == 5
     assert [r.name for r in reg] == sorted(reg.names())
 
 

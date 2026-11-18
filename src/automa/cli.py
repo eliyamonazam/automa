@@ -149,8 +149,9 @@ from automa.finance import (
     estimate_plan,
     spending_report,
 )
-from automa.llm.factory import provider_from_config
+from automa.llm.factory import image_provider_from_config, provider_from_config
 from automa.llm.gateway import LLMGateway
+from automa.llm.images import ImageGateway, ImageProvider
 from automa.llm.provider import Provider, ProviderError
 from automa.memory import (
     MemoryContext,
@@ -176,6 +177,7 @@ from automa.orchestrator import (
     RunReport,
     StopReason,
     rejections_at_tier,
+    usable_roles,
 )
 from automa.plan import Plan, TaskStatus
 from automa.plan.models import ROLE_PATTERN
@@ -326,6 +328,8 @@ RESULTS_DIRNAME = "results"
 # Indirection point: tests replace this with a FakeProvider factory. The provider is
 # always wrapped in a guarded LLMGateway below; nothing here calls it directly.
 make_provider: Callable[[AutomaConfig], Provider] = provider_from_config
+# Same for image calls (D101): only ever wrapped in a guarded ImageGateway.
+make_image_provider: Callable[[AutomaConfig], ImageProvider] = image_provider_from_config
 # Indirection point for the Docker preflight (tests use a fake docker client).
 docker_check: Callable[[DockerSandbox], str] = check_docker
 
@@ -587,7 +591,7 @@ def _plan_with_executive(
         agent = ExecutiveAgent(
             gateway,
             settings=settings,
-            known_roles=roles.names(),
+            known_roles=usable_roles(roles, config),
             events=events,
             memory=prompt_memory,
         )
@@ -809,6 +813,7 @@ def run(
     try:
         # Validate what every model call needs before touching the project.
         provider = make_provider(config)
+        image_provider = make_image_provider(config) if config.images.enabled else None
         roles, skills = _roles_and_skills(config)
         prompt_memory = _prompt_memory(config, memory, pid)
     except (ConfigError, RoleError, SkillError, MemoryStoreError) as e:
@@ -824,6 +829,7 @@ def run(
     typer.echo(f"router: {_describe_router(router)}")
     use_selector = router is not None and config.router.selector
     typer.echo(f"model selector: {_describe_selector(router, config)}")
+    typer.echo(f"images: {_describe_images(config)}")
     events = store.events(pid)
     with quality, CostLedger.for_workspace(config.workspace) as ledger:
         spent_before = ledger.spent_nusd(project_id=pid)
@@ -845,6 +851,11 @@ def run(
             quality=quality,
             router=router,
             selector=ModelSelectorAgent(gateway) if use_selector else None,
+            images=(
+                ImageGateway(config, image_provider, guard=guard)
+                if image_provider is not None
+                else None
+            ),
         )
         try:
             report = orchestrator.run(pid)
@@ -862,6 +873,17 @@ def run(
     for line in _report_lines(report):
         typer.echo(line)
     raise typer.Exit(RUN_EXIT_CODES[report.reason])
+
+
+def _describe_images(config: AutomaConfig) -> str:
+    """The ``images:`` line of ``automa run`` (D101)."""
+    price = config.image_price()
+    if price is None:
+        return "off (set [images] model to let the designer role generate images)"
+    return (
+        f"{config.images.model} (${price:.4f} per image, at most "
+        f"{config.images.max_per_task} per task attempt; counted by the budget)"
+    )
 
 
 def _open_quality(config: AutomaConfig) -> QualityLog:

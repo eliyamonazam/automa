@@ -14,6 +14,12 @@ For every task of a plan that still has to run, two numbers:
   runs on a tier without at least ``min_samples`` judged attempts of that role.
   It counts worker cost only (verdicts do not store their cost; D56).
 
+Image generation (D101): a task whose role lists ``generate_image`` may also make
+up to ``[images] max_per_task`` images per attempt at the ``[images]`` model's
+``per_image_usd``. The worst case adds every one of them for every attempt left;
+the expected cost (when known) conservatively adds the full image allowance for
+every expected attempt, since the quality log does not hold image costs.
+
 The estimate is pure and advisory: no model call, no write, no authorization.
 Whatever it says, every call still goes through the gateway and the
 ``BudgetGuard``, which alone bounds spending.
@@ -29,9 +35,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from automa.agents.verifier import VerifierSettings
 from automa.agents.worker import WorkerSettings
-from automa.budget.guard import cap_to_nusd
+from automa.budget.guard import NANO_PER_USD, cap_to_nusd
 from automa.config import AutomaConfig, ConfigError, Tier
-from automa.orchestrator import OrchestratorSettings, next_tier
+from automa.orchestrator import OrchestratorSettings, next_tier, uses_images
 from automa.plan.models import MAX_TASK_ATTEMPTS, Plan
 from automa.quality import QualityStats
 from automa.roles.registry import RoleRegistry
@@ -127,6 +133,8 @@ class TaskEstimate(_Frozen):
     expected_nusd: int | None = Field(default=None, ge=0)
     max_calls: int = Field(ge=0)
     worst_nusd: int = Field(ge=0)
+    max_images: int = Field(default=0, ge=0)  # images all attempts left may generate
+    image_worst_nusd: int = Field(default=0, ge=0)  # their cost (included in worst_nusd)
     done_attempts: int = Field(default=0, ge=0)  # attempts already stored (resume)
     reverify: bool = False  # the last stored attempt still has to be judged
 
@@ -259,6 +267,9 @@ def estimate_plan(
         raise ValueError(f"unknown task id(s) in progress: {', '.join(bad)}")
 
     cap = cap_to_nusd(config.limits.per_call_usd)
+    image_price = config.image_price()
+    # Rounded up, like the ledger: an image is never estimated below its price.
+    image_nusd = math.ceil(image_price * NANO_PER_USD) if image_price is not None else 0
     available = set(config.tiers)
     out: list[TaskEstimate] = []
     for task in plan.topological_order():
@@ -311,6 +322,17 @@ def estimate_plan(
         exp = _expected(
             schedule, task.role, config, by_key, s.min_samples, first_done=prog.unjudged
         )
+        images = 0
+        if uses_images(role):
+            if image_price is None:
+                # The orchestrator stops such a task before any call (D101).
+                raise ConfigError(
+                    f"role '{task.role}' needs images: set [images] model in automa.toml"
+                )
+            images = left * config.images.max_per_task
+            if exp is not None:
+                extra = math.ceil(exp[0] * config.images.max_per_task * image_nusd)
+                exp = (exp[0], exp[1] + extra)
         out.append(
             TaskEstimate(
                 task_id=task.id,
@@ -325,7 +347,9 @@ def estimate_plan(
                 expected_attempts=exp[0] if exp is not None else None,
                 expected_nusd=exp[1] if exp is not None else None,
                 max_calls=calls,
-                worst_nusd=calls * cap,
+                worst_nusd=calls * cap + images * image_nusd,
+                max_images=images,
+                image_worst_nusd=images * image_nusd,
                 done_attempts=prog.attempts,
                 reverify=prog.unjudged,
             )

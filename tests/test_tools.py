@@ -435,6 +435,7 @@ class TestToolDefinition:
             "delete_file": RiskLevel.WRITE,
             "fetch_url": RiskLevel.EXTERNAL,
             "github_read": RiskLevel.EXTERNAL,
+            "generate_image": RiskLevel.WRITE,
         }
         irreversible = {t.name for t in default_tools() if t.irreversible}
         assert irreversible == {"delete_file"}

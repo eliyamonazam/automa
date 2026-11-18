@@ -40,7 +40,7 @@ from automa.config import AutomaConfig, BudgetLimits, ConfigError
 from automa.events import Event
 from automa.llm.gateway import LLMGateway
 from automa.llm.provider import Provider, ProviderError
-from automa.orchestrator import Orchestrator, OrchestratorSettings, StopReason
+from automa.orchestrator import Orchestrator, OrchestratorSettings, StopReason, usable_roles
 from automa.project import ProjectStatus, ProjectStore
 from automa.quality import QualityLog
 from automa.roles import RoleRegistry
@@ -151,7 +151,10 @@ def run_benchmark(
     )
 
     executive = ExecutiveAgent(
-        gateway, settings=ExecutiveSettings(), known_roles=roles.names(), events=events
+        gateway,
+        settings=ExecutiveSettings(),
+        known_roles=usable_roles(roles, config),
+        events=events,
     )
     stop, detail = _plan(executive, store, pid, benchmark)
     passed: list[str] = []

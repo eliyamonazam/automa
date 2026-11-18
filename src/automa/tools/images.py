@@ -12,9 +12,11 @@ The tool:
 * never shows a provider's error text to the model (it may echo a key);
 * lets a budget refusal propagate, so the run stops exactly as for a chat call.
 
-It is in neither ``default_tools()`` nor any built-in role: a role gets it only
-when it lists it explicitly (wiring is a later roadmap item). A ``GenerateImage``
-without a gateway refuses every call.
+``default_tools()`` holds an *unconfigured* instance (no gateway: it refuses
+every call) so that role files listing it can be checked; the Orchestrator swaps
+in a configured instance per task attempt, bound to that project/task's
+``CallContext``, the task's tier and ``[images] max_per_task`` (D101). Only a
+role that lists it explicitly (the built-in ``designer``) can call it.
 """
 
 from __future__ import annotations
@@ -149,7 +151,12 @@ class GenerateImage(Tool):
         model: str | None = None,
         context: CallContext | None = None,
         tier: Tier = Tier.MEDIUM,
+        max_calls: int | None = None,
     ) -> None:
+        if max_calls is not None and (
+            isinstance(max_calls, bool) or not isinstance(max_calls, int) or max_calls < 1
+        ):
+            raise ValueError("max_calls must be a positive integer")
         if gateway is not None:
             if model is None or context is None:
                 raise ValueError("generate_image with a gateway needs a model and a context")
@@ -160,18 +167,47 @@ class GenerateImage(Tool):
         self._model = model
         self._context = context
         self._tier = tier
+        self._max_calls = max_calls
+        self._calls = 0
 
     @property
     def model(self) -> str | None:
         return self._model
+
+    @property
+    def configured(self) -> bool:
+        return self._gateway is not None
+
+    @property
+    def context(self) -> CallContext | None:
+        return self._context
+
+    @property
+    def tier(self) -> Tier:
+        return self._tier
+
+    @property
+    def max_calls(self) -> int | None:
+        return self._max_calls
+
+    @property
+    def calls(self) -> int:
+        """Calls that reached the gateway (paid or refused) on this instance."""
+        return self._calls
 
     def run(self, args: ToolArgs, workspace: Workspace) -> str:
         if not isinstance(args, GenerateImageArgs):
             raise TypeError("arguments were not validated by the executor")
         if self._gateway is None or self._model is None or self._context is None:
             raise ToolError("image generation is not configured")
+        if self._max_calls is not None and self._calls >= self._max_calls:
+            raise ToolError(
+                f"image limit reached: at most {self._max_calls} image(s) per task attempt"
+            )
         expected = image_format_for(args.path)
         request = ImageRequest(model=self._model, prompt=args.prompt, size=args.size)
+        # Counted before the call: a failed or refused call still uses up the limit.
+        self._calls += 1
         try:
             result = self._gateway.generate(request, context=self._context, tier=self._tier)
         except ProviderError as e:

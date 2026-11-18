@@ -60,7 +60,7 @@ def test_no_log_keeps_requested_tiers_and_creates_nothing(env: cr.Env) -> None:
     assert data["enabled"] is False
     assert (data["min_attempts"], data["min_pass_rate"]) == (5, 0.8)
     roles = by_role(data)
-    assert set(roles) == {"architect", "developer", "researcher", "writer"}
+    assert set(roles) == {"architect", "designer", "developer", "researcher", "writer"}
     w = roles["writer"]
     assert (w["requested"], w["tier"], w["model"], w["reason"]) == (
         "medium",

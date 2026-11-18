@@ -459,18 +459,26 @@ def test_image_format_for(path: str, fmt: str | None) -> None:
 # --- the tool -------------------------------------------------------------------------
 
 
-def test_tool_is_write_risk_and_not_a_default_tool() -> None:
+def test_tool_is_write_risk_and_unconfigured_in_default_tools(tmp_path: Path) -> None:
     assert GenerateImage.risk is RiskLevel.WRITE
     assert not GenerateImage.irreversible
-    assert "generate_image" not in {t.name for t in default_tools()}
+    found = [t for t in default_tools() if t.name == "generate_image"]
+    assert len(found) == 1
+    assert isinstance(found[0], GenerateImage) and not found[0].configured
+    # The default instance refuses every call: nothing to spend through.
+    ws = Workspace(tmp_path)
+    args = GenerateImageArgs.model_validate({"prompt": "x", "path": "a.png"})
+    with pytest.raises(ToolError, match="not configured"):
+        found[0].run(args, ws)
+    assert list(tmp_path.iterdir()) == []
 
 
-def test_no_builtin_role_lists_generate_image() -> None:
+def test_only_the_designer_role_lists_generate_image() -> None:
     from automa.roles import RoleRegistry
 
-    tools = [*default_tools(), GenerateImage()]
-    for role in RoleRegistry.builtin(tools=tools):
-        assert "generate_image" not in role.tools
+    roles = RoleRegistry.builtin(tools=default_tools())
+    users = [r.name for r in roles if "generate_image" in r.tools]
+    assert users == ["designer"]
 
 
 def test_tool_writes_a_png(tmp_path: Path) -> None:

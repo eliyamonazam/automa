@@ -56,6 +56,16 @@ output_per_mtok = 20.00
 # prefer_other_family = true
 # models = ["openai/gpt-5.5", "google/gemini-3-pro"]
 
+# Image generation (optional, D101): the built-in "designer" role may call
+# generate_image with this catalogued image model (needs "image_out" and
+# per_image_usd, at most [limits] per_call_usd). Every image is authorized and
+# recorded by the BudgetGuard like any model call. Unset = off: the Executive is not
+# offered the designer role, and a designer task stops the run before any call.
+# max_per_task: images one task attempt may generate (1..20).
+# [images]
+# model = "example/image-model"
+# max_per_task = 4
+
 # Hard caps in USD. Reaching a cap stops the run; per_call must not exceed the others.
 [limits]
 project_usd = 5.0

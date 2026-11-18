@@ -192,7 +192,27 @@ def _check_exists(executor: ToolExecutor, check: FileExistsCheck) -> tuple[bool,
     listing = executor.execute("list_dir", {"path": check.path})
     if listing.ok:
         return True, f"directory {check.path} exists"
+    if _listed_as_file(executor, check.path):
+        # A binary file (e.g. a generated image, D101) exists but is not text.
+        return True, f"file {check.path} exists"
     return False, f"{check.path} not found or unreadable: {read.error}"
+
+
+def _listed_as_file(executor: ToolExecutor, path: str) -> bool:
+    """Whether the parent directory's listing shows ``path`` as a regular file.
+
+    Symlinks and other entries are listed with a ``[kind]`` marker instead of a size,
+    so they never count; a truncated listing that misses the name fails closed.
+    """
+    parent, _, name = path.rpartition("/")
+    listing = executor.execute("list_dir", {"path": parent})
+    if not listing.ok:
+        return False
+    for line in listing.content.split("\n"):
+        entry, sep, size = line.rpartition("\t")
+        if sep and entry == name and size.isdigit():
+            return True
+    return False
 
 
 def _check_contains(executor: ToolExecutor, check: FileContainsCheck) -> tuple[bool, str]:

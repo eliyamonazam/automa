@@ -43,14 +43,17 @@ def default_tools(sandbox: DockerSandbox | None = None) -> list[Tool]:
     call needs the user's approval (D72, D73). ``web_search`` is not included: no
     real search service is chosen yet (D74). ``github_read`` is ``external`` too:
     only the ``researcher`` role lists it and every call needs approval (D75, D76).
-    ``generate_image`` is not included: it needs an ``ImageGateway`` and a project
-    context, and no role lists it yet (D100).
+    ``generate_image`` is included *unconfigured* (it refuses every call) so role
+    files can list it; the Orchestrator replaces it per task attempt with an
+    instance bound to the ``ImageGateway``, the project/task context and the
+    ``[images]`` limits (D100, D101). Only the ``designer`` role lists it.
     """
     return [
         *(cls() for cls in FILE_TOOLS),
         RunCommand(sandbox=sandbox),
         FetchUrl(),
         GitHubRead(),
+        GenerateImage(),
     ]
 
 

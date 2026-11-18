@@ -32,7 +32,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from automa.config import AutomaConfig, Capability, ConfigError, Tier
-from automa.llm.gateway import CallContext, CallEstimate, CallGuard
+from automa.llm.gateway import CallContext, CallEstimate, CallGuard, LLMGateway
 from automa.llm.openai_compat import _RETRYABLE_STATUS, _retry_after
 from automa.llm.provider import ProviderError
 from automa.llm.types import ChatResponse, LLMResult, Message, Usage
@@ -260,6 +260,10 @@ class ImageGateway:
     @property
     def config(self) -> AutomaConfig:
         return self._config
+
+    def shares_guard_with(self, gateway: LLMGateway) -> bool:
+        """Whether ``gateway`` spends through the very same ``CallGuard`` (D101)."""
+        return isinstance(gateway, LLMGateway) and gateway._guard is self._guard
 
     def price_per_image(self, model: str) -> float:
         """USD per image of ``model``; ``ConfigError`` unless it is a priced image model."""
