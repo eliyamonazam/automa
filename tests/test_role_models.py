@@ -392,7 +392,8 @@ def test_worker_rejects_unpriced_model_before_any_call(tmp_path: Path) -> None:
 # --- router and estimate ----------------------------------------------------------
 
 
-def test_router_is_skipped_for_role_with_models(tmp_path: Path) -> None:
+def test_router_routes_role_with_models_on_role_evidence(tmp_path: Path) -> None:
+    # D98 (replaces the D97 "router.skipped"): no data → the role's default model.
     rig = RRig(tmp_path, to.write("a"), to.make_plan(to.task_dict("a")), WRITER)
     router = Router(rig.cfg, [])
     Orchestrator(
@@ -405,10 +406,9 @@ def test_router_is_skipped_for_role_with_models(tmp_path: Path) -> None:
         clock=to.clock,
         router=router,
     ).run(to.PID)
-    assert rig.events("router.skipped") == [
-        {"task": "a", "role": "writer", "reason": "role_models"}
-    ]
-    assert rig.events("router.decision") == []
+    assert rig.events("router.skipped") == []
+    (decision,) = rig.events("router.decision")
+    assert (decision["model"], decision["source"]) == ("ds-b", "role")
     assert rig.models() == ["ds-b", "ds-b"]
 
 

@@ -3533,6 +3533,7 @@ def _evidence_json(e: TierEvidence) -> dict[str, Any]:
         "attempts": e.attempts,
         "passed": e.passed,
         "pass_rate": e.pass_rate,
+        "avg_cost_usd": nusd_to_usd(e.avg_cost_nusd) if e.avg_cost_nusd is not None else None,
         "qualified": e.qualified,
         "proven_weak": e.proven_weak,
     }
@@ -3547,6 +3548,7 @@ def _route_entry(router: Router, role: str, requested: Tier | None) -> dict[str,
         "model": None,
         "reason": None,
         "changed": False,
+        "source": "role" if router.config.role_models(role) else "tier",
         "error": None,
         "evidence": [_evidence_json(e) for e in router.evidence(role)],
     }
@@ -3572,15 +3574,22 @@ def _route_lines(router: Router, entries: list[dict[str, Any]]) -> list[str]:
         else:
             model = _safe(entry["model"]).replace("\n", " ").replace("\t", " ")
             reason = _ROUTE_REASONS[RouteReason(entry["reason"])]
+            source = "  [role models]" if entry["source"] == "role" else ""
             lines.append(
-                f"{role}  requested {entry['requested']} -> {entry['tier']} ({model}): {reason}"
+                f"{role}  requested {entry['requested']} -> {entry['tier']} ({model}): "
+                f"{reason}{source}"
             )
         for e in router.evidence(role):
             rate = _pct(e.pass_rate) if e.pass_rate is not None else "-"
             model = _safe(e.model).replace("\n", " ").replace("\t", " ")
+            avg = (
+                f"  avg ${nusd_to_usd(e.avg_cost_nusd):.6f}/attempt"
+                if e.avg_cost_nusd is not None
+                else ""
+            )
             lines.append(
                 f"  {e.tier.value:<6}  {model}  ${e.price_per_mtok:g}/Mtok  "
-                f"{e.passed}/{e.attempts} passed ({rate})  {_evidence_state(e)}"
+                f"{e.passed}/{e.attempts} passed ({rate})  {_evidence_state(e)}{avg}"
             )
     return lines
 

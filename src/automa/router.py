@@ -19,6 +19,13 @@ The router is pure: it reads statistics and the configuration, calls no model,
 writes nothing and never authorizes anything. Spending stays bounded by the
 gateway and the BudgetGuard whatever tier is chosen, and the orchestrator still
 escalates after rejections.
+
+Per-model routing (D98): for a role with its own model list (``[roles.<name>]
+models``, D97) the evidence of a tier is the statistics of the *role's* model at
+that tier (``AutomaConfig.model_for_role``), priced from the catalog. So the
+router picks the cheapest model of the role's ladder that has proven good enough,
+expressed as the tier that runs it; the role's default model is kept otherwise.
+Models outside the role's ladder are never chosen.
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -57,6 +65,7 @@ class TierEvidence(_Frozen):
     price_per_mtok: float = Field(ge=0)  # input + output price, USD per 1M tokens
     attempts: int = Field(ge=0)
     passed: int = Field(ge=0)
+    avg_cost_nusd: int | None = Field(default=None, ge=0)  # mean worker cost per attempt
     qualified: bool
     proven_weak: bool
 
@@ -73,6 +82,7 @@ class RouteDecision(_Frozen):
     tier: Tier
     model: str
     reason: RouteReason
+    source: Literal["tier", "role"] = "tier"  # evidence of tier models or role models
     evidence: list[TierEvidence]  # every configured tier, lowest first
 
     @property
@@ -114,12 +124,16 @@ class Router:
         return self._config
 
     def evidence(self, role: str) -> list[TierEvidence]:
-        """Evidence for every configured tier (lowest tier first)."""
+        """Evidence for every configured tier (lowest tier first).
+
+        The model of a tier is the role's own model at that tier when the role has
+        a model list (D98), else the tier's model.
+        """
         if not _ROLE_RE.fullmatch(role):
             raise ValueError(f"invalid role name {role!r}")
         out: list[TierEvidence] = []
         for tier in sorted(self._config.tiers, key=_TIER_INDEX.__getitem__):
-            model = self._config.model_for(tier)
+            model = self._config.model_for_role(role, tier)
             price = self._config.price_for(model)
             st = self._stats.get((role, model))
             attempts = st.attempts if st is not None else 0
@@ -134,6 +148,7 @@ class Router:
                     price_per_mtok=price.input_per_mtok + price.output_per_mtok,
                     attempts=attempts,
                     passed=passed,
+                    avg_cost_nusd=st.avg_cost_nusd if st is not None else None,
                     qualified=good,
                     proven_weak=enough and not good,
                 )
@@ -174,5 +189,6 @@ class Router:
             tier=chosen.tier,
             model=chosen.model,
             reason=reason,
+            source="role" if self._config.role_models(role) else "tier",
             evidence=evidence,
         )

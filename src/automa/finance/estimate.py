@@ -291,8 +291,8 @@ def estimate_plan(
             raise ConfigError(f"no model configured for tier '{prog.tier.value}'")
         if not prog.fresh:
             start = prog.tier if prog.tier is not None else requested
-        elif router is not None and not config.role_models(task.role):
-            # The orchestrator never routes a role with its own model list (D97).
+        elif router is not None:
+            # Role model lists are routed on their own models' evidence (D98).
             start = router.route(task.role, requested).tier
         else:
             start = requested

@@ -479,14 +479,6 @@ class Orchestrator:
         role_ladder = self._config.role_models(task.role)
         if state.tier is not None:
             tier = state.tier  # already chosen (routed or escalated): never re-route
-        elif self._router is not None and not history and role_ladder:
-            # The router's evidence is per tier model, not per role model (D97).
-            tier = requested
-            self._emit(
-                project_id,
-                "router.skipped",
-                {"task": task.id, "role": task.role, "reason": "role_models"},
-            )
         elif self._router is not None and not history:
             tier = self._route(self._router, project_id, task, requested)
         else:
@@ -560,7 +552,8 @@ class Orchestrator:
                 "reason": decision.reason.value,
                 "attempts": best.attempts,
                 "passed": best.passed,
-            },
+            }
+            | ({"source": "role"} if decision.source == "role" else {}),
         )
         return decision.tier
 

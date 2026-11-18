@@ -113,6 +113,7 @@ def test_cheaper_qualified_tier_is_shown(env: cr.Env) -> None:
         "attempts": 5,
         "passed": 5,
         "pass_rate": 1.0,
+        "avg_cost_usd": 1e-06,
         "qualified": True,
         "proven_weak": False,
     }

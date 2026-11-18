@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-18 — M11: انتخاب مدل داده‌محور
+- **انجام‌شده:** Router داده‌محور برای نقش دارای `[roles.<name>] models` دیگه رد نمی‌شه: شواهد هر سطح آمار مدل خود نقش در اون سطح (با قیمت کاتالوگ) است، پس ارزان‌ترین مدل نردبان که `min_attempts` و `min_pass_rate` رو داره انتخاب می‌شه و وگرنه مدل پیش‌فرض نقش (قاعدهٔ «هرگز گران‌تر بدون اثبات ضعف» همونه). مدل بیرون از نردبان هرگز انتخاب نمی‌شه. `router.skipped` حذف شد؛ `router.decision` کلید `source: role` داره. `estimate_plan` هم همین مسیر رو می‌ره. `automa quality route` مدل هر سطح، میانگین هزینهٔ هر تلاش و نشان `[role models]` رو نشون می‌ده (D98).
+- **فایل‌های اصلی:** `src/automa/router.py`، `src/automa/orchestrator.py`، `src/automa/finance/estimate.py`، `src/automa/cli.py`، `tests/test_role_model_router.py` (۳۰ تست جدید)، `tests/test_role_models.py`، `tests/test_cli_quality_route.py`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D98).
+- **تست‌ها:** `pytest` ← ۳۸۹۶ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check`، `ruff format --check` و `mypy` روی ماژول‌های تغییرکرده سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و وابستگی‌ها دوباره نصب شدن.
+- **برای صاحب مخزن:** با `[router] enabled = true` (یا `automa run --router`) و داده کافی در لاگ کیفیت، نقش‌های دارای `models` از ارزان‌ترین مدل اثبات‌شده شروع می‌کنن؛ قبلش با `automa quality route` ببین.
+- **قدم بعدی:** Agent انتخاب مدل (`ModelSelectorAgent`) وقتی داده کافی نیست.
+
 ## 2026-11-18 — M11: انتخاب مدل برای هر نقش (قانون‌محور)
 - **انجام‌شده:** `[roles.<name>]` حالا `models` (نردبان مدل نقش، ضعیف‌ترین اول) و `capabilities` (توانایی‌های لازم) می‌گیره؛ همهٔ مدل‌ها باید در کاتالوگ با قیمت، `text` و توانایی‌های لازم باشن. `AutomaConfig.model_for_role` خالص و قطعیه: جایگاه سطح بین سطح‌های پیکربندی‌شده عضو فهرست رو انتخاب می‌کنه (سطح بالاتر ← آخرین عضو)، پس ارتقای سطح همچنان کار می‌کنه و هرگز مدل ضعیف‌تری نمی‌ده. Orchestrator مدل هر تلاش رو به Worker می‌ده (`WorkerAgent.run(model=…)` ← `LLMGateway.complete(model=…)` با همون BudgetGuard و Ledger)، و در `TaskState.model` و رویدادهای `orchestrator.attempt`/`worker.started` ثبت می‌کنه. Router برای نقش دارای فهرست مدل اجرا نمی‌شه (`router.skipped`) و برآورد هزینه هم مدل نقش رو استفاده می‌کنه. فهرست مدل برای نقش ناموجود خطاست (D97).
 - **فایل‌های اصلی:** `src/automa/config.py` (`RoleSettings`، `model_for_role`)، `src/automa/agents/worker.py`، `src/automa/orchestrator.py`، `src/automa/plan/models.py` (`TaskState.model`)، `src/automa/finance/estimate.py`، `tests/test_role_models.py` (۴۸ تست جدید)، `automa.toml.example`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D97).
