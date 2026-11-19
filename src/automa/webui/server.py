@@ -14,7 +14,10 @@ Serves the pages of :mod:`automa.webui.render` with the standard library's
 
 By default nothing here writes a file, creates a directory, decides an approval or calls
 a model. Only with ``actions`` (``automa web --allow-actions``, D123) does it also accept
-``POST`` to the approve/reject paths, checked and recorded by :mod:`automa.webui.actions`.
+``POST`` to the approve/reject paths, checked and recorded by :mod:`automa.webui.actions`,
+and — when a planner is given (D124) — to the new-idea paths of :mod:`automa.webui.ideas`
+(``/new``, ``/projects/<pid>/clarify``), which call the Executive through the guarded
+gateway. Every POST passes the same Host, same-origin and CSRF checks first.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ from automa.webui.actions import (
     MAX_FORM_BYTES,
     ActionRefused,
     ActionSettings,
+    ActionTarget,
     allowed_origins,
     check_same_origin,
     check_token,
@@ -44,11 +48,23 @@ from automa.webui.actions import (
     parse_action_path,
     parse_form,
 )
+from automa.webui.ideas import (
+    ANSWER_FIELDS,
+    IDEA_FIELDS,
+    MAX_IDEA_FORM_BYTES,
+    NEW_PATH,
+    IdeaFlow,
+    IdeaPlanner,
+    is_idea_path,
+    parse_clarify_path,
+)
 from automa.webui.render import (
     ACTION_CONTENT_SECURITY_POLICY,
     CONTENT_SECURITY_POLICY,
     ActionForms,
     page,
+    render_clarify,
+    render_new_idea,
     render_overview,
     render_project,
     text,
@@ -166,8 +182,11 @@ class WebApp:
         allowed: frozenset[str],
         *,
         actions: ActionSettings | None = None,
+        planner: IdeaPlanner | None = None,
     ):
         self._store = ProjectStore.for_workspace(workspace)
+        # New ideas only in action mode (D124); a read-only server never plans.
+        self._ideas = IdeaFlow(self._store, planner) if actions is not None and planner else None
         self._ledger_path = ledger_path
         self._allowed = allowed
         self._actions = actions
@@ -178,6 +197,16 @@ class WebApp:
     @property
     def actions_enabled(self) -> bool:
         return self._actions is not None
+
+    @property
+    def ideas_enabled(self) -> bool:
+        return self._ideas is not None
+
+    def max_body_bytes(self, target: str) -> int:
+        """The largest POST body accepted for ``target`` (idea forms are larger)."""
+        if self._ideas is not None and is_idea_path(urlsplit(target).path):
+            return MAX_IDEA_FORM_BYTES
+        return MAX_FORM_BYTES
 
     def error(self, status: int, title: str, detail: str = "") -> Response:
         """An error page with this app's security headers."""
@@ -207,7 +236,7 @@ class WebApp:
     ) -> Response:
         if method not in self._methods:
             detail = (
-                "Only approve/reject forms are accepted."
+                "Only the forms of these pages are accepted."
                 if self._actions is not None
                 else "This interface is read-only."
             )
@@ -226,15 +255,54 @@ class WebApp:
         if self._actions is None:  # POST is only allowed in action mode (never reached)
             return self.error(405, "Method not allowed", "This interface is read-only.")
         parts = urlsplit(target)
+        if self._ideas is not None and not parts.query and is_idea_path(parts.path):
+            return self._post_idea(parts.path, headers, body)
         action = parse_action_path(parts.path) if not parts.query else None
         if action is None:
             return self.error(404, "Not found")
+        lowered = self._single_headers(headers)
+        if isinstance(lowered, Response):
+            return lowered
+        return self._decide(action, lowered, body)
+
+    def _redirect(self, location: str) -> Response:
+        return _html(
+            303,
+            page("Done", f'<p><a href="{text(location)}">continue</a></p>', actions=True),
+            (("Location", location),),
+            security=self._security,
+        )
+
+    def _post_idea(self, path: str, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
+        """``POST /new`` or ``/projects/<pid>/clarify`` (D124), after the same checks."""
+        if self._actions is None or self._ideas is None:  # never reached
+            return self.error(404, "Not found")
+        lowered = self._single_headers(headers)
+        if isinstance(lowered, Response):
+            return lowered
+        pid = parse_clarify_path(path)
+        fields = IDEA_FIELDS if pid is None else ANSWER_FIELDS
+        try:
+            check_same_origin(lowered, self._actions)
+            form = parse_form(lowered, body, fields=fields, max_bytes=MAX_IDEA_FORM_BYTES)
+            check_token(form, self._actions)
+            location = self._ideas.start(form) if pid is None else self._ideas.answer(pid, form)
+        except ActionRefused as e:
+            return self.error(e.status, "Refused", e.message)
+        return self._redirect(location)
+
+    def _single_headers(self, headers: Sequence[tuple[str, str]]) -> dict[str, str] | Response:
         lowered: dict[str, str] = {}
         for name, value in headers:
             key = name.lower()
             if key in lowered and key in _SINGLE_HEADERS:
                 return self.error(400, "Refused", f"duplicate {key} header")
             lowered.setdefault(key, value)
+        return lowered
+
+    def _decide(self, action: ActionTarget, lowered: dict[str, str], body: bytes) -> Response:
+        if self._actions is None:  # never reached
+            return self.error(405, "Method not allowed", "This interface is read-only.")
         try:
             check_same_origin(lowered, self._actions)
             form = parse_form(lowered, body)
@@ -253,6 +321,18 @@ class WebApp:
             security=self._security,
         )
         return done
+
+    def _idea_lines(self, pid: str, planned: bool) -> tuple[str | None, bool]:
+        """Cost range of a planned project and whether questions wait (D124)."""
+        if self._ideas is None:
+            return None, False
+        if planned:
+            return self._ideas.planner.cost_range(pid), False
+        try:
+            self._ideas.pending_questions(pid)
+        except ActionRefused:
+            return None, False
+        return None, True
 
     def _notice(self, pid: str, query: str) -> str | None:
         """One line about a decision made from this page (``?decided=<id>``)."""
@@ -281,7 +361,23 @@ class WebApp:
             view = build_overview(self._store, spent)
             if err:
                 view = view.model_copy(update={"errors": (*view.errors, err)})
-            return _html(200, render_overview(view, actions=actions), security=self._security)
+            document = render_overview(view, actions=actions, ideas=self._ideas is not None)
+            return _html(200, document, security=self._security)
+        if self._ideas is not None and self._actions is not None:
+            forms = ActionForms(self._actions.csrf_token)
+            if path == NEW_PATH:
+                return _html(200, render_new_idea(forms), security=self._security)
+            clarify_pid = parse_clarify_path(path)
+            if clarify_pid is not None:
+                try:
+                    questions = self._ideas.pending_questions(clarify_pid)
+                    goal = self._store.load(clarify_pid).goal
+                except ActionRefused as e:
+                    return self.error(e.status, "Not available", e.message)
+                except ProjectStoreError as e:
+                    return self.error(500, "Project unreadable", str(e))
+                document = render_clarify(clarify_pid, goal, questions, forms)
+                return _html(200, document, security=self._security)
         if path.startswith(_PROJECT_PREFIX):
             raw = unquote(path[len(_PROJECT_PREFIX) :])
             try:
@@ -299,7 +395,11 @@ class WebApp:
                 pview = pview.model_copy(update={"errors": (*pview.errors, err)})
             forms = ActionForms(self._actions.csrf_token) if self._actions is not None else None
             notice = self._notice(pid, parts.query) if actions and parts.query else None
-            return _html(200, render_project(pview, forms, notice), security=self._security)
+            cost_range, waiting = self._idea_lines(pid, pview.plan_version is not None)
+            document = render_project(
+                pview, forms, notice, cost_range=cost_range, questions_waiting=waiting
+            )
+            return _html(200, document, security=self._security)
         return self.error(404, "Not found")
 
 
@@ -320,7 +420,7 @@ def make_handler(
             if len(lengths) != 1 or not lengths[0].strip().isdigit():
                 return app.error(411, "Length required")
             length = int(lengths[0].strip())
-            if length > MAX_FORM_BYTES:
+            if length > app.max_body_bytes(self.path):
                 return app.error(413, "Refused", "form is too large")
             return self.rfile.read(length) if length else b""
 
@@ -372,11 +472,13 @@ def create_server(
     port: int = DEFAULT_PORT,
     log: Callable[[str], None] | None = None,
     allow_actions: bool = False,
+    planner: IdeaPlanner | None = None,
 ) -> ThreadingHTTPServer:
     """A bound (not yet serving) server. ``port=0`` picks a free port (tests).
 
     ``allow_actions`` (D123) enables approve/reject forms with a fresh CSRF token for
-    this server's lifetime; the default is the read-only server of D78."""
+    this server's lifetime; the default is the read-only server of D78. ``planner``
+    (only used with ``allow_actions``, D124) enables the "New idea" pages."""
     host = validate_bind_host(host)
     port = validate_port(port)
 
@@ -394,7 +496,7 @@ def create_server(
         if allow_actions
         else None
     )
-    app = WebApp(workspace, ledger_path, hosts, actions=actions)
+    app = WebApp(workspace, ledger_path, hosts, actions=actions, planner=planner)
     server.RequestHandlerClass = make_handler(app, log)
     return server
 

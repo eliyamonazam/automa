@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-19 — M12: رابط وب، ایده جدید از مرورگر (فرم و برنامه)
+- **انجام‌شده:** مورد «ایده جدید از مرورگر» به سه بخش شکسته شد (فرم و برنامه؛ شروع اجرا در پس‌زمینه؛ توقف) و بخش اول انجام شد. با `automa web --allow-actions` در صفحهٔ اصلی لینک «+ New idea»: فرم هدف (با تیک «اول سؤال بپرس») ← سؤال‌های Executive در فرم ← پاسخ‌ها ← برنامه، و در صفحهٔ پروژه خط «Cost range» (همون خط `automa new`). همه POSTها همون بررسی‌های Host/هم‌مبدأ/توکن CSRF رو دارن؛ هر فراخوانی Executive از gateway با BudgetGuard؛ در هر سرور فقط یک فراخوانی هم‌زمان. اجرای برنامه از مرورگر هنوز نیست (D124).
+- **فایل‌های اصلی:** `src/automa/webui/ideas.py` (جدید)، `src/automa/webui/server.py`، `src/automa/webui/render.py`، `src/automa/webui/actions.py` (`parse_form` با فیلدها و سقف قابل‌تنظیم)، `src/automa/project/store.py` (`save_questions`/`load_questions`)، `src/automa/plan/models.py` (`PendingQuestions`)، `src/automa/cli.py` (`_WebIdeaPlanner`)، `tests/test_webui_ideas.py` (۶۶ تست جدید، شامل planner واقعی CLI با `FakeProvider` و سوکت واقعی)، `tests/test_cli.py` (شمارش ساختاری gatewayها ۵ ← ۶)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D124).
+- **تست‌ها:** `pytest` ← ۴۸۴۱ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و بسته دوباره نصب شد. BudgetGuard، Policy و Approval Gate دست نخوردن.
+- **برای صاحب مخزن:** برای امتحان: `automa web --allow-actions` و در مرورگر «+ New idea». هر قدم یک فراخوانی مدل با کلید خودته (معمولاً چند سنت).
+- **قدم بعدی:** رابط وب: شروع اجرا از مرورگر (دکمه «شروع»، اجرا در پس‌زمینه با قفل).
+
 ## 2026-11-19 — M12: رابط وب، حالت عملیاتی (امنیت)
 - **انجام‌شده:** `automa web --allow-actions` (پیش‌فرض همون فقط‌خواندنی). در صفحه هر پروژه، زیر آرگومان‌های کامل هر درخواست Approval Gate دو فرم «Approve» (با چک‌باکس اجباری «همه آرگومان‌ها رو دیدم») و «Reject» (با یادداشت اختیاری). هر POST: بررسی Host، `Sec-Fetch-Site`، `Origin` (یا `Referer`)، فرم urlencoded کوچک، توکن CSRF تصادفی هر نشست، fingerprint درخواست و در انتظار بودن؛ ثبت با `record_decision` مشترک با `automa approve`/`reject` (رویداد `approval.decided` با `via: "web"`)، بعد `303` به صفحه پروژه با خط نتیجه (D123).
 - **فایل‌های اصلی:** `src/automa/webui/actions.py` (جدید)، `src/automa/tools/approval_decisions.py` (جدید)، `src/automa/webui/server.py`، `src/automa/webui/render.py`، `src/automa/webui/views.py`، `src/automa/cli.py`، `tests/test_webui_actions.py` (۷۸ تست جدید: cross-origin، `Origin: null`، توکن غلط/نشست دیگر، Content-Type، فرم خراب/بزرگ، fingerprint، تصمیم دوباره، هم‌زمانی، سوکت واقعی با chunked/بدون طول)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D123).

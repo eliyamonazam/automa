@@ -111,12 +111,20 @@ def check_same_origin(headers: Mapping[str, str], settings: ActionSettings) -> N
         raise ActionRefused(403, "request from another origin refused")
 
 
-def parse_form(headers: Mapping[str, str], body: bytes) -> dict[str, str]:
-    """The fields of a small urlencoded form; anything unusual is refused."""
+def parse_form(
+    headers: Mapping[str, str],
+    body: bytes,
+    *,
+    fields: frozenset[str] = _FORM_FIELDS,
+    max_bytes: int = MAX_FORM_BYTES,
+) -> dict[str, str]:
+    """The fields of a small urlencoded form; anything unusual is refused.
+
+    ``fields`` are the only accepted names (each at most once)."""
     ctype = headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if ctype != FORM_CONTENT_TYPE:
         raise ActionRefused(415, "only HTML form submissions are accepted")
-    if len(body) > MAX_FORM_BYTES:
+    if len(body) > max_bytes:
         raise ActionRefused(413, "form is too large")
     try:
         raw = body.decode("ascii")
@@ -126,13 +134,13 @@ def parse_form(headers: Mapping[str, str], body: bytes) -> dict[str, str]:
             strict_parsing=bool(raw),
             encoding="utf-8",
             errors="strict",
-            max_num_fields=len(_FORM_FIELDS),
+            max_num_fields=len(fields),
         )
     except (UnicodeDecodeError, ValueError):
         raise ActionRefused(400, "malformed form") from None
     form: dict[str, str] = {}
     for key, value in pairs:
-        if key not in _FORM_FIELDS or key in form:
+        if key not in fields or key in form:
             raise ActionRefused(400, "unexpected form field")
         form[key] = value
     return form

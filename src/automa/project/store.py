@@ -45,6 +45,7 @@ from automa.plan import (
     TASK_ID_PATTERN,
     Clarification,
     Clarifications,
+    PendingQuestions,
     Plan,
     Task,
     TaskResult,
@@ -59,6 +60,7 @@ PROJECTS_DIRNAME = "projects"
 PROJECT_FILE = "project.json"
 PLAN_FILE = "plan.json"
 CLARIFICATIONS_FILE = "clarifications.json"
+QUESTIONS_FILE = "questions.json"
 EVENTS_FILE = "events.jsonl"
 TASKS_DIR = "tasks"
 TASK_STATE_FILE = "state.json"
@@ -502,6 +504,56 @@ class ProjectStore:
             return list(Clarifications.model_validate(raw).items)
         except ValidationError as e:
             raise ProjectStoreError(f"{path}: invalid clarifications file") from e
+
+    def questions_file(self, project_id: str) -> Path:
+        return self.project_dir(project_id) / QUESTIONS_FILE
+
+    def save_questions(self, project_id: str, questions: list[str]) -> list[str]:
+        """Write the not-yet-answered questions once (``questions.json``, D124).
+
+        Used by the web UI between asking and answering. Never overwritten: a second
+        save raises ``ProjectConflict``; a project with answers already is refused.
+        """
+        self._require(project_id)
+        try:
+            record = PendingQuestions.model_validate({"questions": list(questions)})
+        except ValidationError as e:
+            raise ProjectStoreError(f"invalid questions for project {project_id!r}") from e
+        path = self.questions_file(project_id)
+        with self._lock:
+            if path.is_symlink():
+                raise ProjectStoreError(f"{path}: questions file must not be a symlink")
+            if path.exists():
+                raise ProjectConflict(f"project {project_id!r} already has questions")
+            if self.clarifications_file(project_id).exists():
+                raise ProjectConflict(f"project {project_id!r} already has clarifications")
+            _write_json_atomic(path, record.model_dump(mode="json"))
+        self.events(project_id).emit(
+            Event(
+                ts=self._now(),
+                type="questions.saved",
+                project_id=project_id,
+                data={"count": len(record.questions)},
+            )
+        )
+        return list(record.questions)
+
+    def load_questions(self, project_id: str) -> list[str] | None:
+        """The stored questions, or ``None`` when none were stored."""
+        self._require(project_id)
+        path = self.questions_file(project_id)
+        if path.is_symlink():
+            raise ProjectStoreError(f"{path}: questions file must not be a symlink")
+        if not path.exists():
+            return None
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise ProjectStoreError(f"{path}: unreadable questions file") from e
+        try:
+            return list(PendingQuestions.model_validate(raw).questions)
+        except ValidationError as e:
+            raise ProjectStoreError(f"{path}: invalid questions file") from e
 
     # -- tasks (attempt history and state) ---------------------------------
 

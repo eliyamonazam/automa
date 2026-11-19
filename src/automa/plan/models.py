@@ -580,6 +580,26 @@ class Clarification(BaseModel):
     answer: Annotated[str, StringConstraints(strip_whitespace=True, max_length=MAX_ANSWER_CHARS)]
 
 
+class PendingQuestions(BaseModel):
+    """Questions asked by the Executive and not answered yet (``questions.json``, D124).
+
+    Written by the web UI between "new idea" and "answers"; the answers themselves go
+    to ``clarifications.json`` as before. Model output: shown escaped, never trusted.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = PLAN_SCHEMA_VERSION
+    questions: list[QuestionText] = Field(default_factory=list, max_length=MAX_CLARIFICATIONS)
+
+    @field_validator("schema_version")
+    @classmethod
+    def _known_schema(cls, v: int) -> int:
+        if v != PLAN_SCHEMA_VERSION:
+            raise ValueError(f"unsupported questions schema_version {v}")
+        return v
+
+
 class Clarifications(BaseModel):
     """On-disk record of the clarification round (``clarifications.json``)."""
 

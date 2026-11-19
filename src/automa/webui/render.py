@@ -17,7 +17,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import quote
 
+from automa.plan.models import MAX_ANSWER_CHARS
+from automa.project.store import MAX_GOAL_CHARS
 from automa.tools.approvals import MAX_NOTE_CHARS
+from automa.webui.ideas import ASK_VALUE
 from automa.webui.views import ApprovalView, Overview, ProjectView
 
 # Joiners needed by Persian text; every other Cf character (incl. bidi controls) is escaped.
@@ -103,13 +106,17 @@ def _errors(errors: tuple[str, ...]) -> str:
     return f'<section class="err"><h2>Unreadable data</h2><ul>{items}</ul></section>'
 
 
-def render_overview(view: Overview, *, actions: bool = False) -> str:
+def render_overview(view: Overview, *, actions: bool = False, ideas: bool = False) -> str:
+    """The project list. ``ideas`` (action mode with a planner, D124) adds the
+    "New idea" link."""
     mode = (
         "Actions enabled: approve or reject requests on each project page."
         if actions
         else "Read-only view."
     )
     parts = ["<h1>Automa projects</h1>", f"<p>{mode}</p>"]
+    if actions and ideas:
+        parts.append('<p><a href="/new"><strong>+ New idea</strong></a></p>')
     if not view.projects:
         parts.append("<p>No projects yet.</p>")
     else:
@@ -179,10 +186,17 @@ def _approval(project_id: str, a: ApprovalView, forms: ActionForms | None) -> st
 
 
 def render_project(
-    view: ProjectView, forms: ActionForms | None = None, notice: str | None = None
+    view: ProjectView,
+    forms: ActionForms | None = None,
+    notice: str | None = None,
+    *,
+    cost_range: str | None = None,
+    questions_waiting: bool = False,
 ) -> str:
     """One project page. ``forms`` (action mode only) adds approve/reject forms;
-    ``notice`` is a one-line result of the last decision, shown at the top."""
+    ``notice`` is a one-line result of the last decision, shown at the top;
+    ``cost_range`` is the estimate line of a planned project and ``questions_waiting``
+    links to the answer form of a new idea (D124)."""
     parts = ['<p><a href="/">← all projects</a></p>']
     if notice:
         parts.append(f'<p class="badge" dir="auto">{text(notice)}</p>')
@@ -193,6 +207,14 @@ def render_project(
         f"cost: ${view.cost_usd:.4f} · created {_time(view.created_at)} · "
         f"updated {_time(view.updated_at)}</p>",
     ]
+    if questions_waiting and forms is not None:
+        href = text(_project_href(view.id) + "/clarify")
+        parts.append(
+            f'<p class="warn">The Executive has questions: <a href="{href}">answer them</a> '
+            "to make the plan.</p>"
+        )
+    if cost_range is not None:
+        parts.append(f"<p><strong>Cost range:</strong> {text(cost_range)}</p>")
     parts.append(f"<h2>Pending approvals ({len(view.pending)})</h2>")
     if view.pending:
         parts.append("".join(_approval(view.id, a, forms) for a in view.pending))
@@ -215,3 +237,40 @@ def render_project(
         )
     parts.append(_errors(view.errors))
     return page(f"Automa — {view.id}", "".join(parts), actions=forms is not None)
+
+
+def render_new_idea(forms: ActionForms) -> str:
+    """The "New idea" form (D124): the goal and whether to ask questions first."""
+    body = (
+        '<p><a href="/">← all projects</a></p><h1>New idea</h1>'
+        "<p>The Executive may ask a few questions, then makes a plan with a cost range. "
+        "Nothing is run yet. Each step is a model call through the budget guard and may "
+        "take a minute.</p>"
+        f'<form method="post" action="/new">{_hidden("csrf", forms.csrf_token)}'
+        f'<p><textarea name="goal" rows="8" cols="80" maxlength="{MAX_GOAL_CHARS}" '
+        'dir="auto" required placeholder="What should the project achieve?"></textarea></p>'
+        f'<p><label><input type="checkbox" name="ask" value="{ASK_VALUE}" checked> '
+        "Ask clarifying questions first</label></p>"
+        '<p><button type="submit">Create plan</button></p></form>'
+    )
+    return page("Automa — new idea", body, actions=True)
+
+
+def render_clarify(project_id: str, goal: str, questions: list[str], forms: ActionForms) -> str:
+    """One answer field per stored question (questions are model output: escaped)."""
+    fields = "".join(
+        f'<p dir="auto"><label>{i + 1}. {text(q)}<br>'
+        f'<textarea name="a{i}" rows="3" cols="80" maxlength="{MAX_ANSWER_CHARS}" '
+        'dir="auto"></textarea></label></p>'
+        for i, q in enumerate(questions)
+    )
+    action = text(_project_href(project_id) + "/clarify")
+    body = (
+        f'<p><a href="{text(_project_href(project_id))}">← {text(project_id)}</a></p>'
+        f"<h1>Questions for {text(project_id)}</h1>"
+        f'<p dir="auto"><strong>Goal:</strong> {text(goal)}</p>'
+        "<p>Leave an answer empty to skip it. The plan is made after you send.</p>"
+        f'<form method="post" action="{action}">{_hidden("csrf", forms.csrf_token)}'
+        f'{fields}<p><button type="submit">Send answers and make the plan</button></p></form>'
+    )
+    return page(f"Automa — {project_id} questions", body, actions=True)

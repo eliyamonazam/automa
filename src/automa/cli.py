@@ -73,12 +73,12 @@ import re
 import sqlite3
 import sys
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any, NamedTuple
+from typing import Annotated, Any, NamedTuple, TypeVar
 
 import typer
 from pydantic import ValidationError
@@ -87,6 +87,7 @@ from automa import __version__
 from automa.agents import (
     Clarification,
     ExecutiveAgent,
+    ExecutiveError,
     ExecutiveSettings,
     PlanningFailed,
     Proposal,
@@ -287,6 +288,7 @@ from automa.tools.approvals import (
 from automa.tools.github import GitHubRead, describe_github_request
 from automa.tools.web import FetchUrl, describe_fetch_request
 from automa.webui import server as webui_server
+from automa.webui.ideas import IdeaError
 from automa.workflows import (
     WorkflowError,
     WorkflowIncompatible,
@@ -3459,6 +3461,80 @@ def reject(
     _decide(project_id, approval_id, approve=False, note=note, yes=True, config_path=config_path)
 
 
+_T = TypeVar("_T")
+
+
+class _WebIdeaPlanner:
+    """The Executive for "New idea" in ``automa web --allow-actions`` (D124).
+
+    Same steps as ``automa new``: everything is validated (``prepare``) before a
+    project is created, and every model call goes through an ``LLMGateway`` guarded by
+    a fresh ``BudgetGuard`` over the shared Ledger, with the caps of automa.toml.
+    Failures become :class:`IdeaError` with a short message (never a traceback)."""
+
+    def __init__(self, config: AutomaConfig) -> None:
+        self._config = config
+
+    def _prep(self) -> _ExecutivePrep:
+        config = self._config
+        settings = ExecutiveSettings()
+        try:
+            config.model_for(settings.tier)
+            roles, _ = _roles_and_skills(config)
+            prompt_memory = _prompt_memory(config, None, None)
+            return _ExecutivePrep(settings, make_provider(config), roles, prompt_memory)
+        except (ConfigError, RoleError, SkillError, MemoryStoreError) as e:
+            raise IdeaError("config", f"configuration: {_safe(str(e))}") from None
+
+    def prepare(self) -> None:
+        self._prep()
+
+    def _call(self, project_id: str, work: Callable[[ExecutiveAgent, ProjectStore], _T]) -> _T:
+        config = self._config
+        settings, provider, roles, prompt_memory = self._prep()
+        store = ProjectStore.for_workspace(config.workspace)
+        events = store.events(project_id)
+        with CostLedger.for_workspace(config.workspace) as ledger:
+            guard = BudgetGuard(config.limits, ledger, events=events)
+            gateway = LLMGateway(config, provider, guard=guard)
+            agent = ExecutiveAgent(
+                gateway,
+                settings=settings,
+                known_roles=usable_roles(roles, config),
+                events=events,
+                memory=prompt_memory,
+            )
+            try:
+                return work(agent, store)
+            except BudgetError as e:
+                detail = f" ({e.scope.value} cap)" if isinstance(e, BudgetExceeded) else ""
+                raise IdeaError(
+                    "budget", f"budget stop{detail}: {_safe(str(e))}; raise the cap or wait"
+                ) from None
+            except PlanningFailed as e:
+                raise IdeaError("planning", f"planning failed: {_safe(str(e))}") from None
+            except ProviderError as e:
+                raise IdeaError("provider", f"provider error: {_safe(str(e))}") from None
+            except (ExecutiveError, ProjectStoreError) as e:
+                raise IdeaError("planning", _safe(str(e))) from None
+
+    def clarify(self, project_id: str) -> list[str]:
+        def ask(agent: ExecutiveAgent, store: ProjectStore) -> list[str]:
+            return agent.clarify(store.load(project_id).goal, project_id=project_id)
+
+        return self._call(project_id, ask)
+
+    def plan(self, project_id: str, clarifications: Sequence[Clarification]) -> None:
+        def make(agent: ExecutiveAgent, store: ProjectStore) -> None:
+            plan_project(agent, store, project_id, clarifications=clarifications)
+
+        self._call(project_id, make)
+
+    def cost_range(self, project_id: str) -> str:
+        store = ProjectStore.for_workspace(self._config.workspace)
+        return _new_cost_range(self._config, store, project_id)
+
+
 @app.command()
 def web(
     port: Annotated[
@@ -3487,6 +3563,7 @@ def web(
             port=port,
             log=webui_server.stderr_log,
             allow_actions=allow_actions,
+            planner=_WebIdeaPlanner(config) if allow_actions else None,
         )
     except webui_server.WebServerError as e:
         raise _fail(str(e), EXIT_USER) from None
@@ -3497,7 +3574,8 @@ def web(
         typer.echo(f"automa web (actions enabled): {url}  (Ctrl+C to stop)")
         typer.echo(
             "approve or reject on each project page; the full arguments are shown first. "
-            "Only forms from this page are accepted."
+            "New idea: plan a project from the browser (model calls go through the budget "
+            "guard; nothing is run). Only forms from this page are accepted."
         )
     else:
         typer.echo(f"automa web (read-only): {url}  (Ctrl+C to stop)")

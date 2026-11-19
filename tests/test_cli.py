@@ -456,8 +456,8 @@ def test_cli_provider_only_reaches_a_gateway() -> None:
     assert len(bench_args) == 2
     # one guarded gateway per model-calling path: Executive planning (shared by ``new``
     # and ``self new`` via ``_plan_with_executive``), ``run``, ``review run`` and
-    # ``self propose`` and ``skill draft`` …
-    assert len(gateway_calls) == 5
+    # ``self propose``, ``skill draft`` and the web UI's "New idea" planner (D124) …
+    assert len(gateway_calls) == 6
     # … and every read of ``provider`` is exactly the argument of such a call
     gateway_args = {id(a) for c in gateway_calls for a in c.args}
     assert len(uses) == len(gateway_calls) + len(bench_args)
