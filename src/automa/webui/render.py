@@ -200,10 +200,17 @@ def render_overview(
         else "Read-only view."
     )
     parts = ["<h1>Automa projects</h1>", f"<p>{mode}</p>"]
-    if actions and ideas:
-        parts.append('<p><a href="/new"><strong>+ New idea</strong></a></p>')
+    if actions and ideas and view.projects:
+        parts.append('<p><a class="button" href="/new"><strong>+ New idea</strong></a></p>')
+    if view.showing_tests:
+        parts.append('<p class="muted"><a href="/">Hide test runs</a></p>')
+    elif view.hidden_tests:
+        parts.append(
+            f'<p class="muted">{text(str(view.hidden_tests))} test runs hidden · '
+            '<a href="/?tests=1">show them</a></p>'
+        )
     if not view.projects:
-        parts.append("<p>No projects yet.</p>")
+        parts.append(_welcome(actions=actions, ideas=ideas))
     else:
         cards = []
         for p in view.projects:
@@ -214,8 +221,9 @@ def render_overview(
             )
             cards.append(
                 '<article class="card project">'
-                f'<h2><a href="{text(_project_href(p.id))}">{text(p.id)}</a> '
+                f'<h2 dir="auto"><a href="{text(_project_href(p.id))}">{text(p.title or p.id)}</a> '
                 f'<span class="badge">{text(p.status)}</span></h2>'
+                f'<p class="muted"><code>{text(p.id)}</code></p>'
                 f'<p class="goal" dir="auto">{text(p.goal_preview)}</p>'
                 f'<p class="chips"><span>cost: {text(money(p.cost_usd, rate))}</span>'
                 f"<span>{waiting}</span>"
@@ -224,6 +232,30 @@ def render_overview(
         parts.append('<div class="cards">' + "".join(cards) + "</div>")
     parts.append(_errors(view.errors))
     return page("Automa projects", "".join(parts), actions=actions)
+
+
+WELCOME_EXAMPLES = (
+    "A one-page HTML tool that converts Persian digits to English digits and back",
+    "A short report comparing three note-taking apps for students, with sources",
+    "A Python script that renames the photos in a folder by the date they were taken",
+)
+
+
+def _welcome(*, actions: bool, ideas: bool) -> str:
+    """The empty home page: what Automa does and how to start (D138)."""
+    if not (actions and ideas):
+        return (
+            '<div class="card"><h2>No projects yet</h2>'
+            "<p>Start the page with actions enabled to plan a new idea here.</p></div>"
+        )
+    examples = "".join(f'<li dir="auto">{text(e)}</li>' for e in WELCOME_EXAMPLES)
+    return (
+        '<div class="card"><h2>👋 Welcome</h2>'
+        "<p>Describe an idea in a few sentences. Automa asks what it needs, shows a plan "
+        "and a cost range, and starts only when you press Start.</p>"
+        '<p><a class="button" href="/new"><strong>+ New idea</strong></a></p>'
+        f'<p class="muted">For example:</p><ul>{examples}</ul></div>'
+    )
 
 
 def _hidden(name: str, value: str) -> str:

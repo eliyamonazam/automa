@@ -27,9 +27,24 @@ class _View(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+BENCH_PREFIX = "bench-"
+MAX_TITLE_CHARS = 60
+
+
+def project_title(goal: str) -> str:
+    """A short human title from a goal: its first non-empty line, cut at a word."""
+    line = next((ln.strip() for ln in goal.replace("\r", "\n").splitlines() if ln.strip()), "")
+    line = " ".join(line.split())
+    if len(line) <= MAX_TITLE_CHARS:
+        return line
+    cut = line[:MAX_TITLE_CHARS].rsplit(" ", 1)[0] or line[:MAX_TITLE_CHARS]
+    return cut.rstrip(" ,.:;،؛-") + "…"
+
+
 class ProjectRow(_View):
     id: str
     status: str
+    title: str = ""
     goal_preview: str
     created_at: datetime
     cost_usd: float
@@ -39,6 +54,8 @@ class ProjectRow(_View):
 class Overview(_View):
     projects: tuple[ProjectRow, ...] = ()
     errors: tuple[str, ...] = ()  # projects that could not be read (shown, not hidden)
+    hidden_tests: int = 0  # benchmark projects left out (shown with ?tests=1)
+    showing_tests: bool = False
 
 
 class TaskRow(_View):
@@ -154,8 +171,12 @@ def _pending(store: ProjectStore, project_id: str) -> list[ApprovalRequest]:
     return store.approvals(project_id).list(ApprovalStatus.PENDING)
 
 
-def build_overview(store: ProjectStore, spent_nusd: dict[str, int]) -> Overview:
-    """All projects, oldest first. A corrupt project becomes an error line, not a crash."""
+def build_overview(
+    store: ProjectStore, spent_nusd: dict[str, int], *, include_tests: bool = True
+) -> Overview:
+    """All projects, newest first (D138). Benchmark projects (``bench-…``) are left
+    out unless ``include_tests``; their number is kept. A corrupt project becomes an
+    error line, not a crash."""
     rows: list[ProjectRow] = []
     errors: list[str] = []
     projects: list[Project] = []
@@ -164,7 +185,12 @@ def build_overview(store: ProjectStore, spent_nusd: dict[str, int]) -> Overview:
             projects.append(store.load(pid))
         except _READ_ERRORS as e:  # one bad project must not hide the rest
             errors.append(f"{pid}: {e}")
-    projects.sort(key=lambda p: (p.created_at, p.id))
+    projects.sort(key=lambda p: (p.created_at, p.id), reverse=True)
+    hidden = 0
+    if not include_tests:
+        kept = [p for p in projects if not p.id.startswith(BENCH_PREFIX)]
+        hidden = len(projects) - len(kept)
+        projects = kept
     for p in projects:
         try:
             pending = len(_pending(store, p.id))
@@ -175,13 +201,19 @@ def build_overview(store: ProjectStore, spent_nusd: dict[str, int]) -> Overview:
             ProjectRow(
                 id=p.id,
                 status=p.status.value,
+                title=project_title(p.goal) or p.id,
                 goal_preview=_preview(p.goal),
                 created_at=p.created_at,
                 cost_usd=nusd_to_usd(spent_nusd.get(p.id, 0)),
                 pending_approvals=pending,
             )
         )
-    return Overview(projects=tuple(rows), errors=tuple(errors))
+    return Overview(
+        projects=tuple(rows),
+        errors=tuple(errors),
+        hidden_tests=hidden,
+        showing_tests=include_tests,
+    )
 
 
 def build_project_view(

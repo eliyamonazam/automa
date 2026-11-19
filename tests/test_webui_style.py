@@ -144,7 +144,7 @@ def test_overview_card_escapes_goal(tmp_path: Path) -> None:
 
 def test_overview_with_no_projects_has_no_card_grid(tmp_path: Path) -> None:
     doc = rd.render_overview(build_overview(ProjectStore.for_workspace(tmp_path), {}))
-    assert "No projects yet." in doc and 'class="cards"' not in doc
+    assert "No projects yet" in doc and 'class="cards"' not in doc
 
 
 # -- project page cards ---------------------------------------------------------------

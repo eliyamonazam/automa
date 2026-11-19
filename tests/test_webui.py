@@ -87,12 +87,12 @@ def test_overview_lists_projects_with_cost_and_pending(store: ProjectStore) -> N
     store.create("second   goal\nwith lines", project_id="p2")
     _request(store, "p2")
     view = build_overview(store, {"p1": 2_500_000_000, "other": 7})
-    assert [r.id for r in view.projects] == ["p1", "p2"]
-    assert view.projects[0].cost_usd == 2.5
-    assert view.projects[1].cost_usd == 0
-    assert view.projects[0].pending_approvals == 0
-    assert view.projects[1].pending_approvals == 1
-    assert view.projects[1].goal_preview == "second goal with lines"
+    assert [r.id for r in view.projects] == ["p2", "p1"]  # newest first (D138)
+    p2, p1 = view.projects
+    assert p1.cost_usd == 2.5 and p2.cost_usd == 0
+    assert p1.pending_approvals == 0 and p2.pending_approvals == 1
+    assert p2.goal_preview == "second goal with lines"
+    assert p2.title == "second goal"
     assert view.errors == ()
 
 
@@ -291,3 +291,41 @@ def test_project_page_points_to_cli_to_decide(store: ProjectStore) -> None:
     html = render_project(build_project_view(store, "p1", 0))
     assert "decide in the terminal" in html and "automa approvals" not in html
     assert "approve" not in html.lower().replace("approvals", "")
+
+
+# -- cleaner home page (D138) --------------------------------------------------------
+
+
+def test_project_title_from_goal() -> None:
+    from automa.webui.views import project_title
+
+    assert project_title("\n  Build a site  \nmore details") == "Build a site"
+    long = "یک فایل index.html تک‌صفحه‌ای بساز: ابزار تبدیل اعداد فارسی و انگلیسی با دکمه کپی"
+    t = project_title(long)
+    assert t.endswith("…") and len(t) <= 61 and t.startswith("یک فایل")
+    assert project_title("a\r\nb") == "a"
+    assert project_title("") == ""
+
+
+def test_overview_hides_benchmarks_unless_asked(tmp_path: Path) -> None:
+    from automa.webui.server import WebApp, allowed_hosts
+
+    store = ProjectStore.for_workspace(tmp_path)
+    store.create("Real idea\nwith details", project_id="p-20261119-100000-aaaaaa")
+    store.create("bench goal", project_id="bench-20261119-090000-cli-word-count")
+    app = WebApp(tmp_path, tmp_path / "ledger.sqlite3", allowed_hosts("127.0.0.1", 8765))
+    home = app.handle("GET", "/", "127.0.0.1:8765").body.decode()
+    assert "Real idea" in home and "bench-20261119" not in home
+    assert "1 test runs hidden" in home and 'href="/?tests=1"' in home
+    shown = app.handle("GET", "/?tests=1", "127.0.0.1:8765").body.decode()
+    assert "bench-20261119" in shown and "Hide test runs" in shown
+    odd = app.handle("GET", "/?a=1&b=2&c=3&d=4&e=5&tests=1", "127.0.0.1:8765")
+    assert odd.status == 200 and "bench-20261119" not in odd.body.decode()
+
+
+def test_welcome_when_empty_in_action_mode() -> None:
+    from automa.webui.render import render_overview
+    from automa.webui.views import Overview
+
+    doc = render_overview(Overview(), actions=True, ideas=True)
+    assert "Welcome" in doc and 'href="/new"' in doc and "For example" in doc

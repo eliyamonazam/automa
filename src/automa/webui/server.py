@@ -577,7 +577,11 @@ class WebApp:
             return self._preview(*preview_target)
         if path == "/":
             spent, err = self._spending()
-            view = build_overview(self._store, spent)
+            try:
+                show_tests = ("tests", "1") in parse_qsl(parts.query, max_num_fields=4)
+            except ValueError:
+                show_tests = False
+            view = build_overview(self._store, spent, include_tests=show_tests)
             if err:
                 view = view.model_copy(update={"errors": (*view.errors, err)})
             document = render_overview(
