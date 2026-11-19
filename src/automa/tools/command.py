@@ -26,6 +26,7 @@ import os
 import secrets
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterable, Sequence
@@ -350,6 +351,40 @@ def run_git_read(
     if done.returncode != 0:
         raise GitReadError(f"git {args[0]} failed (exit {done.returncode})")
     return done.stdout
+
+
+AUTOMA_RUN_PREFIX = ("-m", "automa", "run")
+
+
+def spawn_automa_run(argv: Sequence[str], log_path: Path) -> subprocess.Popen[bytes]:
+    """Start ``<this python> -m automa run <pid> ...`` in the background (web UI, D125).
+
+    Only this exact command can be started (anything else is ``ValueError``): the
+    child is the same ``automa run`` as in the terminal, with its own BudgetGuard,
+    caps, Policy and Approval Gate. No shell; no terminal (``stdin`` is
+    ``/dev/null``); stdout and stderr go to ``log_path``, which must not exist yet
+    (``O_EXCL``) and is never opened through a symlink (mode ``0600``). The child
+    keeps the parent's environment (it needs the API key, as in the terminal) and
+    stays in the server's process group, so Ctrl+C on ``automa web`` also
+    interrupts it and the project is paused cleanly."""
+    args = list(argv)
+    if len(args) < 5 or args[0] != sys.executable or tuple(args[1:4]) != AUTOMA_RUN_PREFIX:
+        raise ValueError("only '<python> -m automa run <project>' can be started")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(log_path, flags, 0o600)
+    try:
+        env = dict(os.environ)
+        env["PYTHONUNBUFFERED"] = "1"
+        return subprocess.Popen(  # noqa: S603 - fixed argv list, no shell
+            args,
+            stdin=subprocess.DEVNULL,
+            stdout=fd,
+            stderr=subprocess.STDOUT,
+            env=env,
+            close_fds=True,
+        )
+    finally:
+        os.close(fd)
 
 
 def _remove_container(sandbox: DockerSandbox, name: str) -> None:

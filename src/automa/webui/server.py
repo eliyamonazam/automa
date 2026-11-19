@@ -17,7 +17,9 @@ a model. Only with ``actions`` (``automa web --allow-actions``, D123) does it al
 ``POST`` to the approve/reject paths, checked and recorded by :mod:`automa.webui.actions`,
 and — when a planner is given (D124) — to the new-idea paths of :mod:`automa.webui.ideas`
 (``/new``, ``/projects/<pid>/clarify``), which call the Executive through the guarded
-gateway. Every POST passes the same Host, same-origin and CSRF checks first.
+gateway — and, when a run preflight is given (D125), to ``/projects/<pid>/start``,
+which starts ``automa run`` as a background child process (:mod:`automa.webui.runs`).
+Every POST passes the same Host, same-origin and CSRF checks first.
 """
 
 from __future__ import annotations
@@ -62,6 +64,7 @@ from automa.webui.render import (
     ACTION_CONTENT_SECURITY_POLICY,
     CONTENT_SECURITY_POLICY,
     ActionForms,
+    RunPanel,
     page,
     render_clarify,
     render_new_idea,
@@ -69,6 +72,12 @@ from automa.webui.render import (
     render_project,
     text,
     visible,
+)
+from automa.webui.runs import (
+    START_FIELDS,
+    BackgroundRuns,
+    RunPreflight,
+    parse_start_path,
 )
 from automa.webui.views import build_overview, build_project_view
 
@@ -183,8 +192,16 @@ class WebApp:
         *,
         actions: ActionSettings | None = None,
         planner: IdeaPlanner | None = None,
+        runs: RunPreflight | BackgroundRuns | None = None,
     ):
         self._store = ProjectStore.for_workspace(workspace)
+        # Background runs only in action mode (D125); a read-only server never runs.
+        if actions is None or runs is None:
+            self._runs: BackgroundRuns | None = None
+        elif isinstance(runs, BackgroundRuns):
+            self._runs = runs
+        else:
+            self._runs = BackgroundRuns(self._store, runs)
         # New ideas only in action mode (D124); a read-only server never plans.
         self._ideas = IdeaFlow(self._store, planner) if actions is not None and planner else None
         self._ledger_path = ledger_path
@@ -201,6 +218,10 @@ class WebApp:
     @property
     def ideas_enabled(self) -> bool:
         return self._ideas is not None
+
+    @property
+    def runs_enabled(self) -> bool:
+        return self._runs is not None
 
     def max_body_bytes(self, target: str) -> int:
         """The largest POST body accepted for ``target`` (idea forms are larger)."""
@@ -257,6 +278,9 @@ class WebApp:
         parts = urlsplit(target)
         if self._ideas is not None and not parts.query and is_idea_path(parts.path):
             return self._post_idea(parts.path, headers, body)
+        start_pid = parse_start_path(parts.path) if not parts.query else None
+        if self._runs is not None and start_pid is not None:
+            return self._post_start(start_pid, headers, body)
         action = parse_action_path(parts.path) if not parts.query else None
         if action is None:
             return self.error(404, "Not found")
@@ -290,6 +314,41 @@ class WebApp:
         except ActionRefused as e:
             return self.error(e.status, "Refused", e.message)
         return self._redirect(location)
+
+    def _post_start(self, pid: str, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
+        """``POST /projects/<pid>/start`` (D125), after the same checks."""
+        if self._actions is None or self._runs is None:  # never reached
+            return self.error(404, "Not found")
+        lowered = self._single_headers(headers)
+        if isinstance(lowered, Response):
+            return lowered
+        try:
+            check_same_origin(lowered, self._actions)
+            form = parse_form(lowered, body, fields=START_FIELDS)
+            check_token(form, self._actions)
+            self._runs.start(pid, form)
+        except ActionRefused as e:
+            return self.error(e.status, "Refused", e.message)
+        return self._redirect(f"/projects/{quote(pid, safe='')}")
+
+    def _run_panel(self, pid: str) -> RunPanel | None:
+        """The start button and last background run of a project page (D125)."""
+        if self._runs is None:
+            return None
+        state = self._runs.state(pid)
+        can_start = self._runs.can_start(pid)
+        needs = self._runs.needs_confirm(pid) if can_start else False
+        if state is None:
+            return RunPanel(can_start=can_start, needs_confirm=needs)
+        return RunPanel(
+            can_start=can_start,
+            needs_confirm=needs,
+            state=state.summary,
+            running=state.running,
+            started_at=state.started_at,
+            log_name=state.log_path.name,
+            tail=state.tail,
+        )
 
     def _single_headers(self, headers: Sequence[tuple[str, str]]) -> dict[str, str] | Response:
         lowered: dict[str, str] = {}
@@ -397,7 +456,12 @@ class WebApp:
             notice = self._notice(pid, parts.query) if actions and parts.query else None
             cost_range, waiting = self._idea_lines(pid, pview.plan_version is not None)
             document = render_project(
-                pview, forms, notice, cost_range=cost_range, questions_waiting=waiting
+                pview,
+                forms,
+                notice,
+                cost_range=cost_range,
+                questions_waiting=waiting,
+                run=self._run_panel(pid),
             )
             return _html(200, document, security=self._security)
         return self.error(404, "Not found")
@@ -473,12 +537,14 @@ def create_server(
     log: Callable[[str], None] | None = None,
     allow_actions: bool = False,
     planner: IdeaPlanner | None = None,
+    runs: RunPreflight | None = None,
 ) -> ThreadingHTTPServer:
     """A bound (not yet serving) server. ``port=0`` picks a free port (tests).
 
     ``allow_actions`` (D123) enables approve/reject forms with a fresh CSRF token for
     this server's lifetime; the default is the read-only server of D78. ``planner``
-    (only used with ``allow_actions``, D124) enables the "New idea" pages."""
+    (only used with ``allow_actions``, D124) enables the "New idea" pages; ``runs``
+    (only with ``allow_actions``, D125) enables the "Start run" button."""
     host = validate_bind_host(host)
     port = validate_port(port)
 
@@ -496,7 +562,7 @@ def create_server(
         if allow_actions
         else None
     )
-    app = WebApp(workspace, ledger_path, hosts, actions=actions, planner=planner)
+    app = WebApp(workspace, ledger_path, hosts, actions=actions, planner=planner, runs=runs)
     server.RequestHandlerClass = make_handler(app, log)
     return server
 

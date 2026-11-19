@@ -192,11 +192,13 @@ def render_project(
     *,
     cost_range: str | None = None,
     questions_waiting: bool = False,
+    run: RunPanel | None = None,
 ) -> str:
     """One project page. ``forms`` (action mode only) adds approve/reject forms;
     ``notice`` is a one-line result of the last decision, shown at the top;
     ``cost_range`` is the estimate line of a planned project and ``questions_waiting``
-    links to the answer form of a new idea (D124)."""
+    links to the answer form of a new idea (D124); ``run`` (action mode with
+    background runs, D125) adds the start button and the last background run."""
     parts = ['<p><a href="/">← all projects</a></p>']
     if notice:
         parts.append(f'<p class="badge" dir="auto">{text(notice)}</p>')
@@ -215,6 +217,8 @@ def render_project(
         )
     if cost_range is not None:
         parts.append(f"<p><strong>Cost range:</strong> {text(cost_range)}</p>")
+    if run is not None and forms is not None:
+        parts.append(_run_panel(view.id, run, forms))
     parts.append(f"<h2>Pending approvals ({len(view.pending)})</h2>")
     if view.pending:
         parts.append("".join(_approval(view.id, a, forms) for a in view.pending))
@@ -237,6 +241,51 @@ def render_project(
         )
     parts.append(_errors(view.errors))
     return page(f"Automa — {view.id}", "".join(parts), actions=forms is not None)
+
+
+@dataclass(frozen=True)
+class RunPanel:
+    """The background-run part of a project page (D125)."""
+
+    can_start: bool
+    needs_confirm: bool
+    state: str | None = None
+    running: bool = False
+    started_at: datetime | None = None
+    log_name: str | None = None
+    tail: tuple[str, ...] = ()
+
+
+def _run_panel(project_id: str, run: RunPanel, forms: ActionForms) -> str:
+    parts = ["<h2>Run</h2>"]
+    if run.state is not None:
+        when = f" (started {_time(run.started_at)})" if run.started_at is not None else ""
+        cls = "badge warn" if run.running else "badge"
+        parts.append(f'<p>Background run{when}: <span class="{cls}">{text(run.state)}</span></p>')
+        if run.log_name:
+            parts.append(f"<p>log: <code>web-runs/{text(run.log_name)}</code></p>")
+        if run.tail:
+            parts.append("<pre>" + text("\n".join(run.tail)) + "</pre>")
+        if run.running:
+            parts.append("<p>Reload this page to see progress.</p>")
+    if run.can_start:
+        action = text(_project_href(project_id) + "/start")
+        confirm = (
+            '<p><label><input type="checkbox" name="confirm" value="yes" required> '
+            "I saw the cost range above and accept it (it is above confirm_above_usd)"
+            "</label></p>"
+            if run.needs_confirm
+            else ""
+        )
+        parts.append(
+            f'<form method="post" action="{action}">{_hidden("csrf", forms.csrf_token)}'
+            f'{confirm}<p><button type="submit">Start run</button> runs '
+            f"<code>automa run {text(project_id)}</code> in the background with the same "
+            "budget guard and caps; every model call is counted.</p></form>"
+        )
+    elif run.state is None:
+        parts.append("<p>Not startable now (no plan, already running or done).</p>")
+    return "".join(parts)
 
 
 def render_new_idea(forms: ActionForms) -> str:

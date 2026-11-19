@@ -287,6 +287,7 @@ from automa.tools.approvals import (
 )
 from automa.tools.github import GitHubRead, describe_github_request
 from automa.tools.web import FetchUrl, describe_fetch_request
+from automa.webui import runs as webui_runs
 from automa.webui import server as webui_server
 from automa.webui.ideas import IdeaError
 from automa.workflows import (
@@ -768,6 +769,36 @@ def _new_from_workflow(
     typer.echo(f"cost range: {_new_cost_range(config, store, pid)}")
 
 
+def _new_estimate(config: AutomaConfig, store: ProjectStore, pid: str) -> PlanEstimate:
+    """The plan estimate behind ``cost range:`` (default run settings, read-only)."""
+    plan = store.load_plan(pid)
+    roles, _ = _roles_and_skills(config)
+    settings = EstimateSettings.from_settings(
+        OrchestratorSettings(max_parallel=config.orchestrator.max_parallel)
+    )
+    stats: list[QualityStats] = []
+    costs: dict[tuple[str, str], list[int]] = {}
+    path = config.workspace / QUALITY_FILE
+    if path.exists() or path.is_symlink():
+        with QualityLog(path, read_only=True) as log:
+            stats = log.stats()
+            costs = attempt_costs(log.records())
+    router = Router(config, stats) if config.router.enabled else None
+    return estimate_plan(plan, config, roles, stats, settings=settings, router=router, costs=costs)
+
+
+_ESTIMATE_ERRORS = (
+    ProjectStoreError,
+    ConfigError,
+    RoleError,
+    SkillError,
+    QualityError,
+    ValueError,
+    KeyError,
+    OSError,
+)
+
+
 def _new_cost_range(config: AutomaConfig, store: ProjectStore, pid: str) -> str:
     """The ``cost range:`` line of ``automa new`` (D121): what running the new plan
     may cost, before anything is spent on it.
@@ -778,32 +809,8 @@ def _new_cost_range(config: AutomaConfig, store: ProjectStore, pid: str) -> str:
     "unavailable"; the project and its plan are already saved either way.
     """
     try:
-        plan = store.load_plan(pid)
-        roles, _ = _roles_and_skills(config)
-        settings = EstimateSettings.from_settings(
-            OrchestratorSettings(max_parallel=config.orchestrator.max_parallel)
-        )
-        stats: list[QualityStats] = []
-        costs: dict[tuple[str, str], list[int]] = {}
-        path = config.workspace / QUALITY_FILE
-        if path.exists() or path.is_symlink():
-            with QualityLog(path, read_only=True) as log:
-                stats = log.stats()
-                costs = attempt_costs(log.records())
-        router = Router(config, stats) if config.router.enabled else None
-        result = estimate_plan(
-            plan, config, roles, stats, settings=settings, router=router, costs=costs
-        )
-    except (
-        ProjectStoreError,
-        ConfigError,
-        RoleError,
-        SkillError,
-        QualityError,
-        ValueError,
-        KeyError,
-        OSError,
-    ) as e:
+        result = _new_estimate(config, store, pid)
+    except _ESTIMATE_ERRORS as e:
         reason = _safe(str(e)).replace("\n", " ")
         return f"unavailable ({reason}); see later: automa estimate {pid}"
     rng = _range_text(result.range_low_nusd, result.range_high_nusd, config.display.toman_per_usd)
@@ -3535,6 +3542,31 @@ class _WebIdeaPlanner:
         return _new_cost_range(self._config, store, project_id)
 
 
+class _WebRunPreflight:
+    """What the "Start run" button of ``automa web --allow-actions`` needs (D125).
+
+    Read-only and without a model call: whether the cost range of ``automa new``
+    is above ``[limits] confirm_above_usd`` (an unavailable estimate counts as above,
+    so the page always asks then), and the ``automa run`` command line of the child
+    process (the same command as in the terminal, so the same guard and caps)."""
+
+    def __init__(self, config: AutomaConfig, config_path: Path | None) -> None:
+        self._config = config
+        self._config_path = config_path
+
+    def needs_confirm(self, project_id: str) -> bool:
+        config = self._config
+        store = ProjectStore.for_workspace(config.workspace)
+        try:
+            result = _new_estimate(config, store, project_id)
+        except _ESTIMATE_ERRORS:
+            return True
+        return result.range_high_nusd > _confirm_threshold_nusd(config.limits.confirm_above_usd)
+
+    def command(self, project_id: str, *, yes: bool) -> list[str]:
+        return webui_runs.default_command(project_id, yes=yes, config_path=self._config_path)
+
+
 @app.command()
 def web(
     port: Annotated[
@@ -3564,6 +3596,7 @@ def web(
             log=webui_server.stderr_log,
             allow_actions=allow_actions,
             planner=_WebIdeaPlanner(config) if allow_actions else None,
+            runs=_WebRunPreflight(config, config_path) if allow_actions else None,
         )
     except webui_server.WebServerError as e:
         raise _fail(str(e), EXIT_USER) from None
@@ -3574,8 +3607,9 @@ def web(
         typer.echo(f"automa web (actions enabled): {url}  (Ctrl+C to stop)")
         typer.echo(
             "approve or reject on each project page; the full arguments are shown first. "
-            "New idea: plan a project from the browser (model calls go through the budget "
-            "guard; nothing is run). Only forms from this page are accepted."
+            "New idea: plan a project from the browser; Start run: runs automa run in the "
+            "background (model calls go through the budget guard; Ctrl+C here also "
+            "pauses background runs). Only forms from this page are accepted."
         )
     else:
         typer.echo(f"automa web (read-only): {url}  (Ctrl+C to stop)")
