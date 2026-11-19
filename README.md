@@ -44,6 +44,25 @@ cp .env.example .env   # کلید رو اینجا بذار
 automa version
 ```
 
+### اجرای رابط وب با دابل‌کلیک (بدون ترمینال)
+
+پوشه `scripts` مخزن دو فایل برای Windows داره: `automa-web.bat` و `automa-web.ps1`. فایل `.bat` همون اسکریپت PowerShell رو اجرا می‌کنه، که داخل WSL از پوشه `~/automa` و `.venv` همون‌جا `automa web --allow-actions` رو بالا میاره، صبر می‌کنه تا صفحه جواب بده و `http://127.0.0.1:8765/` رو در مرورگر پیش‌فرض باز می‌کنه. پنجره سیاه باید باز بمونه؛ با Ctrl+C یا بستن پنجره سرور بسته می‌شه (اجرای پس‌زمینه‌ای که از صفحه شروع شده تمیز متوقف/paused می‌شه و بعداً ادامه می‌دی).
+
+۱. یک بار، در Ubuntu، فایل‌ها رو به Windows کپی کن (مثلاً به پوشه Documents؛ `<نام‌کاربری>` رو با نام کاربری Windows عوض کن):
+
+```bash
+mkdir -p /mnt/c/Users/<نام‌کاربری>/Documents/automa-launcher
+cp ~/automa/scripts/automa-web.* /mnt/c/Users/<نام‌کاربری>/Documents/automa-launcher/
+```
+
+۲. ساخت میانبر دسکتاپ: در File Explorer روی `automa-web.bat` راست‌کلیک ← «Show more options» ← «Send to» ← «Desktop (create shortcut)». اگه خواستی، در Properties میانبر اسمش رو «Automa» بذار.
+
+۳. از این به بعد فقط روی میانبر دابل‌کلیک کن.
+
+گزینه‌ها (در خط فرمان یا در قسمت Target میانبر بعد از نام فایل): `-ReadOnly` (صفحه فقط‌خواندنی، بدون دکمه‌های تأیید/شروع/توقف)، `-Port 8766` (درگاه دیگر)، `-RepoDir automa2` (کلون در پوشه دیگری از خانه WSL)، `-Distro Ubuntu-24.04` (توزیع غیرپیش‌فرض)، `-NoBrowser`.
+
+نکته‌ها: `-ExecutionPolicy Bypass` در فایل `.bat` فقط برای همون یک پردازه PowerShell اعمال می‌شه و تنظیم سیستم رو عوض نمی‌کنه. اگه پیام «No Automa install found» دیدی، اول مراحل بالا (clone و venv در `~/automa`) رو انجام بده. اگه پنجره می‌گه سرور بالا اومده ولی مرورگر صفحه رو باز نمی‌کنه، احتمالاً forwarding درگاه WSL خاموشه: در فایل `%UserProfile%\.wslconfig` زیر `[wsl2]` خط `networkingMode=mirrored` (یا `localhostForwarding=true`) رو بذار و در PowerShell `wsl --shutdown` بزن. اگه درگاه از قبل اشغال باشه (مثلاً پنجره دیگه‌ای از Automa باز باشه) اسکریپت فقط صفحه رو باز می‌کنه.
+
 ## راه‌اندازی
 
 ```bash
