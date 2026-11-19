@@ -277,6 +277,7 @@ from automa.skills import (
     workspace_skills_dir,
 )
 from automa.tools import DockerSandbox, SandboxError, check_docker, default_tools, tools_factory
+from automa.tools.approval_decisions import record_decision
 from automa.tools.approvals import (
     ApprovalError,
     ApprovalRequest,
@@ -3421,20 +3422,7 @@ def _decide(
         ):
             raise _fail("not approved; nothing was recorded", EXIT_USER)
     try:
-        decided = approvals_store.decide(req.id, approve=approve, note=note)
-        store.events(pid).emit(
-            Event(
-                ts=decided.decided_at or decided.created_at,
-                type="approval.decided",
-                data={
-                    "approval": decided.id,
-                    "task": decided.task_id,
-                    "tool": decided.tool,
-                    "status": decided.status.value,
-                    "note": decided.note is not None,
-                },
-            )
-        )
+        decided = record_decision(store, pid, req.id, approve=approve, note=note)
     except (ProjectStoreError, ApprovalError) as e:
         raise _fail(str(e), EXIT_USER) from None
     typer.echo(f"{decided.id}: {decided.status.value}")
@@ -3479,9 +3467,17 @@ def web(
     host: Annotated[
         str, typer.Option("--host", help="Loopback IP to listen on (non-loopback is refused).")
     ] = webui_server.DEFAULT_HOST,
+    allow_actions: Annotated[
+        bool,
+        typer.Option(
+            "--allow-actions",
+            help="Also allow approving/rejecting Approval Gate requests from the page "
+            "(same-origin forms with a per-session token). Default: read-only.",
+        ),
+    ] = False,
     config_path: Annotated[Path | None, _CONFIG_OPTION] = None,
 ) -> None:
-    """Serve a read-only status page on this computer. Approvals stay in the terminal."""
+    """Serve a status page on this computer (read-only unless --allow-actions)."""
     config = _load(config_path)
     try:
         server = webui_server.create_server(
@@ -3490,13 +3486,22 @@ def web(
             host=host,
             port=port,
             log=webui_server.stderr_log,
+            allow_actions=allow_actions,
         )
     except webui_server.WebServerError as e:
         raise _fail(str(e), EXIT_USER) from None
     except OSError as e:
         raise _fail(f"cannot listen on {host}:{port}: {e}", EXIT_USER) from None
-    typer.echo(f"automa web (read-only): {webui_server.server_url(server)}  (Ctrl+C to stop)")
-    typer.echo("approve or reject only in the terminal: automa approvals")
+    url = webui_server.server_url(server)
+    if allow_actions:
+        typer.echo(f"automa web (actions enabled): {url}  (Ctrl+C to stop)")
+        typer.echo(
+            "approve or reject on each project page; the full arguments are shown first. "
+            "Only forms from this page are accepted."
+        )
+    else:
+        typer.echo(f"automa web (read-only): {url}  (Ctrl+C to stop)")
+        typer.echo("approve or reject only in the terminal: automa approvals")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

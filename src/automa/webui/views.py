@@ -59,6 +59,7 @@ class ApprovalView(_View):
     reason: str
     created_at: datetime
     arguments: dict[str, object]
+    fingerprint: str = ""  # echoed by the action-mode form (D123)
     request_lines: tuple[str, ...] = ()  # readable fetch_url / github_read target
     warnings: tuple[str, ...] = ()
 
@@ -109,6 +110,7 @@ def approval_view(req: ApprovalRequest) -> ApprovalView:
         reason=req.reason,
         created_at=req.created_at,
         arguments=dict(req.arguments),
+        fingerprint=req.fingerprint,
         request_lines=tuple(lines),
         warnings=tuple(warnings),
     )

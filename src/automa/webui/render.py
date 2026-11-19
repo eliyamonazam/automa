@@ -3,8 +3,9 @@
 Every piece of recorded text (goals, titles, reasons, arguments — some of it written by
 a model) goes through :func:`text`: control, format and bidi characters are shown as
 visible escapes (so they cannot reorder or hide what is being reviewed) and the result
-is HTML-escaped. Pages have no scripts, no forms, no external resources, and a strict
-Content-Security-Policy. Nothing here reads files or the network.
+is HTML-escaped. Pages have no scripts and no external resources, and a strict
+Content-Security-Policy; forms appear only in action mode (D123) and post only to
+this server. Nothing here reads files or the network.
 """
 
 from __future__ import annotations
@@ -12,9 +13,11 @@ from __future__ import annotations
 import html
 import json
 import unicodedata
+from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import quote
 
+from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.webui.views import ApprovalView, Overview, ProjectView
 
 # Joiners needed by Persian text; every other Cf character (incl. bidi controls) is escaped.
@@ -23,6 +26,10 @@ _ALLOWED_FORMAT_CHARS = frozenset({"‌", "‍"})
 CONTENT_SECURITY_POLICY = (
     "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; "
     "form-action 'none'; base-uri 'none'"
+)
+# Action mode (D123): forms may post only to this server; nothing else changes.
+ACTION_CONTENT_SECURITY_POLICY = CONTENT_SECURITY_POLICY.replace(
+    "form-action 'none'", "form-action 'self'"
 )
 
 _STYLE = """
@@ -63,13 +70,27 @@ def _project_href(project_id: str) -> str:
     return "/projects/" + quote(project_id, safe="")
 
 
-def page(title: str, body: str) -> str:
-    """A complete HTML document around already-safe ``body``."""
+@dataclass(frozen=True)
+class ActionForms:
+    """What the action-mode forms need (D123): the per-session CSRF token."""
+
+    csrf_token: str
+
+
+def page(title: str, body: str, *, actions: bool = False) -> str:
+    """A complete HTML document around already-safe ``body``.
+
+    In action mode the CSP allows forms to post to this server only, and the referrer
+    policy is ``same-origin`` so the browser sends a real ``Origin`` with each post
+    (with ``no-referrer`` it would send ``Origin: null``, which the server refuses).
+    """
+    csp = ACTION_CONTENT_SECURITY_POLICY if actions else CONTENT_SECURITY_POLICY
+    referrer = "same-origin" if actions else "no-referrer"
     return (
         '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
-        f'<meta http-equiv="Content-Security-Policy" content="{CONTENT_SECURITY_POLICY}">'
+        f'<meta http-equiv="Content-Security-Policy" content="{csp}">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        '<meta name="referrer" content="no-referrer">'
+        f'<meta name="referrer" content="{referrer}">'
         f"<title>{text(title)}</title><style>{_STYLE}</style></head>"
         f"<body>{body}</body></html>\n"
     )
@@ -82,8 +103,13 @@ def _errors(errors: tuple[str, ...]) -> str:
     return f'<section class="err"><h2>Unreadable data</h2><ul>{items}</ul></section>'
 
 
-def render_overview(view: Overview) -> str:
-    parts = ["<h1>Automa projects</h1>", "<p>Read-only view.</p>"]
+def render_overview(view: Overview, *, actions: bool = False) -> str:
+    mode = (
+        "Actions enabled: approve or reject requests on each project page."
+        if actions
+        else "Read-only view."
+    )
+    parts = ["<h1>Automa projects</h1>", f"<p>{mode}</p>"]
     if not view.projects:
         parts.append("<p>No projects yet.</p>")
     else:
@@ -108,28 +134,59 @@ def render_overview(view: Overview) -> str:
             + "</tbody></table>"
         )
     parts.append(_errors(view.errors))
-    return page("Automa projects", "".join(parts))
+    return page("Automa projects", "".join(parts), actions=actions)
 
 
-def _approval(a: ApprovalView) -> str:
+def _hidden(name: str, value: str) -> str:
+    return f'<input type="hidden" name="{name}" value="{text(value)}">'
+
+
+def _decision_forms(project_id: str, a: ApprovalView, forms: ActionForms) -> str:
+    def action(kind: str) -> str:
+        path = f"/projects/{quote(project_id, safe='')}/approvals/{quote(a.id, safe='')}/{kind}"
+        return text(path)
+
+    common = _hidden("csrf", forms.csrf_token) + _hidden("fingerprint", a.fingerprint)
+    note = f'<label>note <input name="note" maxlength="{MAX_NOTE_CHARS}" dir="auto"></label> '
+    return (
+        f'<form method="post" action="{action("approve")}">{common}'
+        '<p><label><input type="checkbox" name="confirm" value="yes" required> '
+        f"I reviewed the full arguments above: run {text(a.tool)} once with exactly "
+        "these arguments</label></p>"
+        f'<p>{note}<button type="submit">Approve</button></p></form>'
+        f'<form method="post" action="{action("reject")}">{common}'
+        f'<p>{note}<button type="submit">Reject</button></p></form>'
+    )
+
+
+def _approval(project_id: str, a: ApprovalView, forms: ActionForms | None) -> str:
     args = json.dumps(a.arguments, ensure_ascii=False, indent=2, sort_keys=True, default=str)
     lines = "".join(f"<li>{text(line)}</li>" for line in a.request_lines)
     warns = "".join(f'<li class="warn">{text(w)}</li>' for w in a.warnings)
     target = f"<ul>{lines}{warns}</ul>" if lines or warns else ""
+    if forms is None:
+        decide = f"<p>Decide with: <code>automa approvals {text(a.id)}</code> in the terminal.</p>"
+    else:
+        decide = _decision_forms(project_id, a, forms)
     return (
         f"<article><h3>{text(a.id)} — {text(a.tool)} "
         f'<span class="badge">{text(a.risk)}</span></h3>'
         f"<p>task: {text(a.task_id or '-')} · requested {_time(a.created_at)}</p>"
         f'<p dir="auto">reason: {text(a.reason)}</p>{target}'
-        f"<pre>{text(args)}</pre>"
-        f"<p>Decide with: <code>automa approvals {text(a.id)}</code> in the terminal.</p>"
+        f"<pre>{text(args)}</pre>{decide}"
         "</article>"
     )
 
 
-def render_project(view: ProjectView) -> str:
-    parts = [
-        '<p><a href="/">← all projects</a></p>',
+def render_project(
+    view: ProjectView, forms: ActionForms | None = None, notice: str | None = None
+) -> str:
+    """One project page. ``forms`` (action mode only) adds approve/reject forms;
+    ``notice`` is a one-line result of the last decision, shown at the top."""
+    parts = ['<p><a href="/">← all projects</a></p>']
+    if notice:
+        parts.append(f'<p class="badge" dir="auto">{text(notice)}</p>')
+    parts += [
         f"<h1>{text(view.id)}</h1>",
         f'<p dir="auto"><strong>Goal:</strong> {text(view.goal)}</p>',
         f'<p>status: <span class="badge">{text(view.status)}</span> · '
@@ -138,7 +195,7 @@ def render_project(view: ProjectView) -> str:
     ]
     parts.append(f"<h2>Pending approvals ({len(view.pending)})</h2>")
     if view.pending:
-        parts.append("".join(_approval(a) for a in view.pending))
+        parts.append("".join(_approval(view.id, a, forms) for a in view.pending))
     else:
         parts.append("<p>None.</p>")
     if view.plan_version is None:
@@ -157,4 +214,4 @@ def render_project(view: ProjectView) -> str:
             f"<tbody>{rows}</tbody></table>"
         )
     parts.append(_errors(view.errors))
-    return page(f"Automa — {view.id}", "".join(parts))
+    return page(f"Automa — {view.id}", "".join(parts), actions=forms is not None)

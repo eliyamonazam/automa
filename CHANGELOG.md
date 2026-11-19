@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-19 — M12: رابط وب، حالت عملیاتی (امنیت)
+- **انجام‌شده:** `automa web --allow-actions` (پیش‌فرض همون فقط‌خواندنی). در صفحه هر پروژه، زیر آرگومان‌های کامل هر درخواست Approval Gate دو فرم «Approve» (با چک‌باکس اجباری «همه آرگومان‌ها رو دیدم») و «Reject» (با یادداشت اختیاری). هر POST: بررسی Host، `Sec-Fetch-Site`، `Origin` (یا `Referer`)، فرم urlencoded کوچک، توکن CSRF تصادفی هر نشست، fingerprint درخواست و در انتظار بودن؛ ثبت با `record_decision` مشترک با `automa approve`/`reject` (رویداد `approval.decided` با `via: "web"`)، بعد `303` به صفحه پروژه با خط نتیجه (D123).
+- **فایل‌های اصلی:** `src/automa/webui/actions.py` (جدید)، `src/automa/tools/approval_decisions.py` (جدید)، `src/automa/webui/server.py`، `src/automa/webui/render.py`، `src/automa/webui/views.py`، `src/automa/cli.py`، `tests/test_webui_actions.py` (۷۸ تست جدید: cross-origin، `Origin: null`، توکن غلط/نشست دیگر، Content-Type، فرم خراب/بزرگ، fingerprint، تصمیم دوباره، هم‌زمانی، سوکت واقعی با chunked/بدون طول)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D123).
+- **تست‌ها:** `pytest` ← ۴۷۷۵ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** مورد `[!]` قدیمی M9 («آیا تأیید از مرورگر مجاز باشد؟») با درخواست M12 صاحب مخزن (محیط بصری) پاسخ گرفته فرض شد؛ برای همین حالت اختیاریه و پیش‌فرض عوض نشد. ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود. BudgetGuard و Policy دست نخوردن؛ Approval Gate همون منطق ثبت CLI رو استفاده می‌کنه.
+- **برای صاحب مخزن:** اگه نمی‌خوای تأیید از مرورگر ممکن باشه، فقط `automa web` (بدون `--allow-actions`) اجرا کن.
+- **قدم بعدی:** رابط وب: ایده جدید از مرورگر (فرم ایده، سؤال‌های روشن‌کننده، برنامه و بازه هزینه، دکمه شروع/توقف).
+
 ## 2026-11-19 — M12: تأیید قبل از خرج (بعد از پایان)
 - **انجام‌شده:** در پایان `automa run` (بعد از خط `cost:`، حتی بعد از توقف) خط تازه `vs estimate: actual $X for the estimated tasks vs range about $L to $H: within|below|above` چاپ می‌شه (با معادل تومانی اگه `[display] toman_per_usd` تنظیم شده، و `other calls` اگه فراخوانی خارج از وظایف تخمین بوده). مقایسه با `compare_estimate` موجود و تابع خالص تازه `check_range`؛ تخمین اجرای قبلی هرگز استفاده نمی‌شه. نتیجه در رویداد `finance.actual` ثبت می‌شه (D122).
 - **فایل‌های اصلی:** `src/automa/finance/compare.py` (`RangeVerdict`، `RangeCheck`، `range_verdict`، `check_range`، `ACTUAL_EVENT`)، `src/automa/finance/__init__.py`، `src/automa/cli.py` (`_run_vs_estimate`)، `tests/test_run_vs_estimate.py` (۴۴ تست جدید)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D122).
