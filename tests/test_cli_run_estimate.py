@@ -42,15 +42,20 @@ def estimate_events(env: cr.Env) -> list[dict[str, Any]]:
 # --- the line ----------------------------------------------------------------------
 
 
-def test_fresh_project_prints_unknown_expected_and_worst_case(env: cr.Env) -> None:
+def test_fresh_project_prints_range_and_guard_cap(env: cr.Env) -> None:
     env.project(cr.task_dict("a"))
     env.script(*cr.write("a"))
     r = env.run(cr.PID)
     assert r.exit_code == cli.EXIT_OK, r.output
     text = line(r.output)
     assert "1 task(s) to run" in text
-    assert "+ 1 task(s) unknown" in text
-    assert f"worst {cli._usd(ce.PER_ATTEMPT * ce.CAP * ce.S.max_attempts)}" in text
+    # D120: never "unknown"; the range leads, the worst case is only the guard cap.
+    assert "unknown" not in text and "expected" not in text.split("fits")[0]
+    assert "; about $" in text
+    assert "from default token profiles and catalog prices (no history yet)" in text
+    worst = cli._usd(ce.PER_ATTEMPT * ce.CAP * ce.S.max_attempts)
+    assert f"guard cap (worst case) {worst};" in text
+    assert "toman" not in text  # no [display] toman_per_usd
     assert f"project budget left {cli._usd(cap_to_nusd(5.0))}" in text
     assert "the known part fits, the expected cost is incomplete" in text
     assert f"details: automa estimate {cr.PID}" in text
@@ -86,8 +91,12 @@ def test_expected_cost_from_history(env: cr.Env) -> None:
     rr.seed(env, "fake-medium", Tier.MEDIUM, passed=5)  # 1000 nUSD per attempt
     env.project(cr.task_dict("a"))
     env.script(*cr.write("a"))
+    assert ce.estimate_json(env)["range"]["basis"] == "history"
     text = line(env.run(cr.PID).output)
-    assert f"expected {cli._usd(1000)};" in text
+    (event,) = estimate_events(env)
+    low, high = cli._usd(event["range_low_nusd"]), cli._usd(event["range_high_nusd"])
+    assert 0 < event["range_low_nusd"] <= event["range_high_nusd"] <= event["worst_nusd"]
+    assert f"; about {low} to {high}, from your quality history;" in text
     assert "unknown" not in text
     assert "the expected cost fits, the worst case does not" in text
 
@@ -119,7 +128,7 @@ def test_max_attempts_of_the_run_is_used(env: cr.Env) -> None:
     env.project(cr.task_dict("a"))
     env.script(*cr.write("a"))
     text = line(env.run(cr.PID, "--max-attempts", "2").output)
-    assert f"worst {cli._usd(2 * ce.PER_ATTEMPT * ce.CAP)};" in text
+    assert f"guard cap (worst case) {cli._usd(2 * ce.PER_ATTEMPT * ce.CAP)};" in text
 
 
 # --- same inputs as automa estimate ------------------------------------------------
@@ -141,6 +150,9 @@ def test_matches_automa_estimate(env: cr.Env, router_args: tuple[str, ...]) -> N
     assert event["tasks"] == [t["task_id"] for t in before["tasks"]]
     assert event["router"] is bool(router_args)
     assert event["unknown"] == before["unknown"]
+    assert nusd_to_usd(event["range_low_nusd"]) == pytest.approx(before["range"]["low_usd"])
+    assert nusd_to_usd(event["range_high_nusd"]) == pytest.approx(before["range"]["high_usd"])
+    assert event["range_basis"] == before["range"]["basis"]
 
 
 def test_router_of_the_run_changes_the_estimate(env: cr.Env) -> None:
@@ -149,7 +161,7 @@ def test_router_of_the_run_changes_the_estimate(env: cr.Env) -> None:
     env.project(cr.task_dict("a"))
     env.script(*cr.write("a"))
     off = line(env.run(cr.PID).output)
-    assert "unknown" in off
+    assert "(no history yet)" in off  # medium (no history) priced from default profiles
     env.store.create("again", project_id="proj-2")
     env.store.save_plan(
         "proj-2",
@@ -159,7 +171,10 @@ def test_router_of_the_run_changes_the_estimate(env: cr.Env) -> None:
     r = env.run("proj-2", "--router")
     assert r.exit_code == cli.EXIT_OK, r.output
     on = line(r.output)
-    assert f"expected {cli._usd(1000)};" in on and "unknown" not in on
+    assert "from your quality history" in on and on != off
+    (event,) = [e.data for e in env.store.events("proj-2").read() if e.type == "finance.estimate"]
+    assert event["expected_nusd"] == 1000 and event["unknown"] == []
+    assert event["range_basis"] == "history"
 
 
 def test_resumed_run_excludes_passed_and_uses_ledger_spending(env: cr.Env) -> None:

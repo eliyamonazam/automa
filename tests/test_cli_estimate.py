@@ -309,9 +309,16 @@ def test_text_output(env: cr.Env) -> None:
     assert out.startswith(f"project: {cr.PID} (")
     assert "plan v1: 2 task(s), 2 to run" in out
     assert "router: off" in out
-    assert "  a [writer] medium (fake-medium): expected $0.0000 (~1.00 attempt(s))" in out
-    assert "  b [developer] medium (fake-medium): expected unknown" in out
-    assert "total: expected $0.0000 + 1 task(s) unknown; worst $" in out
+    assert "  a [writer] medium (fake-medium): about $" in out
+    assert "(history); expected $0.0000 (~1.00 attempt(s)); guard cap $" in out
+    assert "  b [developer] medium (fake-medium): about $" in out
+    assert "(defaults); expected unknown" in out
+    assert "total: about $" in out
+    assert "; expected $0.0000 + 1 task(s) unknown; guard cap (worst case) $" in out
+    assert (
+        "range basis: partly from your quality history, partly from default token profiles" in out
+    )
+    assert "toman" not in out
     assert "budget: project $0.0000 spent of $5.0000, $5.0000 left" in out
     assert "assessment: the known part fits" in out
     assert "advisory only" in out

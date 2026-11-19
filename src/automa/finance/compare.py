@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from automa.budget import LedgerEntry
 from automa.events import Event
-from automa.finance.estimate import BudgetFit
+from automa.finance.estimate import BudgetFit, RangeBasis
 from automa.finance.report import SpendGroup
 
 ESTIMATE_EVENT = "finance.estimate"
@@ -49,6 +49,10 @@ class EstimateRecord(BaseModel):
     worst_nusd: int = Field(ge=0)
     project_remaining_nusd: int = Field(ge=0)
     assessment: BudgetFit
+    # Realistic range (D119/D120); absent in events written before D120.
+    range_low_nusd: int | None = Field(default=None, ge=0)
+    range_high_nusd: int | None = Field(default=None, ge=0)
+    range_basis: RangeBasis | None = None
 
     @model_validator(mode="after")
     def _consistent(self) -> EstimateRecord:
@@ -60,6 +64,16 @@ class EstimateRecord(BaseModel):
             raise ValueError("expected_complete contradicts the unknown tasks")
         if self.expected_nusd > self.worst_nusd:
             raise ValueError("the expected cost cannot exceed the worst case")
+        ends = (self.range_low_nusd, self.range_high_nusd)
+        if (ends[0] is None) != (ends[1] is None):
+            raise ValueError("a cost range needs both ends")
+        if ends[0] is not None and ends[1] is not None:
+            if not ends[0] <= ends[1] <= self.worst_nusd:
+                raise ValueError("the cost range must be ordered and within the worst case")
+            if self.range_basis is None:
+                raise ValueError("a cost range needs its basis")
+        elif self.range_basis is not None:
+            raise ValueError("a range basis without a cost range")
         return self
 
     @classmethod
@@ -71,6 +85,11 @@ class EstimateRecord(BaseModel):
         for key in ("tasks", "excluded", "unknown"):
             if isinstance(data.get(key), list):
                 data[key] = tuple(data[key])
+        if isinstance(data.get("range_basis"), str):
+            try:
+                data["range_basis"] = RangeBasis(data["range_basis"])
+            except ValueError as e:
+                raise ValueError(f"invalid {ESTIMATE_EVENT} event: unknown range basis") from e
         if "assessment" in data and isinstance(data["assessment"], str):
             try:
                 data["assessment"] = BudgetFit(data["assessment"])

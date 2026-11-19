@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-19 — M12: بازه هزینه (نمایش)
+- **انجام‌شده:** `automa estimate` و خط `estimate:` در `automa run` حالا «about $X to $Y» نشون می‌دن (با هزینه‌های واقعی هر تلاش از لاگ کیفیت، یا پروفایل‌های پیش‌فرض اگه تاریخچه نیست) و پایه بازه رو می‌گن؛ بدترین حالت فقط به‌عنوان «guard cap (worst case)». کلید اختیاری `[display] toman_per_usd` (مثلاً ۳۲۳۰۰۰) معادل تومانی رو کنار دلار می‌ذاره: «(≈ 19,400 to 109,800 toman)». خط `run` دیگه «unknown» نداره. رویداد `finance.estimate` بازه رو هم (به nUSD) ثبت می‌کنه (D120).
+- **فایل‌های اصلی:** `src/automa/config.py` (`DisplayConfig`)، `src/automa/cli.py` (`_toman`، `_range_text`، `_quality_costs`، `estimate`، `_run_estimate`)، `src/automa/finance/compare.py` (فیلدهای بازه در `EstimateRecord`)، `automa.toml.example`، `README.md`، `tests/test_cost_range_display.py` (۴۹ تست جدید)، `tests/test_cli_estimate.py` و `tests/test_cli_run_estimate.py` (به‌روز)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D120).
+- **تست‌ها:** `pytest` ← ۴۶۱۳ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و بسته دوباره نصب شد. BudgetGuard، Policy و Approval Gate دست نخوردن؛ نرخ تومان فقط نمایشیه.
+- **برای صاحب مخزن:** اختیاری: در `automa.toml` بنویس `[display]` و `toman_per_usd = 323000`.
+- **قدم بعدی:** تأیید قبل از خرج: نمایش بازه در `automa new` و پرسش «ادامه بدم؟» در `automa run` بالای `confirm_above_usd`.
+
 ## 2026-11-19 — M12: بازه هزینه واقع‌بینانه (هسته)
 - **انجام‌شده:** مورد «بازه هزینه» به دو بخش شکسته شد (هسته؛ نمایش در CLI با معادل تومانی) و بخش اول انجام شد: `estimate_plan` حالا برای هر وظیفه و کل برنامه یک بازه «حدود X تا Y» می‌سازه که هیچ‌وقت «unknown» نیست. با تاریخچه کافی (≥۳ تلاش برای همون نقش و مدل) صدک ۲۵ تا ۹۰ هزینه هر تلاش از لاگ کیفیت خود کاربر؛ وگرنه پروفایل توکنی پیش‌فرض هر نقش با قیمت کاتالوگ (مثلاً writer با قیمت ۳/۱۵ دلار: حدود ۰٫۰۶ تا ۰٫۳۴ دلار). سر پایین = تلاش اول قبول؛ سر بالا = دو تلاش با ارتقای سطح؛ سهم Verifier و تصویر حساب می‌شه؛ هر دو سر به بدترین حالت (سقف Guard) محدودن (D119).
 - **فایل‌های اصلی:** `src/automa/finance/estimate.py` (`DEFAULT_TOKEN_PROFILES`، `tokens_nusd`، `percentile_nusd`، `attempt_costs`، `RangeBasis`، فیلدهای `range_*`)، `src/automa/finance/__init__.py`، `tests/test_finance_cost_range.py` (۳۳ تست جدید)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D119).

@@ -497,6 +497,21 @@ class ImagesConfig(_Strict):
         return self.model is not None
 
 
+MAX_TOMAN_PER_USD = 100_000_000  # sanity bound, not policy
+
+
+class DisplayConfig(_Strict):
+    """``[display]`` in automa.toml: how figures are shown, never what is spent (D120).
+
+    ``toman_per_usd``: optional exchange rate (toman per USD, e.g. 323000) used only
+    to show a toman equivalent next to dollar figures such as the cost range of
+    ``automa estimate`` and ``automa run``. Unset (the default): dollars only.
+    It never changes a price, a cap or the budget guard.
+    """
+
+    toman_per_usd: StrictFloat | StrictInt | None = Field(default=None, gt=0, le=MAX_TOMAN_PER_USD)
+
+
 class VerifierConfig(_Strict):
     """``[verifier]`` in automa.toml: the cross-family evaluator (D96).
 
@@ -547,6 +562,7 @@ class AutomaConfig(_Strict):
     router: RouterConfig = Field(default_factory=RouterConfig)
     verifier: VerifierConfig = Field(default_factory=VerifierConfig)
     images: ImagesConfig = Field(default_factory=ImagesConfig)
+    display: DisplayConfig = Field(default_factory=DisplayConfig)
 
     @field_validator("roles")
     @classmethod

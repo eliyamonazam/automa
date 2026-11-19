@@ -73,6 +73,7 @@ import sys
 import unicodedata
 from collections.abc import Callable
 from datetime import UTC, date, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, NamedTuple
@@ -125,7 +126,14 @@ from automa.benchmarks import (
     write_result,
 )
 from automa.budget.guard import BudgetError, BudgetExceeded, BudgetGuard, cap_to_nusd
-from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError, nusd_to_usd, usd_to_nusd
+from automa.budget.ledger import (
+    NANO_PER_USD,
+    CostLedger,
+    LedgerEntry,
+    LedgerError,
+    nusd_to_usd,
+    usd_to_nusd,
+)
 from automa.config import (
     MAX_PARALLEL,
     AutomaConfig,
@@ -146,10 +154,12 @@ from automa.finance import (
     EstimateComparison,
     EstimateSettings,
     PlanEstimate,
+    RangeBasis,
     SpendGroup,
     SpendingReport,
     TaskEstimate,
     TaskProgress,
+    attempt_costs,
     attempt_samples,
     call_samples,
     compare_estimate,
@@ -492,6 +502,36 @@ def _skills_status(config: AutomaConfig) -> tuple[str, dict[str, Any]]:
 
 def _usd(nusd: int) -> str:
     return f"${nusd_to_usd(nusd):.4f}"
+
+
+def _toman(nusd: int, rate: float) -> str:
+    """Toman equivalent of ``nusd`` at ``rate`` toman per USD, to the nearest 100 (D120)."""
+    value = Decimal(nusd) * Decimal(str(rate)) / NANO_PER_USD
+    rounded = int((value / 100).quantize(Decimal(1), rounding=ROUND_HALF_UP)) * 100
+    return f"{rounded:,}"
+
+
+def _toman_int(nusd: int, rate: float | None) -> int | None:
+    """Toman equivalent for JSON output (nearest 100); ``None`` without a rate."""
+    if rate is None:
+        return None
+    return int(_toman(nusd, rate).replace(",", ""))
+
+
+def _range_text(low_nusd: int, high_nusd: int, rate: float | None) -> str:
+    """``about $X to $Y`` plus ``(≈ A to B toman)`` when ``[display] toman_per_usd`` is set."""
+    text = f"about {_usd(low_nusd)} to {_usd(high_nusd)}"
+    if rate is not None:
+        text += f" (\u2248 {_toman(low_nusd, rate)} to {_toman(high_nusd, rate)} toman)"
+    return text
+
+
+_RANGE_BASIS_TEXT: dict[RangeBasis, str] = {
+    RangeBasis.HISTORY: "from your quality history",
+    RangeBasis.MIXED: "partly from your quality history, partly from default token profiles",
+    RangeBasis.DEFAULTS: "from default token profiles and catalog prices (no history yet)",
+    RangeBasis.UNKNOWN_ROLE: "no model call",
+}
 
 
 def _project_spent_nusd(workspace: Path, project_id: str) -> int:
@@ -876,7 +916,17 @@ def run(
         spent_before = ledger.spent_nusd(project_id=pid)
         typer.echo(
             "estimate: "
-            + _run_estimate(config, store, pid, roles, settings, stats, router, spent_before)
+            + _run_estimate(
+                config,
+                store,
+                pid,
+                roles,
+                settings,
+                stats,
+                router,
+                spent_before,
+                _quality_costs(quality) if stats is not None else None,
+            )
         )
         marks = _RunMarks.take(ledger, quality, pid)
         guard = BudgetGuard(config.limits, ledger, events=events)
@@ -965,6 +1015,15 @@ def _run_router(
         raise _fail(_safe(str(e)), EXIT_CONFIG) from None
 
 
+def _quality_costs(quality: QualityLog) -> dict[tuple[str, str], list[int]] | None:
+    """Worker cost per judged attempt from ``quality`` (D119); ``None`` if unreadable
+    (the range then uses default token profiles only)."""
+    try:
+        return attempt_costs(quality.records())
+    except (QualityError, ValueError):
+        return None
+
+
 _FIT_SHORT: dict[BudgetFit, str] = {
     BudgetFit.WORST_FITS: "even the worst case fits",
     BudgetFit.EXPECTED_FITS: "the expected cost fits, the worst case does not",
@@ -984,6 +1043,7 @@ def _run_estimate(
     stats: list[QualityStats] | None,
     router: Router | None,
     spent_nusd: int,
+    costs: dict[tuple[str, str], list[int]] | None = None,
 ) -> str:
     """The ``estimate:`` line of ``automa run`` (D64): advisory only.
 
@@ -993,6 +1053,8 @@ def _run_estimate(
     prevents an estimate only makes it "unavailable" (the orchestrator itself
     reports real problems such as an unconfigured tier). The figures are also
     saved as a ``finance.estimate`` event for later comparison with the real cost.
+    The realistic range (D119) leads the line; the worst case is only the guard cap
+    (D120). ``costs``: worker cost per judged attempt, from the same quality log.
     """
     if stats is None:
         return "unavailable (the quality log statistics cannot be read)"
@@ -1009,6 +1071,7 @@ def _run_estimate(
             router=router,
             skip=set(excluded),
             progress=progress,
+            costs=costs,
         )
     except (ProjectStoreError, ConfigError, ValueError, KeyError) as e:
         reason = _safe(str(e)).replace("\n", " ")
@@ -1030,6 +1093,9 @@ def _run_estimate(
                     "expected_complete": result.complete,
                     "unknown": list(result.unknown),
                     "worst_nusd": result.worst_nusd,
+                    "range_low_nusd": result.range_low_nusd,
+                    "range_high_nusd": result.range_high_nusd,
+                    "range_basis": result.range_basis.value,
                     "project_remaining_nusd": left,
                     "assessment": fit.value,
                 },
@@ -1037,10 +1103,11 @@ def _run_estimate(
         )
     except (OSError, ValueError):
         pass  # advisory: an unwritable event never changes the run
-    unknown = f" + {len(result.unknown)} task(s) unknown" if result.unknown else ""
+    rng = _range_text(result.range_low_nusd, result.range_high_nusd, config.display.toman_per_usd)
     return (
-        f"{len(result.tasks)} task(s) to run; expected {_usd(result.expected_nusd)}"
-        f"{unknown}; worst {_usd(result.worst_nusd)}; project budget left {_usd(left)}: "
+        f"{len(result.tasks)} task(s) to run; {rng}, "
+        f"{_RANGE_BASIS_TEXT[result.range_basis]}; guard cap (worst case) "
+        f"{_usd(result.worst_nusd)}; project budget left {_usd(left)}: "
         f"{_FIT_SHORT[fit]} (advisory; details: automa estimate {pid})"
     )
 
@@ -1428,10 +1495,13 @@ def _estimate_task_json(t: TaskEstimate) -> dict[str, Any]:
         "expected_usd": nusd_to_usd(t.expected_nusd) if t.expected_nusd is not None else None,
         "max_calls": t.max_calls,
         "worst_usd": nusd_to_usd(t.worst_nusd),
+        "range_low_usd": nusd_to_usd(t.range_low_nusd),
+        "range_high_usd": nusd_to_usd(t.range_high_nusd),
+        "range_basis": t.range_basis.value,
     }
 
 
-def _estimate_task_line(t: TaskEstimate, s: EstimateSettings) -> str:
+def _estimate_task_line(t: TaskEstimate, s: EstimateSettings, rate: float | None = None) -> str:
     if t.basis is EstimateBasis.UNKNOWN_ROLE:
         return f"  {t.task_id} [{_safe(t.role)}]: unknown role, fails without any model call"
     model = _safe(t.model or "").replace("\n", " ").replace("\t", " ")
@@ -1450,9 +1520,10 @@ def _estimate_task_line(t: TaskEstimate, s: EstimateSettings) -> str:
             f"expected unknown (needs {s.min_samples}+ judged attempts of {_safe(t.role)} "
             "on every tier it may reach)"
         )
+    rng = _range_text(t.range_low_nusd, t.range_high_nusd, rate)
     return (
-        f"  {t.task_id} [{_safe(t.role)}] {where}: {expected}; "
-        f"worst {_usd(t.worst_nusd)} ({t.max_calls} call(s))"
+        f"  {t.task_id} [{_safe(t.role)}] {where}: {rng} ({t.range_basis.value}); "
+        f"{expected}; guard cap {_usd(t.worst_nusd)} ({t.max_calls} call(s))"
     )
 
 
@@ -1507,10 +1578,12 @@ def estimate(
         raise _fail(_safe(str(e)), EXIT_USER) from None
     path = config.workspace / QUALITY_FILE
     stats: list[QualityStats] = []
+    costs: dict[tuple[str, str], list[int]] = {}
     if path.exists() or path.is_symlink():
         try:
             with QualityLog(path, read_only=True) as log:
                 stats = log.stats()
+                costs = attempt_costs(log.records())
         except QualityError as e:
             raise _fail(_safe(str(e)), EXIT_CONFIG) from None
     routing = config.router.enabled if use_router is None else use_router
@@ -1525,6 +1598,7 @@ def estimate(
             router=router,
             skip=set(excluded),
             progress=progress,
+            costs=costs,
         )
     except (ConfigError, ValueError) as e:
         raise _fail(_safe(str(e)), EXIT_CONFIG) from None
@@ -1533,6 +1607,7 @@ def estimate(
     daily_cap = cap_to_nusd(config.limits.daily_usd)
     left = max(0, project_cap - spent)
     fit = result.assess(left)
+    rate = config.display.toman_per_usd
     if as_json:
         out: dict[str, Any] = {
             "project": pid,
@@ -1547,6 +1622,14 @@ def estimate(
             "expected_complete": result.complete,
             "unknown": result.unknown,
             "worst_usd": nusd_to_usd(result.worst_nusd),
+            "range": {
+                "low_usd": nusd_to_usd(result.range_low_nusd),
+                "high_usd": nusd_to_usd(result.range_high_nusd),
+                "basis": result.range_basis.value,
+                "toman_per_usd": rate,
+                "low_toman": _toman_int(result.range_low_nusd, rate),
+                "high_toman": _toman_int(result.range_high_nusd, rate),
+            },
             "budget": {
                 "project_cap_usd": nusd_to_usd(project_cap),
                 "project_spent_usd": nusd_to_usd(spent),
@@ -1570,11 +1653,14 @@ def estimate(
     )
     typer.echo(f"router: {'on' if routing else 'off'}")
     for t in result.tasks:
-        typer.echo(_estimate_task_line(t, settings))
+        typer.echo(_estimate_task_line(t, settings, rate))
     unknown = f" + {len(result.unknown)} task(s) unknown" if result.unknown else ""
     typer.echo(
-        f"total: expected {_usd(result.expected_nusd)}{unknown}; worst {_usd(result.worst_nusd)}"
+        f"total: {_range_text(result.range_low_nusd, result.range_high_nusd, rate)}; "
+        f"expected {_usd(result.expected_nusd)}{unknown}; "
+        f"guard cap (worst case) {_usd(result.worst_nusd)}"
     )
+    typer.echo(f"range basis: {_RANGE_BASIS_TEXT[result.range_basis]}")
     typer.echo(
         f"budget: project {_usd(spent)} spent of {_usd(project_cap)}, {_usd(left)} left; "
         f"today {_usd(today)} of {_usd(daily_cap)} (resets at 00:00 UTC)"
