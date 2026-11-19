@@ -36,14 +36,14 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
 from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError, nusd_to_usd
 from automa.finance.anomaly import AnomalySettings
-from automa.l10n import DEFAULT_TIMEZONE, resolve_timezone
+from automa.l10n import DEFAULT_TIMEZONE, LANGUAGES, Language, resolve_timezone
 from automa.project.store import (
     ProjectStatus,
     ProjectStore,
@@ -240,8 +240,17 @@ class WebApp:
         anomaly: AnomalySettings | None = None,
         toman_per_usd: float | None = None,
         background_ideas: bool = False,
+        language: Language = "en",
+        timezone: str = DEFAULT_TIMEZONE,
+        clock: Callable[[], datetime] | None = None,
     ):
         self._store = ProjectStore.for_workspace(workspace)
+        if language not in LANGUAGES:
+            raise ValueError(f"unknown language: {language!r}")
+        # Display only (D140): the language and local time zone of translated pages.
+        self._lang: Language = language
+        self._tz = resolve_timezone(timezone)
+        self._clock = clock or (lambda: datetime.now(UTC))
         self._anomaly = anomaly
         if toman_per_usd is not None and not (math.isfinite(toman_per_usd) and toman_per_usd > 0):
             raise ValueError(f"toman_per_usd must be a positive number, got {toman_per_usd!r}")
@@ -303,10 +312,10 @@ class WebApp:
         entries, err = self._entries()
         if err:
             return None
-        now = datetime.now(_LOCAL_TZ)
+        now = self._clock().astimezone(self._tz)
         today = month = 0
         for e in entries:
-            local = e.ts.astimezone(_LOCAL_TZ)
+            local = e.ts.astimezone(self._tz)
             if (local.year, local.month) == (now.year, now.month):
                 month += e.cost_nusd
                 if local.date() == now.date():
@@ -607,6 +616,9 @@ class WebApp:
                 ideas=self._ideas is not None,
                 rate=self._rate,
                 totals=self._totals(),
+                lang=self._lang,
+                tz=self._tz,
+                now=self._clock(),
             )
             return _html(200, document, security=self._security)
         if self._ideas is not None and self._actions is not None:
@@ -664,9 +676,6 @@ class WebApp:
             )
             return _html(200, document, security=self._security)
         return self.error(404, "Not found")
-
-
-_LOCAL_TZ = resolve_timezone(DEFAULT_TIMEZONE)
 
 
 def _task_costs(entries: Sequence[LedgerEntry]) -> dict[str, float]:
@@ -751,6 +760,8 @@ def create_server(
     runs: RunPreflight | None = None,
     anomaly: AnomalySettings | None = None,
     toman_per_usd: float | None = None,
+    language: Language = "en",
+    timezone: str = DEFAULT_TIMEZONE,
 ) -> ThreadingHTTPServer:
     """A bound (not yet serving) server. ``port=0`` picks a free port (tests).
 
@@ -759,7 +770,8 @@ def create_server(
     (only used with ``allow_actions``, D124) enables the "New idea" pages; ``runs``
     (only with ``allow_actions``, D125) enables the "Start run" button; ``anomaly``
     is the unusual-spending threshold of the progress panel (``[finance]``, D132);
-    ``toman_per_usd`` shows every amount first in rounded toman (D133)."""
+    ``toman_per_usd`` shows every amount first in rounded toman (D133); ``language``
+    and ``timezone`` are ``[display]`` (translated pages and local times, D140)."""
     host = validate_bind_host(host)
     port = validate_port(port)
 
@@ -786,6 +798,8 @@ def create_server(
         runs=runs,
         anomaly=anomaly,
         toman_per_usd=toman_per_usd,
+        language=language,
+        timezone=timezone,
         background_ideas=True,  # the browser waits on a "thinking" page (D137)
     )
     server.RequestHandlerClass = make_handler(app, log)

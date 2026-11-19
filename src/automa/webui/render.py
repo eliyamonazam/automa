@@ -14,13 +14,15 @@ import html
 import json
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, tzinfo
 from urllib.parse import quote
 
+from automa.l10n import DEFAULT_TIMEZONE, Language, relative_time, resolve_timezone
 from automa.plan.models import MAX_ANSWER_CHARS
 from automa.project.store import MAX_GOAL_CHARS
 from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.webui.files import FileContent, FileListing, FilesRoute, files_href
+from automa.webui.i18n import MESSAGES, WELCOME_EXAMPLE_KEYS, status_label, t
 from automa.webui.ideas import ASK_VALUE
 from automa.webui.money import money, money_range
 from automa.webui.preview import is_previewable, preview_href
@@ -158,8 +160,11 @@ def page(
     actions: bool = False,
     refresh: int | None = None,
     img_src: str | None = None,
+    lang: Language = "en",
 ) -> str:
     """A complete HTML document around already-safe ``body``.
+
+    ``lang`` (D140) sets ``<html lang>``; Persian pages are ``dir="rtl"``.
 
     In action mode the CSP allows forms to post to this server only, and the referrer
     policy is ``same-origin`` so the browser sends a real ``Origin`` with each post
@@ -168,13 +173,16 @@ def page(
     """
     csp = page_csp(actions=actions, img_src=img_src)
     referrer = "same-origin" if actions else "no-referrer"
+    if lang not in ("fa", "en"):
+        raise ValueError(f"unknown language: {lang!r}")
+    direction = ' dir="rtl"' if lang == "fa" else ""
     reload = ""
     if refresh is not None:
         if isinstance(refresh, bool) or not isinstance(refresh, int) or not 1 <= refresh <= 3600:
             raise ValueError("refresh must be 1..3600 seconds")
         reload = f'<meta http-equiv="refresh" content="{refresh}">'
     return (
-        '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
+        f'<!doctype html>\n<html lang="{lang}"{direction}><head><meta charset="utf-8">'
         f'<meta http-equiv="Content-Security-Policy" content="{csp}">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         '<meta name="color-scheme" content="light dark">'
@@ -184,11 +192,20 @@ def page(
     )
 
 
-def _errors(errors: tuple[str, ...]) -> str:
+def _errors(errors: tuple[str, ...], lang: Language = "en") -> str:
     if not errors:
         return ""
     items = "".join(f'<li dir="auto">{text(e)}</li>' for e in errors)
-    return f'<section class="card err"><h2>Unreadable data</h2><ul>{items}</ul></section>'
+    heading = text(t("errors.unreadable", lang))
+    return f'<section class="card err"><h2>{heading}</h2><ul>{items}</ul></section>'
+
+
+def _when(value: datetime, lang: Language, tz: tzinfo | None, now: datetime | None) -> str:
+    """``now`` given: a relative local time (D140); else the recorded ISO time (plain
+    text, escaped by the caller)."""
+    if now is None:
+        return value.isoformat(timespec="seconds")
+    return relative_time(value, now, tz or resolve_timezone(DEFAULT_TIMEZONE), lang)
 
 
 def render_overview(
@@ -198,77 +215,82 @@ def render_overview(
     ideas: bool = False,
     rate: float | None = None,
     totals: tuple[float, float] | None = None,
+    lang: Language = "en",
+    tz: tzinfo | None = None,
+    now: datetime | None = None,
 ) -> str:
     """The project list. ``ideas`` (action mode with a planner, D124) adds the
-    "New idea" link; ``rate`` (toman per USD) shows costs first in toman (D133)."""
-    mode = (
-        "Actions enabled: approve or reject requests on each project page."
-        if actions
-        else "Read-only view."
-    )
-    parts = ["<h1>Automa projects</h1>", f"<p>{mode}</p>"]
+    "New idea" link; ``rate`` (toman per USD) shows costs first in toman (D133);
+    ``totals`` is (spent today, this month); ``lang`` translates the page and
+    ``now``/``tz`` show times relative and local (D140)."""
+    mode = t("overview.mode.actions" if actions else "overview.mode.readonly", lang)
+    title = t("overview.title", lang)
+    new_idea = text(t("overview.new_idea", lang))
+    parts = [f"<h1>{text(title)}</h1>", f"<p>{text(mode)}</p>"]
     if totals is not None:
         today, month = totals
+        spent_today = text(t("overview.spent_today", lang))
+        this_month = text(t("overview.this_month", lang))
         parts.append(
-            '<p class="chips"><span>Spent today: '
-            f"<strong>{text(money(today, rate))}</strong></span>"
-            f"<span>This month: <strong>{text(money(month, rate))}</strong></span></p>"
+            f'<p class="chips"><span>{spent_today} '
+            f"<strong>{text(money(today, rate, lang=lang))}</strong></span>"
+            f"<span>{this_month} <strong>{text(money(month, rate, lang=lang))}</strong></span></p>"
         )
     if actions and ideas and view.projects:
-        parts.append('<p><a class="button" href="/new"><strong>+ New idea</strong></a></p>')
+        parts.append(f'<p><a class="button" href="/new"><strong>{new_idea}</strong></a></p>')
     if view.showing_tests:
-        parts.append('<p class="muted"><a href="/">Hide test runs</a></p>')
+        parts.append(f'<p class="muted"><a href="/">{text(t("overview.hide_tests", lang))}</a></p>')
     elif view.hidden_tests:
+        hidden = t("overview.tests_hidden", lang, count=view.hidden_tests)
         parts.append(
-            f'<p class="muted">{text(str(view.hidden_tests))} test runs hidden · '
-            '<a href="/?tests=1">show them</a></p>'
+            f'<p class="muted">{text(hidden)} · '
+            f'<a href="/?tests=1">{text(t("overview.show_tests", lang))}</a></p>'
         )
     if not view.projects:
-        parts.append(_welcome(actions=actions, ideas=ideas))
+        parts.append(_welcome(actions=actions, ideas=ideas, lang=lang))
     else:
         cards = []
         for p in view.projects:
             waiting = (
-                f'<span class="badge warn">{p.pending_approvals} pending</span>'
+                '<span class="badge warn">'
+                f"{text(t('overview.pending', lang, count=p.pending_approvals))}</span>"
                 if p.pending_approvals
-                else "approvals: 0"
+                else text(t("overview.no_pending", lang))
             )
+            cost = t("overview.cost", lang, amount=money(p.cost_usd, rate, lang=lang))
+            created = t("overview.created", lang, when=_when(p.created_at, lang, tz, now))
             cards.append(
                 '<article class="card project">'
                 f'<h2 dir="auto"><a href="{text(_project_href(p.id))}">{text(p.title or p.id)}</a> '
-                f'<span class="badge">{text(p.status)}</span></h2>'
+                f'<span class="badge">{text(status_label(p.status, lang))}</span></h2>'
                 f'<p class="muted"><code>{text(p.id)}</code></p>'
                 f'<p class="goal" dir="auto">{text(p.goal_preview)}</p>'
-                f'<p class="chips"><span>cost: {text(money(p.cost_usd, rate))}</span>'
+                f'<p class="chips"><span>{text(cost)}</span>'
                 f"<span>{waiting}</span>"
-                f"<span>created {_time(p.created_at)}</span></p></article>"
+                f"<span>{text(created)}</span></p></article>"
             )
         parts.append('<div class="cards">' + "".join(cards) + "</div>")
-    parts.append(_errors(view.errors))
-    return page("Automa projects", "".join(parts), actions=actions)
+    parts.append(_errors(view.errors, lang))
+    return page(title, "".join(parts), actions=actions, lang=lang)
 
 
-WELCOME_EXAMPLES = (
-    "A one-page HTML tool that converts Persian digits to English digits and back",
-    "A short report comparing three note-taking apps for students, with sources",
-    "A Python script that renames the photos in a folder by the date they were taken",
-)
+WELCOME_EXAMPLES = tuple(MESSAGES[k]["en"] for k in WELCOME_EXAMPLE_KEYS)
 
 
-def _welcome(*, actions: bool, ideas: bool) -> str:
+def _welcome(*, actions: bool, ideas: bool, lang: Language = "en") -> str:
     """The empty home page: what Automa does and how to start (D138)."""
     if not (actions and ideas):
         return (
-            '<div class="card"><h2>No projects yet</h2>'
-            "<p>Start the page with actions enabled to plan a new idea here.</p></div>"
+            f'<div class="card"><h2>{text(t("welcome.none.heading", lang))}</h2>'
+            f"<p>{text(t('welcome.none.body', lang))}</p></div>"
         )
-    examples = "".join(f'<li dir="auto">{text(e)}</li>' for e in WELCOME_EXAMPLES)
+    examples = "".join(f'<li dir="auto">{text(t(k, lang))}</li>' for k in WELCOME_EXAMPLE_KEYS)
+    new_idea = text(t("overview.new_idea", lang))
     return (
-        '<div class="card"><h2>👋 Welcome</h2>'
-        "<p>Describe an idea in a few sentences. Automa asks what it needs, shows a plan "
-        "and a cost range, and starts only when you press Start.</p>"
-        '<p><a class="button" href="/new"><strong>+ New idea</strong></a></p>'
-        f'<p class="muted">For example:</p><ul>{examples}</ul></div>'
+        f'<div class="card"><h2>{text(t("welcome.heading", lang))}</h2>'
+        f"<p>{text(t('welcome.body', lang))}</p>"
+        f'<p><a class="button" href="/new"><strong>{new_idea}</strong></a></p>'
+        f'<p class="muted">{text(t("welcome.examples", lang))}</p><ul>{examples}</ul></div>'
     )
 
 

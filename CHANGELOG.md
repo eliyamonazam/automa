@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-19 — M13: زبان فارسی (بخش ۲الف: جدول ترجمه و صفحهٔ اصلی فارسی) (D140)
+- **انجام‌شده:** مورد «زبان فارسی (۲)» به دو بخش شکسته شد (صفحهٔ اصلی؛ صفحهٔ پروژه) و بخش اول انجام شد: جدول ترجمهٔ تازهٔ `automa.webui.i18n` که هنگام بارگذاری بررسی می‌کنه هر کلید هر دو زبان و پارامترهای یکسان داره؛ پوستهٔ صفحه با `<html lang="fa" dir="rtl">`؛ صفحهٔ اصلی کامل فارسی (همراه با «خرج امروز» و «این ماه» از کارت هزینهٔ D139): «پروژه‌های Automa»، «+ ایدهٔ جدید»، وضعیت‌ها («تموم شد»، «در حال کار»)، «۳ منتظر تأیید»، «هزینه: حدود ۱۴۵ هزار تومان (۰٫۴۵ دلار)»، «ساخته‌شده ۵ دقیقه پیش» به وقت تهران، و صفحهٔ خوش‌آمد با مثال‌های فارسی. `automa web` زبان و منطقهٔ زمانی `[display]` رو به سرور می‌ده (پیش‌فرض فارسی و `Asia/Tehran`).
+- **فایل‌های اصلی:** `src/automa/webui/i18n.py` (جدید)، `src/automa/webui/render.py` (`page(lang=)`، `render_overview`، `_welcome`، `_errors`)، `src/automa/webui/server.py` (`language`، `timezone`، `clock`)، `src/automa/cli.py`، `tests/test_webui_i18n.py` (۴۷ تست جدید)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D140)، `ROADMAP.md`.
+- **تست‌ها:** `pytest` ← ۵۴۹۷ سبز، ۲ رد شده (Docker واقعی)؛ حالت شبیه CI (`GITHUB_ACTIONS=true FORCE_COLOR=1`) هم سبز؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** صفحهٔ پروژه و فرم‌ها هنوز انگلیسی‌اند (و چپ‌به‌راست، عمداً تا قاطی نشن). ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود. BudgetGuard، Policy و Approval Gate دست نخوردن.
+- **برای صاحب مخزن:** کاری لازم نیست؛ اگه رابط انگلیسی خواستی `[display] language = "en"`.
+- **قدم بعدی:** زبان فارسی (۲ب): ترجمهٔ صفحهٔ پروژه.
+
 ## 2026-11-19 — M13: کارت هزینه (D139)
 - **انجام‌شده:** صفحه پروژه حالا یک کارت هزینه داره: جمع هزینه با خط درشت (تومان اول، دلار در پرانتز)، یک جمله ساده درباره اجرای آخر نسبت به بازه تخمین («This run within the estimated range: …»، در حال اجرا «so far, still running; estimated …»، بالای بازه با رنگ هشدار) همراه نوار، تفکیک «Planning» و «Tasks»، و جدول تاشوی «Cost of each task» از روی Ledger. صفحه اصلی جمع «Spent today» و «This month» رو به وقت محلی نشون می‌ده.
 - **فایل‌ها:** `src/automa/webui/render.py` (`_cost_card`، حذف `_spent_line`)، `server.py` (`_task_costs`، `WebApp._totals`)، `tests/test_webui_money.py` (۴ تست جدید)، `tests/test_webui_progress.py`.

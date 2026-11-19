@@ -3640,6 +3640,8 @@ def web(
             runs=_WebRunPreflight(config, config_path) if allow_actions else None,
             anomaly=anomaly_settings(config),
             toman_per_usd=config.display.toman_per_usd,
+            language=config.display.language,
+            timezone=config.display.timezone,
         )
     except webui_server.WebServerError as e:
         raise _fail(str(e), EXIT_USER) from None
