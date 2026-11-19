@@ -23,7 +23,7 @@ from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.webui.files import FileContent, FileListing, FilesRoute, files_href
 from automa.webui.ideas import ASK_VALUE
 from automa.webui.progress import REFRESH_SECONDS, ProgressView
-from automa.webui.views import ApprovalView, Overview, ProjectView
+from automa.webui.views import ApprovalView, Overview, ProjectView, TaskRow
 
 # Joiners needed by Persian text; every other Cf character (incl. bidi controls) is escaped.
 _ALLOWED_FORMAT_CHARS = frozenset({"‌", "‍"})
@@ -37,19 +37,62 @@ ACTION_CONTENT_SECURITY_POLICY = CONTENT_SECURITY_POLICY.replace(
     "form-action 'none'", "form-action 'self'"
 )
 
-_STYLE = """
-body{font-family:system-ui,sans-serif;margin:16px;max-width:1100px;color:#1d1d1f;background:#fff}
-table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #ddd;padding:6px;
-text-align:start;vertical-align:top}pre{white-space:pre-wrap;word-break:break-word;
-background:#f4f4f6;padding:8px}.warn{color:#9a3d00}.err{color:#b00020}
-.badge{padding:1px 6px;border-radius:8px;background:#eee}
-.st-passed{background:#d6f5dd}.st-failed,.st-blocked{background:#fbd9d9}
-.st-running,.st-verifying{background:#fff0c2}meter{width:12em;vertical-align:middle}
-@media (prefers-color-scheme: dark){body{color:#e8e8ea;background:#151517}
-th,td{border-color:#333}pre{background:#222226}.badge{background:#333}a{color:#8ab4ff}
-.st-passed{background:#1f4a2a}.st-failed,.st-blocked{background:#5a2323}
-.st-running,.st-verifying{background:#5a4a12}}
+# Local fonts only (the CSP loads nothing): Persian-capable faces first — Vazirmatn if
+# installed, Segoe UI/Tahoma on Windows, Noto on Linux — then the system UI face (D129).
+FONT_STACK = (
+    '"Vazirmatn","Segoe UI",Tahoma,"Noto Sans Arabic","Noto Naskh Arabic",'
+    '"Noto Sans",system-ui,-apple-system,sans-serif'
+)
+MONO_STACK = 'ui-monospace,"Cascadia Mono",Consolas,"DejaVu Sans Mono",monospace'
+
+_STYLE = (
+    """
+:root{color-scheme:light dark;--bg:#f5f6f8;--card:#fff;--fg:#1d1d1f;--muted:#5f6368;
+--line:#e1e3e8;--accent:#2457c5;--code:#f0f1f4;--warn:#9a3d00;--err:#b00020;
+--chip:#eceef2;--ok:#d6f5dd;--bad:#fbd9d9;--busy:#fff0c2}
+@media (prefers-color-scheme: dark){:root{--bg:#121214;--card:#1c1c20;--fg:#e8e8ea;
+--muted:#a3a7ae;--line:#2e2f35;--accent:#8ab4ff;--code:#26262b;--warn:#ffb070;
+--err:#ff7b8a;--chip:#2c2d33;--ok:#1f4a2a;--bad:#5a2323;--busy:#5a4a12}}
+*{box-sizing:border-box}
+body{font-family:"""
+    + FONT_STACK
+    + """;font-size:16px;line-height:1.7;margin:0 auto;padding:16px;max-width:1100px;
+color:var(--fg);background:var(--bg)}
+h1{font-size:1.5em;margin:.4em 0}h2{font-size:1.2em;margin:1.2em 0 .5em}h3{font-size:1.05em}
+a{color:var(--accent)}code,pre{font-family:"""
+    + MONO_STACK
+    + """}
+[dir=auto],pre{unicode-bidi:plaintext}
+pre{white-space:pre-wrap;word-break:break-word;background:var(--code);padding:8px 10px;
+border-radius:8px;text-align:start}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+padding:12px 16px;margin:12px 0}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.cards>.card{margin:0}.card h2,.card h3{margin-top:0}
+.goal{margin:.3em 0;overflow-wrap:anywhere}.meta{color:var(--muted);font-size:.9em;margin:.2em 0}
+table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid var(--line);
+padding:6px;text-align:start;vertical-align:top}
+.scroll{overflow-x:auto}
+.warn{color:var(--warn)}.err{color:var(--err)}
+.badge{display:inline-block;padding:0 8px;border-radius:10px;background:var(--chip);
+font-size:.9em}
+.st-passed{background:var(--ok)}.st-failed,.st-blocked{background:var(--bad)}
+.st-running,.st-verifying{background:var(--busy)}
+.task{border-inline-start:4px solid var(--line)}.t-passed{border-inline-start-color:#2e9e4f}
+.t-failed,.t-blocked{border-inline-start-color:#c62828}
+.t-running,.t-verifying{border-inline-start-color:#c9a000}
+.chips{display:flex;flex-wrap:wrap;gap:4px 12px;color:var(--muted);font-size:.9em;margin:.3em 0}
+meter{width:12em;vertical-align:middle}
+textarea,input,button{font:inherit;color:inherit}
+textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:8px;
+padding:8px}
+input[type=text],input:not([type]){background:var(--card);border:1px solid var(--line);
+border-radius:6px;padding:2px 6px}
+button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:4px 14px;
+cursor:pointer}
+@media (prefers-color-scheme: dark){button{color:#121214}}
 """
+)
 
 
 def visible(value: str) -> str:
@@ -123,6 +166,7 @@ def page(
         '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
         f'<meta http-equiv="Content-Security-Policy" content="{csp}">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<meta name="color-scheme" content="light dark">'
         f'<meta name="referrer" content="{referrer}">{reload}'
         f"<title>{text(title)}</title><style>{_STYLE}</style></head>"
         f"<body>{body}</body></html>\n"
@@ -132,8 +176,8 @@ def page(
 def _errors(errors: tuple[str, ...]) -> str:
     if not errors:
         return ""
-    items = "".join(f"<li>{text(e)}</li>" for e in errors)
-    return f'<section class="err"><h2>Unreadable data</h2><ul>{items}</ul></section>'
+    items = "".join(f'<li dir="auto">{text(e)}</li>' for e in errors)
+    return f'<section class="card err"><h2>Unreadable data</h2><ul>{items}</ul></section>'
 
 
 def render_overview(view: Overview, *, actions: bool = False, ideas: bool = False) -> str:
@@ -150,26 +194,22 @@ def render_overview(view: Overview, *, actions: bool = False, ideas: bool = Fals
     if not view.projects:
         parts.append("<p>No projects yet.</p>")
     else:
-        rows = []
+        cards = []
         for p in view.projects:
             waiting = (
                 f'<span class="badge warn">{p.pending_approvals} pending</span>'
                 if p.pending_approvals
-                else "0"
+                else "approvals: 0"
             )
-            rows.append(
-                f'<tr><td><a href="{text(_project_href(p.id))}">{text(p.id)}</a></td>'
-                f'<td><span class="badge">{text(p.status)}</span></td>'
-                f'<td dir="auto">{text(p.goal_preview)}</td>'
-                f"<td>${p.cost_usd:.4f}</td><td>{waiting}</td>"
-                f"<td>{_time(p.created_at)}</td></tr>"
+            cards.append(
+                '<article class="card project">'
+                f'<h2><a href="{text(_project_href(p.id))}">{text(p.id)}</a> '
+                f'<span class="badge">{text(p.status)}</span></h2>'
+                f'<p class="goal" dir="auto">{text(p.goal_preview)}</p>'
+                f'<p class="chips"><span>cost: ${p.cost_usd:.4f}</span><span>{waiting}</span>'
+                f"<span>created {_time(p.created_at)}</span></p></article>"
             )
-        parts.append(
-            "<table><thead><tr><th>Project</th><th>Status</th><th>Goal</th><th>Cost</th>"
-            "<th>Approvals</th><th>Created</th></tr></thead><tbody>"
-            + "".join(rows)
-            + "</tbody></table>"
-        )
+        parts.append('<div class="cards">' + "".join(cards) + "</div>")
     parts.append(_errors(view.errors))
     return page("Automa projects", "".join(parts), actions=actions)
 
@@ -198,19 +238,19 @@ def _decision_forms(project_id: str, a: ApprovalView, forms: ActionForms) -> str
 
 def _approval(project_id: str, a: ApprovalView, forms: ActionForms | None) -> str:
     args = json.dumps(a.arguments, ensure_ascii=False, indent=2, sort_keys=True, default=str)
-    lines = "".join(f"<li>{text(line)}</li>" for line in a.request_lines)
-    warns = "".join(f'<li class="warn">{text(w)}</li>' for w in a.warnings)
+    lines = "".join(f'<li dir="auto">{text(line)}</li>' for line in a.request_lines)
+    warns = "".join(f'<li class="warn" dir="auto">{text(w)}</li>' for w in a.warnings)
     target = f"<ul>{lines}{warns}</ul>" if lines or warns else ""
     if forms is None:
         decide = f"<p>Decide with: <code>automa approvals {text(a.id)}</code> in the terminal.</p>"
     else:
         decide = _decision_forms(project_id, a, forms)
     return (
-        f"<article><h3>{text(a.id)} — {text(a.tool)} "
+        f'<article class="card"><h3>{text(a.id)} — {text(a.tool)} '
         f'<span class="badge">{text(a.risk)}</span></h3>'
         f"<p>task: {text(a.task_id or '-')} · requested {_time(a.created_at)}</p>"
-        f'<p dir="auto">reason: {text(a.reason)}</p>{target}'
-        f"<pre>{text(args)}</pre>{decide}"
+        f'<p>reason: <span dir="auto">{text(a.reason)}</span></p>{target}'
+        f'<pre dir="ltr">{text(args)}</pre>{decide}'
         "</article>"
     )
 
@@ -236,9 +276,11 @@ def render_project(
     if notice:
         parts.append(f'<p class="badge" dir="auto">{text(notice)}</p>')
     parts += [
+        '<section class="card">',
         f"<h1>{text(view.id)}</h1>",
-        f'<p dir="auto"><strong>Goal:</strong> {text(view.goal)}</p>',
-        f'<p>status: <span class="badge">{text(view.status)}</span> · '
+        '<p class="meta"><strong>Goal:</strong></p>',
+        f'<p class="goal" dir="auto">{text(view.goal)}</p>',
+        f'<p class="meta">status: <span class="badge">{text(view.status)}</span> · '
         f"cost: ${view.cost_usd:.4f} · created {_time(view.created_at)} · "
         f"updated {_time(view.updated_at)}</p>",
         f'<p><a href="{text(_project_href(view.id) + "/files")}">Files</a></p>',
@@ -251,6 +293,7 @@ def render_project(
         )
     if cost_range is not None:
         parts.append(f"<p><strong>Cost range:</strong> {text(cost_range)}</p>")
+    parts.append("</section>")
     if progress is not None:
         parts.append(_progress(progress))
     if run is not None and forms is not None:
@@ -263,21 +306,10 @@ def render_project(
     if view.plan_version is None:
         parts.append("<h2>Plan</h2><p>No plan.</p>")
     else:
-        rows = "".join(
-            f'<tr><td>{t.order}</td><td>{text(t.id)}</td><td dir="auto">{text(t.title)}</td>'
-            f"<td>{text(t.role)}</td><td>{text(', '.join(t.depends_on) or '-')}</td>"
-            f'<td><span class="badge st-{_state_class(t.state)}">'
-            f"{text(t.state or 'not started')}</span></td>"
-            f"<td>{t.attempts}</td><td>{text(t.last_result or '-')}</td>"
-            f"<td>{text(t.model or '-')}</td></tr>"
-            for t in view.tasks
-        )
+        cards = "".join(_task_card(t) for t in view.tasks)
         parts.append(
             f"<h2>Plan v{view.plan_version} ({len(view.tasks)} tasks)</h2>"
-            "<table><thead><tr><th>#</th><th>Task</th><th>Title</th><th>Role</th>"
-            "<th>After</th><th>State</th><th>Attempts</th><th>Last result</th>"
-            "<th>Model</th></tr></thead>"
-            f"<tbody>{rows}</tbody></table>"
+            f'<div class="cards">{cards}</div>'
         )
     errors = view.errors + (progress.errors if progress is not None else ())
     parts.append(_errors(errors))
@@ -293,10 +325,28 @@ def _state_class(state: str | None) -> str:
     return state if state in _STATE_CLASSES else "none"
 
 
+def _task_card(t: TaskRow) -> str:
+    """One task of the plan as a card (D129): the title in its own direction, the
+    state as a fixed class and the rest as labelled chips."""
+    state = _state_class(t.state)
+    return (
+        f'<article class="card task t-{state}">'
+        f'<h3><span class="badge">#{t.order}</span> <code>{text(t.id)}</code> '
+        f'<span class="badge st-{state}">{text(t.state or "not started")}</span></h3>'
+        f'<p class="goal" dir="auto">{text(t.title)}</p>'
+        '<p class="chips">'
+        f"<span>Role: {text(t.role)}</span>"
+        f"<span>After: {text(', '.join(t.depends_on) or '-')}</span>"
+        f"<span>Attempts: {t.attempts}</span>"
+        f'<span>Last result: <span dir="auto">{text(t.last_result or "-")}</span></span>'
+        f"<span>Model: {text(t.model or '-')}</span></p></article>"
+    )
+
+
 def _progress(p: ProgressView) -> str:
     """Tasks passed, the latest run's cost against its range and the latest events (D127)."""
     parts = [
-        "<h2>Progress</h2>",
+        '<section class="card"><h2>Progress</h2>',
         f"<p>tasks passed: <strong>{p.passed} / {p.total}</strong>",
     ]
     if p.total:
@@ -328,9 +378,10 @@ def _progress(p: ProgressView) -> str:
         )
         parts.append(
             f"<h3>Latest events ({len(p.events)}, newest first)</h3>"
-            "<table><thead><tr><th>Time</th><th>Event</th><th>Details</th></tr></thead>"
-            f"<tbody>{rows}</tbody></table>"
+            '<div class="scroll"><table><thead><tr><th>Time</th><th>Event</th>'
+            f"<th>Details</th></tr></thead><tbody>{rows}</tbody></table></div>"
         )
+    parts.append("</section>")
     return "".join(parts)
 
 
@@ -349,7 +400,7 @@ class RunPanel:
 
 
 def _run_panel(project_id: str, run: RunPanel, forms: ActionForms) -> str:
-    parts = ["<h2>Run</h2>"]
+    parts = ['<section class="card"><h2>Run</h2>']
     if run.state is not None:
         when = f" (started {_time(run.started_at)})" if run.started_at is not None else ""
         cls = "badge warn" if run.running else "badge"
@@ -357,7 +408,7 @@ def _run_panel(project_id: str, run: RunPanel, forms: ActionForms) -> str:
         if run.log_name:
             parts.append(f"<p>log: <code>web-runs/{text(run.log_name)}</code></p>")
         if run.tail:
-            parts.append("<pre>" + text("\n".join(run.tail)) + "</pre>")
+            parts.append('<pre dir="auto">' + text("\n".join(run.tail)) + "</pre>")
         if run.running:
             parts.append("<p>The page refreshes itself while the run is going.</p>")
         if run.can_stop:
@@ -385,6 +436,7 @@ def _run_panel(project_id: str, run: RunPanel, forms: ActionForms) -> str:
         )
     elif run.state is None:
         parts.append("<p>Not startable now (no plan, already running or done).</p>")
+    parts.append("</section>")
     return "".join(parts)
 
 
@@ -395,7 +447,7 @@ def render_new_idea(forms: ActionForms) -> str:
         "<p>The Executive may ask a few questions, then makes a plan with a cost range. "
         "Nothing is run yet. Each step is a model call through the budget guard and may "
         "take a minute.</p>"
-        f'<form method="post" action="/new">{_hidden("csrf", forms.csrf_token)}'
+        f'<form class="card" method="post" action="/new">{_hidden("csrf", forms.csrf_token)}'
         f'<p><textarea name="goal" rows="8" cols="80" maxlength="{MAX_GOAL_CHARS}" '
         'dir="auto" required placeholder="What should the project achieve?"></textarea></p>'
         f'<p><label><input type="checkbox" name="ask" value="{ASK_VALUE}" checked> '
@@ -417,9 +469,10 @@ def render_clarify(project_id: str, goal: str, questions: list[str], forms: Acti
     body = (
         f'<p><a href="{text(_project_href(project_id))}">← {text(project_id)}</a></p>'
         f"<h1>Questions for {text(project_id)}</h1>"
-        f'<p dir="auto"><strong>Goal:</strong> {text(goal)}</p>'
+        '<p class="meta"><strong>Goal:</strong></p>'
+        f'<p class="goal" dir="auto">{text(goal)}</p>'
         "<p>Leave an answer empty to skip it. The plan is made after you send.</p>"
-        f'<form method="post" action="{action}">{_hidden("csrf", forms.csrf_token)}'
+        f'<form class="card" method="post" action="{action}">{_hidden("csrf", forms.csrf_token)}'
         f'{fields}<p><button type="submit">Send answers and make the plan</button></p></form>'
     )
     return page(f"Automa — {project_id} questions", body, actions=True)
@@ -479,8 +532,8 @@ def render_files(listing: FileListing, *, actions: bool = False) -> str:
                 size, extra = "-", ""
             rows.append(f"<tr><td>{cell}</td><td>{text(size)}</td><td>{extra}</td></tr>")
         parts.append(
-            "<table><thead><tr><th>Name</th><th>Size</th><th></th></tr></thead>"
-            f"<tbody>{''.join(rows)}</tbody></table>"
+            '<div class="card scroll"><table><thead><tr><th>Name</th><th>Size</th><th></th>'
+            f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
         )
         if listing.total > len(listing.entries):
             parts.append(f"<p>Showing {len(listing.entries)} of {listing.total} entries.</p>")

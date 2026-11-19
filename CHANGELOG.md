@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-19 — M12: رابط وب، ظاهر تمیز و فارسی‌پسند
+- **انجام‌شده:** ظاهر همهٔ صفحه‌های `automa web` نو شد: پروژه‌ها در صفحهٔ اصلی و وظایف برنامه به‌شکل کارت (روی موبایل یک ستون، بدون اسکرول افقی)، سرصفحهٔ پروژه، Progress، Run، هر تأیید و فرم‌ها هم کارت؛ تم روشن و تیره با متغیرهای رنگ (خودکار از تنظیم سیستم)؛ فونت فارسی‌دار محلی (Vazirmatn اگه نصب باشه، وگرنه Segoe UI/Tahoma در Windows) با فاصلهٔ خط بیشتر. متن‌های فارسی (هدف، عنوان وظیفه، دلیل تأیید، سؤال‌ها، لاگ) با `dir="auto"` و `unicode-bidi: plaintext` راست‌به‌چپ و درست نشون داده می‌شن؛ برچسب‌های انگلیسی مثل «Goal:» از جلوی متن برداشته شدن چون جهت رو چپ‌به‌راست می‌کردن (با Chromium در عرض ۱۱۰۰ و ۳۷۵ و هر دو تم بررسی شد). CSP و هیچ رفتار سرور عوض نشد (D129).
+- **فایل‌های اصلی:** `src/automa/webui/render.py` (`FONT_STACK`، `_STYLE`، `_task_card`، کارت‌ها)، `tests/test_webui_style.py` (۴۰ تست جدید)، `tests/test_webui_progress.py` (یک assert به کارت)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D129)، `ROADMAP.md`.
+- **تست‌ها:** `pytest` ← ۵۱۸۳ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و بسته دوباره نصب شد. برچسب‌های رابط فعلاً انگلیسی موندن (ترجمه کامل مورد جداست). BudgetGuard، Policy و Approval Gate دست نخوردن.
+- **برای صاحب مخزن:** کاری لازم نیست؛ برای فونت بهتر می‌تونی Vazirmatn رو روی Windows نصب کنی (اختیاری).
+- **قدم بعدی:** اجرای آسان روی Windows (`scripts/automa-web.ps1`/`.bat` و میانبر دسکتاپ).
+
 ## 2026-11-19 — M12: رابط وب، مرورگر فایل‌های پروژه
 - **انجام‌شده:** در صفحهٔ هر پروژه لینک «Files»: فهرست پوشهٔ `files/` (با پوشه‌های تو در تو، اندازه و لینک دانلود)، نمایش فایل متنی (escape، تا ۲۵۶KiB)، نمایش تصویر PNG/JPEG (فقط وقتی امضای فایل با پسوند جور باشه؛ `img-src` فقط برای مسیر raw همین پروژه) و دانلود هر فایل با `Content-Disposition: attachment`. symlinkها نشون داده می‌شن ولی دنبال نمی‌شن؛ هیچ مسیری بیرون از `files/` خونده نمی‌شه؛ در هر دو حالت (فقط‌خواندنی و `--allow-actions`) کار می‌کنه و هیچ چیزی نمی‌نویسه (D128).
 - **فایل‌های اصلی:** `src/automa/webui/files.py` (جدید)، `src/automa/tools/workspace.py` (`read_bytes`، `file_size`، `FileTooLarge`)، `src/automa/webui/render.py` (`page_csp`، `render_files`، `render_file`، لینک Files)، `src/automa/webui/server.py` (مسیرهای files)، `tests/test_webui_files.py` (۱۱۰ تست جدید، شامل بیرون‌زدن با `..`/symlink/جایگزینی symlink بعد از فهرست، تصویر جعلی، CSP و سوکت واقعی)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D128)، `ROADMAP.md`.
