@@ -289,5 +289,5 @@ def test_project_page_points_to_cli_to_decide(store: ProjectStore) -> None:
     store.create("g", project_id="p1")
     _request(store, "p1")
     html = render_project(build_project_view(store, "p1", 0))
-    assert "automa approvals" in html
+    assert "decide in the terminal" in html and "automa approvals" not in html
     assert "approve" not in html.lower().replace("approvals", "")

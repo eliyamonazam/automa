@@ -693,7 +693,9 @@ def test_real_planner_full_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     with CostLedger(e.ws / LEDGER, read_only=True) as ledger:
         assert len([x for x in ledger.entries() if x.project_id == pid]) == 2
     body = e.app.handle("GET", f"/projects/{pid}", HOST).body.decode()
-    assert "Cost range:" in body and "automa run " + pid in body
+    assert "Cost range:" in body and "project safety cap $" in body
+    # D131: no terminal commands and no theoretical worst case on the web page.
+    assert "automa run" not in body and "worst case" not in body
 
 
 def test_real_planner_missing_key_creates_nothing(

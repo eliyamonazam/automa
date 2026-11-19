@@ -142,7 +142,8 @@ def parse_form(
     for key, value in pairs:
         if key not in fields or key in form:
             raise ActionRefused(400, "unexpected form field")
-        form[key] = value
+        # A browser sends textarea line breaks as CRLF (HTML spec); store LF (D131).
+        form[key] = value.replace("\r\n", "\n").replace("\r", "\n")
     return form
 
 

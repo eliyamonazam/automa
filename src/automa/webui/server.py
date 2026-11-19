@@ -484,8 +484,8 @@ class WebApp:
         if not req.decided:
             return None
         if req.status.value == "approved":
-            return f"{req.id}: approved; the call runs at most once, on the next: automa run {pid}"
-        return f"{req.id}: rejected; the model will be told on the next: automa run {pid}"
+            return f"{req.id}: approved; the call runs at most once, when the run continues"
+        return f"{req.id}: rejected; the model is told when the run continues"
 
     def _files(self, pid: str, route: FilesRoute, query: str, host: str) -> Response:
         """The read-only browser of ``files/`` (D128)."""

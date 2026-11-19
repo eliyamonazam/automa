@@ -225,7 +225,7 @@ def test_reject_needs_no_confirmation(env: Env) -> None:
     assert r.status == 303
     assert env.get_req().status is ApprovalStatus.REJECTED
     page = env.app.handle("GET", _h(r)["Location"], HOST).body.decode()
-    assert "rejected; the model will be told" in page
+    assert "rejected; the model is told when the run continues" in page
 
 
 def test_referer_is_accepted_when_origin_is_missing(env: Env) -> None:

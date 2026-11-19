@@ -356,7 +356,8 @@ def test_render_live_progress(store: ProjectStore) -> None:
     assert "tasks passed: <strong>1 / 3</strong>" in doc
     assert '<meter min="0" max="3" value="1"></meter>' in doc
     assert "$0.1200</strong> so far vs range about $0.0500 to $0.3000: running" in doc
-    assert "guard cap (worst case) $1.0000" in doc
+    assert "worst case" not in doc and "guard cap" not in doc
+    assert 'max="0.300000" value="0.120000"' in doc
     assert "refreshes every 5 s" in doc
     assert "orchestrator.attempt" in doc and "task=a" in doc
 
@@ -391,7 +392,7 @@ def test_render_live_above_range_is_flagged(store: ProjectStore) -> None:
     assert ": above" in doc and '<p class="warn">' in doc
 
 
-def test_render_meter_value_is_capped_at_worst(store: ProjectStore) -> None:
+def test_render_meter_above_range_ends_at_the_cost(store: ProjectStore) -> None:
     cost = pg.CostProgress(
         estimated_at=T0,
         spent_usd=5.0,
@@ -402,7 +403,7 @@ def test_render_meter_value_is_capped_at_worst(store: ProjectStore) -> None:
         verdict="above",
     )
     doc = rd.render_project(_view(store), progress=pg.ProgressView(cost=cost))
-    assert 'max="1.000000" value="1.000000"' in doc
+    assert 'max="5.000000" value="5.000000"' in doc and "1.0000" not in doc
 
 
 def test_render_without_estimate(store: ProjectStore) -> None:

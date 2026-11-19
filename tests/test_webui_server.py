@@ -263,7 +263,7 @@ def test_corrupt_project_page_is_500_without_crash(workspace: Path) -> None:
 def test_approval_page_has_no_decision_controls(workspace: Path) -> None:
     body = _app(workspace).handle("GET", "/projects/p1", GOOD_HOST).body.decode().lower()
     assert "<form" not in body and "<button" not in body and "<script" not in body
-    assert "automa approvals" in body
+    assert "decide in the terminal" in body and "automa approvals" not in body
 
 
 # -- real loopback socket ----------------------------------------------------------------

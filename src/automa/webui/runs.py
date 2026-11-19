@@ -322,7 +322,7 @@ class BackgroundRuns:
                 raise ActionRefused(
                     409,
                     f"project {project_id} is marked running (maybe in a terminal); "
-                    "wait for it, or use automa run --force there after a crash",
+                    "wait for it to finish (after a crash, resume it from the terminal)",
                 )
             if status is ProjectStatus.DONE:
                 raise ActionRefused(409, f"project {project_id} is already done")
@@ -341,7 +341,7 @@ class BackgroundRuns:
                 process = self._spawn(argv, log_path)
             except (OSError, ValueError) as e:
                 reason = e.strerror if isinstance(e, OSError) and e.strerror else str(e)
-                raise ActionRefused(500, f"could not start automa run: {reason}") from None
+                raise ActionRefused(500, f"could not start the run: {reason}") from None
             run = _Run(process, started, log_path, yes)
             self._runs[project_id] = run
         self._emit(project_id, STARTED_EVENT, {"confirmed": yes, "log": log_path.name})

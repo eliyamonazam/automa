@@ -830,6 +830,37 @@ def _new_cost_range(config: AutomaConfig, store: ProjectStore, pid: str) -> str:
     )
 
 
+def _web_cost_range(config: AutomaConfig, store: ProjectStore, pid: str) -> str:
+    """The ``Cost range`` line of the web project page (D131).
+
+    Same figures as :func:`_new_cost_range`, but for a person in a browser: no
+    theoretical "worst case" of every attempt at the most expensive model (it read
+    like a real price), no terminal commands; instead the project's real safety cap
+    (``[limits] project_usd``, the cap BudgetGuard enforces). Read-only and advisory.
+    """
+    rate = config.display.toman_per_usd
+    cap_nusd = cap_to_nusd(config.limits.project_usd)
+    cap = _usd(cap_nusd)
+    if rate is not None:
+        cap += f" (\u2248 {_toman(cap_nusd, rate)} toman)"
+    try:
+        result = _new_estimate(config, store, pid)
+    except _ESTIMATE_ERRORS as e:
+        reason = _safe(str(e)).replace("\n", " ")
+        return f"unavailable ({reason}); project safety cap {cap}"
+    rng = _range_text(result.range_low_nusd, result.range_high_nusd, rate)
+    threshold = _confirm_threshold_nusd(config.limits.confirm_above_usd)
+    ask = (
+        f"; you confirm before it starts (above {_usd(threshold)})"
+        if result.range_high_nusd > threshold
+        else ""
+    )
+    return (
+        f"{rng}, {_RANGE_BASIS_TEXT[result.range_basis]}; project safety cap {cap}: "
+        f"spending never goes above it{ask}"
+    )
+
+
 def _print_suggestions(config: AutomaConfig, goal: str) -> None:
     """Show stored templates similar to ``goal`` (suggestion only, D39).
 
@@ -3544,7 +3575,7 @@ class _WebIdeaPlanner:
 
     def cost_range(self, project_id: str) -> str:
         store = ProjectStore.for_workspace(self._config.workspace)
-        return _new_cost_range(self._config, store, project_id)
+        return _web_cost_range(self._config, store, project_id)
 
 
 class _WebRunPreflight:

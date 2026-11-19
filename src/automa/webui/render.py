@@ -22,7 +22,7 @@ from automa.project.store import MAX_GOAL_CHARS
 from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.webui.files import FileContent, FileListing, FilesRoute, files_href
 from automa.webui.ideas import ASK_VALUE
-from automa.webui.progress import REFRESH_SECONDS, ProgressView
+from automa.webui.progress import REFRESH_SECONDS, CostProgress, ProgressView
 from automa.webui.views import ApprovalView, Overview, ProjectView, TaskRow
 
 # Joiners needed by Persian text; every other Cf character (incl. bidi controls) is escaped.
@@ -69,7 +69,8 @@ border-radius:8px;text-align:start}
 padding:12px 16px;margin:12px 0}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
 .cards>.card{margin:0}.card h2,.card h3{margin-top:0}
-.goal{margin:.3em 0;overflow-wrap:anywhere}.meta{color:var(--muted);font-size:.9em;margin:.2em 0}
+.goal{margin:.3em 0;overflow-wrap:anywhere;white-space:pre-line}
+.meta{color:var(--muted);font-size:.9em;margin:.2em 0}
 table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid var(--line);
 padding:6px;text-align:start;vertical-align:top}
 .scroll{overflow-x:auto}
@@ -109,9 +110,15 @@ def visible(value: str) -> str:
     return "".join(out)
 
 
+def normalize_newlines(value: str) -> str:
+    """``\\r\\n`` and a lone ``\\r`` as ``\\n`` (D131): a browser form on Windows sends
+    CRLF line breaks, which must show as line breaks, not as a visible ``\\x0d``."""
+    return value.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def text(value: object) -> str:
-    """Safe HTML text for any recorded value."""
-    return html.escape(visible(str(value)), quote=True)
+    """Safe HTML text for any recorded value (line breaks normalized, D131)."""
+    return html.escape(visible(normalize_newlines(str(value))), quote=True)
 
 
 def _time(value: datetime) -> str:
@@ -242,7 +249,7 @@ def _approval(project_id: str, a: ApprovalView, forms: ActionForms | None) -> st
     warns = "".join(f'<li class="warn" dir="auto">{text(w)}</li>' for w in a.warnings)
     target = f"<ul>{lines}{warns}</ul>" if lines or warns else ""
     if forms is None:
-        decide = f"<p>Decide with: <code>automa approvals {text(a.id)}</code> in the terminal.</p>"
+        decide = "<p>This page is read-only: decide in the terminal.</p>"
     else:
         decide = _decision_forms(project_id, a, forms)
     return (
@@ -362,9 +369,7 @@ def _progress(p: ProgressView) -> str:
             f"<p{cls}>latest run (estimated {_time(c.estimated_at)}): "
             f"<strong>${c.spent_usd:.4f}</strong> {so_far}{other} vs range about "
             f"${c.low_usd:.4f} to ${c.high_usd:.4f}: {text(verdict)}"
-            f' <meter min="0" low="{c.low_usd:.6f}" high="{c.high_usd:.6f}" '
-            f'max="{c.worst_usd:.6f}" value="{min(c.spent_usd, c.worst_usd):.6f}"></meter>'
-            f" · guard cap (worst case) ${c.worst_usd:.4f}</p>"
+            f" {_range_meter(c)}</p>"
         )
     else:
         parts.append("<p>No cost range recorded yet (it is written when a run starts).</p>")
@@ -383,6 +388,16 @@ def _progress(p: ProgressView) -> str:
         )
     parts.append("</section>")
     return "".join(parts)
+
+
+def _range_meter(c: CostProgress) -> str:
+    """A meter of the cost so far over the estimated range (D131): its end is the top
+    of the range (or the cost, when above), never the theoretical worst case."""
+    top = max(c.high_usd, c.spent_usd)
+    return (
+        f'<meter min="0" low="{c.low_usd:.6f}" high="{c.high_usd:.6f}" '
+        f'max="{top:.6f}" value="{c.spent_usd:.6f}"></meter>'
+    )
 
 
 @dataclass(frozen=True)
@@ -405,10 +420,8 @@ def _run_panel(project_id: str, run: RunPanel, forms: ActionForms) -> str:
         when = f" (started {_time(run.started_at)})" if run.started_at is not None else ""
         cls = "badge warn" if run.running else "badge"
         parts.append(f'<p>Background run{when}: <span class="{cls}">{text(run.state)}</span></p>')
-        if run.log_name:
-            parts.append(f"<p>log: <code>web-runs/{text(run.log_name)}</code></p>")
-        if run.tail:
-            parts.append('<pre dir="auto">' + text("\n".join(run.tail)) + "</pre>")
+        if run.log_name or run.tail:
+            parts.append(_technical_log(run))
         if run.running:
             parts.append("<p>The page refreshes itself while the run is going.</p>")
         if run.can_stop:
@@ -416,8 +429,7 @@ def _run_panel(project_id: str, run: RunPanel, forms: ActionForms) -> str:
             parts.append(
                 f'<form method="post" action="{stop}">{_hidden("csrf", forms.csrf_token)}'
                 '<p><button type="submit">Stop</button> pauses the run after its current '
-                "step (no model call is cut off); the start button or "
-                f"<code>automa run {text(project_id)}</code> resumes it.</p></form>"
+                "step (no model call is cut off); the start button resumes it.</p></form>"
             )
     if run.can_start:
         action = text(_project_href(project_id) + "/start")
@@ -430,13 +442,25 @@ def _run_panel(project_id: str, run: RunPanel, forms: ActionForms) -> str:
         )
         parts.append(
             f'<form method="post" action="{action}">{_hidden("csrf", forms.csrf_token)}'
-            f'{confirm}<p><button type="submit">Start run</button> runs '
-            f"<code>automa run {text(project_id)}</code> in the background with the same "
-            "budget guard and caps; every model call is counted.</p></form>"
+            f'{confirm}<p><button type="submit">Start run</button> runs the plan in the '
+            "background with the same budget guard and caps; every model call is "
+            "counted.</p></form>"
         )
     elif run.state is None:
         parts.append("<p>Not startable now (no plan, already running or done).</p>")
     parts.append("</section>")
+    return "".join(parts)
+
+
+def _technical_log(run: RunPanel) -> str:
+    """The raw run log, folded away (D131): it is the terminal output of the run (with
+    its command hints), useful only when something went wrong."""
+    parts = ['<details class="tech"><summary>Technical details (run log)</summary>']
+    if run.log_name:
+        parts.append(f"<p>log file: <code>web-runs/{text(run.log_name)}</code></p>")
+    if run.tail:
+        parts.append('<pre dir="auto">' + text("\n".join(run.tail)) + "</pre>")
+    parts.append("</details>")
     return "".join(parts)
 
 
