@@ -49,6 +49,8 @@ class TaskRow(_View):
     depends_on: tuple[str, ...] = ()
     attempts: int = 0
     last_result: str | None = None  # status of the latest stored attempt
+    state: str | None = None  # tasks/<id>/state.json status; None = not started (D127)
+    model: str | None = None  # model of the current/last attempt (D97)
 
 
 class ApprovalView(_View):
@@ -123,6 +125,13 @@ def task_rows(store: ProjectStore, project_id: str, plan: Plan) -> list[TaskRow]
         last = None
         if attempts:
             last = store.load_task_result(project_id, task.id, attempts).status.value
+        try:
+            ts = store.load_task_state(project_id, task.id)
+        except _READ_ERRORS:  # one unreadable state must not hide the plan
+            state, model = "unreadable", None
+        else:
+            state = ts.status.value if ts is not None else None
+            model = ts.model if ts is not None else None
         rows.append(
             TaskRow(
                 order=i,
@@ -132,6 +141,8 @@ def task_rows(store: ProjectStore, project_id: str, plan: Plan) -> list[TaskRow]
                 depends_on=tuple(task.depends_on),
                 attempts=attempts,
                 last_result=last,
+                state=state,
+                model=model,
             )
         )
     return rows

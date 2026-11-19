@@ -34,8 +34,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
-from automa.budget.ledger import CostLedger, LedgerError
-from automa.project.store import ProjectStore, ProjectStoreError, validate_project_id
+from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError
+from automa.project.store import (
+    ProjectStatus,
+    ProjectStore,
+    ProjectStoreError,
+    validate_project_id,
+)
 from automa.tools.approvals import ApprovalError
 from automa.webui.actions import (
     MAX_FORM_BYTES,
@@ -60,6 +65,7 @@ from automa.webui.ideas import (
     is_idea_path,
     parse_clarify_path,
 )
+from automa.webui.progress import ProgressView, build_progress
 from automa.webui.render import (
     ACTION_CONTENT_SECURITY_POLICY,
     CONTENT_SECURITY_POLICY,
@@ -81,7 +87,7 @@ from automa.webui.runs import (
     parse_start_path,
     parse_stop_path,
 )
-from automa.webui.views import build_overview, build_project_view
+from automa.webui.views import ProjectView, build_overview, build_project_view
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -235,19 +241,40 @@ class WebApp:
         """An error page with this app's security headers."""
         return _error_page(status, title, detail, security=self._security)
 
-    def _spending(self) -> tuple[dict[str, int], str | None]:
-        """Spending per project from a read-only Ledger; never creates one."""
+    def _entries(self) -> tuple[list[LedgerEntry], str | None]:
+        """All Ledger entries, read-only; never creates a Ledger."""
         if not self._ledger_path.exists() and not self._ledger_path.is_symlink():
-            return {}, None
+            return [], None
         try:
             with CostLedger(self._ledger_path, read_only=True) as ledger:
-                spent: dict[str, int] = {}
-                for e in ledger.entries():
-                    if e.project_id:
-                        spent[e.project_id] = spent.get(e.project_id, 0) + e.cost_nusd
-                return spent, None
+                return list(ledger.entries()), None
         except LedgerError as e:
-            return {}, f"ledger: {e}"
+            return [], f"ledger: {e}"
+
+    def _spending(self) -> tuple[dict[str, int], str | None]:
+        """Spending per project from a read-only Ledger; never creates one."""
+        entries, err = self._entries()
+        spent: dict[str, int] = {}
+        for e in entries:
+            if e.project_id:
+                spent[e.project_id] = spent.get(e.project_id, 0) + e.cost_nusd
+        return spent, err
+
+    def _progress(self, view: ProjectView, entries: list[LedgerEntry]) -> ProgressView:
+        """Progress of a project page (D127): refreshes while the project or its
+        background run is running and no approval waits."""
+        running = view.status == ProjectStatus.RUNNING.value
+        if self._runs is not None:
+            state = self._runs.state(view.id)
+            running = running or (state is not None and state.running)
+        return build_progress(
+            self._store,
+            view.id,
+            [t.state for t in view.tasks],
+            entries,
+            running=running,
+            pending_approvals=len(view.pending),
+        )
 
     def handle(
         self,
@@ -467,9 +494,10 @@ class WebApp:
                 return self.error(404, "Not found")
             if pid not in self._store.list_ids():
                 return self.error(404, "Not found", f"no project {pid}")
-            spent, err = self._spending()
+            entries, err = self._entries()
+            own = [e for e in entries if e.project_id == pid]
             try:
-                pview = build_project_view(self._store, pid, spent.get(pid, 0))
+                pview = build_project_view(self._store, pid, sum(e.cost_nusd for e in own))
             except (ProjectStoreError, ApprovalError) as e:
                 return self.error(500, "Project unreadable", str(e))
             if err:
@@ -484,6 +512,7 @@ class WebApp:
                 cost_range=cost_range,
                 questions_waiting=waiting,
                 run=self._run_panel(pid),
+                progress=self._progress(pview, own),
             )
             return _html(200, document, security=self._security)
         return self.error(404, "Not found")

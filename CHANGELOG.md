@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-19 — M12: رابط وب، پیشرفت زنده
+- **انجام‌شده:** مورد «پیشرفت زنده و فایل‌ها» به سه بخش شکسته شد (پیشرفت زنده؛ مرورگر `files/`؛ ظاهر فارسی‌پسند) و بخش اول انجام شد. صفحهٔ هر پروژه حالا بخش «Progress» داره: «tasks passed: 2 / 5» با نوار، هزینهٔ آخرین اجرا تا این لحظه در برابر بازهٔ همون تخمین («$0.12 so far vs range about $0.05 to $0.30»، و هشدار اگه از سر بالا گذشت) و ۱۵ رویداد آخر (فقط فیلدهای کوتاه مثل task/attempt/model، هرگز متن مدل). جدول برنامه ستون‌های State و Model داره. وقتی اجرا در جریانه (در ترمینال یا از دکمهٔ Start) صفحه هر ۵ ثانیه خودش تازه می‌شه، بدون هیچ JavaScript؛ اگه تأییدی در انتظار باشه رفرش خاموشه تا فرم پاک نشه (D127).
+- **فایل‌های اصلی:** `src/automa/webui/progress.py` (جدید)، `src/automa/webui/views.py` (`TaskRow.state`/`model`)، `src/automa/webui/render.py` (`page(refresh=…)`، `_progress`، ستون‌ها)، `src/automa/webui/server.py` (`_entries`، `_progress`)، `tests/test_webui_progress.py` (۷۴ تست جدید)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D127)، `ROADMAP.md`.
+- **تست‌ها:** `pytest` ← ۵۰۳۳ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و بسته دوباره نصب شد. BudgetGuard، Policy و Approval Gate دست نخوردن؛ این بخش فقط نمایشه و CSP همون سخت‌گیرانه موند.
+- **برای صاحب مخزن:** کاری لازم نیست؛ هنگام امتحان رابط وب، صفحهٔ پروژه رو در حین اجرا باز نگه دار.
+- **قدم بعدی:** رابط وب: مرورگر فایل‌های `files/` (فهرست، نمایش متن و تصویر، دانلود).
+
 ## 2026-11-19 — M12: رابط وب، دکمه «توقف» برای اجرای پس‌زمینه
 - **انجام‌شده:** در صفحهٔ پروژه، وقتی اجرای پس‌زمینه در جریانه، دکمه «Stop». با زدنش فایل `stop-request.json` در پوشهٔ پروژه نوشته می‌شه و Orchestrator **بعد از گام فعلی** (بدون قطع هیچ فراخوانی مدل) پروژه رو با دلیل `user` روی `paused` می‌ذاره؛ `automa run` با کد خروج تازهٔ ۱۲ تموم می‌شه و صفحه «stopped on request» نشون می‌ده. ادامه با «Start run» یا `automa run <id>`. در حالت موازی وظیفهٔ تازه‌ای شروع نمی‌شه و گام‌های در حال اجرا تموم می‌شن. درخواست در پایان هر اجرا (به هر شکلی) پاک می‌شه تا اجرای بعدی رو متوقف نکنه؛ رویداد `web.stop_requested` (D126).
 - **فایل‌های اصلی:** `src/automa/orchestrator.py` (`StopReason.USER`، بررسی بین گام‌ها، پاک‌سازی در `finally`)، `src/automa/project/store.py` (`request_stop`/`stop_requested`/`clear_stop_request`)، `src/automa/webui/runs.py` (`BackgroundRuns.stop`/`can_stop`، `parse_stop_path`)، `src/automa/webui/server.py`، `src/automa/webui/render.py`، `src/automa/cli.py` (`EXIT_STOPPED = 12`)، `src/automa/bench.py`، `src/automa/benchmarks/results.py`، `tests/test_run_stop.py` (۴۰ تست جدید، شامل فرزند واقعی `automa run` بدون هیچ فراخوانی مدل)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D126).

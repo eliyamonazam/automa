@@ -21,6 +21,7 @@ from automa.plan.models import MAX_ANSWER_CHARS
 from automa.project.store import MAX_GOAL_CHARS
 from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.webui.ideas import ASK_VALUE
+from automa.webui.progress import REFRESH_SECONDS, ProgressView
 from automa.webui.views import ApprovalView, Overview, ProjectView
 
 # Joiners needed by Persian text; every other Cf character (incl. bidi controls) is escaped.
@@ -41,8 +42,12 @@ table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #ddd;pad
 text-align:start;vertical-align:top}pre{white-space:pre-wrap;word-break:break-word;
 background:#f4f4f6;padding:8px}.warn{color:#9a3d00}.err{color:#b00020}
 .badge{padding:1px 6px;border-radius:8px;background:#eee}
+.st-passed{background:#d6f5dd}.st-failed,.st-blocked{background:#fbd9d9}
+.st-running,.st-verifying{background:#fff0c2}meter{width:12em;vertical-align:middle}
 @media (prefers-color-scheme: dark){body{color:#e8e8ea;background:#151517}
-th,td{border-color:#333}pre{background:#222226}.badge{background:#333}a{color:#8ab4ff}}
+th,td{border-color:#333}pre{background:#222226}.badge{background:#333}a{color:#8ab4ff}
+.st-passed{background:#1f4a2a}.st-failed,.st-blocked{background:#5a2323}
+.st-running,.st-verifying{background:#5a4a12}}
 """
 
 
@@ -80,20 +85,26 @@ class ActionForms:
     csrf_token: str
 
 
-def page(title: str, body: str, *, actions: bool = False) -> str:
+def page(title: str, body: str, *, actions: bool = False, refresh: int | None = None) -> str:
     """A complete HTML document around already-safe ``body``.
 
     In action mode the CSP allows forms to post to this server only, and the referrer
     policy is ``same-origin`` so the browser sends a real ``Origin`` with each post
     (with ``no-referrer`` it would send ``Origin: null``, which the server refuses).
+    ``refresh`` (seconds) makes the browser reload the same page, with no script (D127).
     """
     csp = ACTION_CONTENT_SECURITY_POLICY if actions else CONTENT_SECURITY_POLICY
     referrer = "same-origin" if actions else "no-referrer"
+    reload = ""
+    if refresh is not None:
+        if isinstance(refresh, bool) or not isinstance(refresh, int) or not 1 <= refresh <= 3600:
+            raise ValueError("refresh must be 1..3600 seconds")
+        reload = f'<meta http-equiv="refresh" content="{refresh}">'
     return (
         '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
         f'<meta http-equiv="Content-Security-Policy" content="{csp}">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f'<meta name="referrer" content="{referrer}">'
+        f'<meta name="referrer" content="{referrer}">{reload}'
         f"<title>{text(title)}</title><style>{_STYLE}</style></head>"
         f"<body>{body}</body></html>\n"
     )
@@ -193,12 +204,15 @@ def render_project(
     cost_range: str | None = None,
     questions_waiting: bool = False,
     run: RunPanel | None = None,
+    progress: ProgressView | None = None,
 ) -> str:
     """One project page. ``forms`` (action mode only) adds approve/reject forms;
     ``notice`` is a one-line result of the last decision, shown at the top;
     ``cost_range`` is the estimate line of a planned project and ``questions_waiting``
     links to the answer form of a new idea (D124); ``run`` (action mode with
-    background runs, D125) adds the start button and the last background run."""
+    background runs, D125) adds the start button and the last background run;
+    ``progress`` (D127) adds tasks passed, cost so far against the range, the latest
+    events and, while running, a self-refresh of the page."""
     parts = ['<p><a href="/">← all projects</a></p>']
     if notice:
         parts.append(f'<p class="badge" dir="auto">{text(notice)}</p>')
@@ -217,6 +231,8 @@ def render_project(
         )
     if cost_range is not None:
         parts.append(f"<p><strong>Cost range:</strong> {text(cost_range)}</p>")
+    if progress is not None:
+        parts.append(_progress(progress))
     if run is not None and forms is not None:
         parts.append(_run_panel(view.id, run, forms))
     parts.append(f"<h2>Pending approvals ({len(view.pending)})</h2>")
@@ -230,17 +246,72 @@ def render_project(
         rows = "".join(
             f'<tr><td>{t.order}</td><td>{text(t.id)}</td><td dir="auto">{text(t.title)}</td>'
             f"<td>{text(t.role)}</td><td>{text(', '.join(t.depends_on) or '-')}</td>"
-            f"<td>{t.attempts}</td><td>{text(t.last_result or '-')}</td></tr>"
+            f'<td><span class="badge st-{_state_class(t.state)}">'
+            f"{text(t.state or 'not started')}</span></td>"
+            f"<td>{t.attempts}</td><td>{text(t.last_result or '-')}</td>"
+            f"<td>{text(t.model or '-')}</td></tr>"
             for t in view.tasks
         )
         parts.append(
             f"<h2>Plan v{view.plan_version} ({len(view.tasks)} tasks)</h2>"
             "<table><thead><tr><th>#</th><th>Task</th><th>Title</th><th>Role</th>"
-            "<th>After</th><th>Attempts</th><th>Last result</th></tr></thead>"
+            "<th>After</th><th>State</th><th>Attempts</th><th>Last result</th>"
+            "<th>Model</th></tr></thead>"
             f"<tbody>{rows}</tbody></table>"
         )
-    parts.append(_errors(view.errors))
-    return page(f"Automa — {view.id}", "".join(parts), actions=forms is not None)
+    errors = view.errors + (progress.errors if progress is not None else ())
+    parts.append(_errors(errors))
+    refresh = REFRESH_SECONDS if progress is not None and progress.live else None
+    return page(f"Automa — {view.id}", "".join(parts), actions=forms is not None, refresh=refresh)
+
+
+_STATE_CLASSES = frozenset({"pending", "running", "verifying", "passed", "failed", "blocked"})
+
+
+def _state_class(state: str | None) -> str:
+    """A fixed CSS class for a task state (never recorded text in an attribute)."""
+    return state if state in _STATE_CLASSES else "none"
+
+
+def _progress(p: ProgressView) -> str:
+    """Tasks passed, the latest run's cost against its range and the latest events (D127)."""
+    parts = [
+        "<h2>Progress</h2>",
+        f"<p>tasks passed: <strong>{p.passed} / {p.total}</strong>",
+    ]
+    if p.total:
+        parts.append(f' <meter min="0" max="{p.total}" value="{p.passed}"></meter>')
+    parts.append("</p>")
+    if p.cost is not None:
+        c = p.cost
+        so_far = "so far" if p.live else "in total"
+        verdict = c.verdict if not p.live or c.verdict == "above" else "running"
+        cls = ' class="warn"' if c.verdict == "above" else ""
+        other = f" (+ ${c.other_usd:.4f} other calls)" if c.other_usd else ""
+        parts.append(
+            f"<p{cls}>latest run (estimated {_time(c.estimated_at)}): "
+            f"<strong>${c.spent_usd:.4f}</strong> {so_far}{other} vs range about "
+            f"${c.low_usd:.4f} to ${c.high_usd:.4f}: {text(verdict)}"
+            f' <meter min="0" low="{c.low_usd:.6f}" high="{c.high_usd:.6f}" '
+            f'max="{c.worst_usd:.6f}" value="{min(c.spent_usd, c.worst_usd):.6f}"></meter>'
+            f" · guard cap (worst case) ${c.worst_usd:.4f}</p>"
+        )
+    else:
+        parts.append("<p>No cost range recorded yet (it is written when a run starts).</p>")
+    if p.live:
+        parts.append(f'<p class="badge">running: this page refreshes every {REFRESH_SECONDS} s</p>')
+    if p.events:
+        rows = "".join(
+            f"<tr><td>{_time(e.ts)}</td><td>{text(e.type)}</td>"
+            f'<td dir="auto">{text(e.summary or "-")}</td></tr>'
+            for e in p.events
+        )
+        parts.append(
+            f"<h3>Latest events ({len(p.events)}, newest first)</h3>"
+            "<table><thead><tr><th>Time</th><th>Event</th><th>Details</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table>"
+        )
+    return "".join(parts)
 
 
 @dataclass(frozen=True)
@@ -268,7 +339,7 @@ def _run_panel(project_id: str, run: RunPanel, forms: ActionForms) -> str:
         if run.tail:
             parts.append("<pre>" + text("\n".join(run.tail)) + "</pre>")
         if run.running:
-            parts.append("<p>Reload this page to see progress.</p>")
+            parts.append("<p>The page refreshes itself while the run is going.</p>")
         if run.can_stop:
             stop = text(_project_href(project_id) + "/stop")
             parts.append(
