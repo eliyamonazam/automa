@@ -725,3 +725,49 @@ def test_worker_sends_old_pages_shortened(tmp_path: Path) -> None:
         m for m in last if m.role is MsgRole.TOOL and "shortened to save cost" in (m.content or "")
     ]
     assert len(reads) == 3 and len(shortened) == 1  # 4 large reads, the newest 3 kept whole
+
+
+# --- cut-off tool calls (D142) -------------------------------------------------------
+
+
+def _cut(finish: FinishReason = FinishReason.LENGTH) -> ChatResponse:
+    r = calls(("write_file", '{"path": "primes.cpp"'))
+    return r.model_copy(update={"finish_reason": finish})
+
+
+def test_cut_off_call_is_not_run_and_never_sent_back_broken(tmp_path: Path) -> None:
+    rig = Rig(
+        tmp_path,
+        [_cut(), calls(("write_file", {"path": "primes.cpp", "content": "int main(){}"})), "ok"],
+    )
+    result = rig.run()
+    assert result.status is ResultStatus.COMPLETED and result.files == ["primes.cpp"]
+    second = rig.provider.requests[1].messages
+    sent = [tc.arguments for m in second for tc in (m.tool_calls or ())]
+    assert sent == ["{}"]  # the broken JSON never reaches the gateway again
+    for m in rig.provider.requests[2].messages:
+        for tc in m.tool_calls or ():
+            json.loads(tc.arguments)
+    assert second[-1].role is MsgRole.TOOL and "cut off at the output limit" in second[-1].content
+    assert "smaller files" in second[-1].content
+
+
+def test_cut_off_call_grows_the_output_room(tmp_path: Path) -> None:
+    rig = Rig(tmp_path, [_cut(), _cut(FinishReason.TOOL_CALLS), _cut(), _cut(), "ok"])
+    rig.run(agent_kw={"settings": WorkerSettings(step_max_tokens=4_000)})
+    sizes = [r.max_tokens for r in rig.provider.requests]
+    assert sizes == [4_000, 8_000, 16_000, 16_000, 16_000]
+
+
+def test_room_is_never_lowered(tmp_path: Path) -> None:
+    rig = Rig(tmp_path, [_cut(), "ok"])
+    rig.run(agent_kw={"settings": WorkerSettings(step_max_tokens=20_000)})
+    assert [r.max_tokens for r in rig.provider.requests] == [20_000, 20_000]
+
+
+def test_intact_calls_beside_a_cut_one_still_run(tmp_path: Path) -> None:
+    mixed = calls(("list_dir", {}), ("write_file", '{"path": "a'))
+    rig = Rig(tmp_path, [mixed, "ok"])
+    rig.run()
+    tool_msgs = [m for m in rig.provider.requests[1].messages if m.role is MsgRole.TOOL]
+    assert "cut off" not in tool_msgs[0].content and "cut off" in tool_msgs[1].content

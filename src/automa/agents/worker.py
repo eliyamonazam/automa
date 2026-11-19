@@ -35,7 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from automa.budget.ledger import usd_to_nusd
 from automa.config import Tier
 from automa.events import Event, EventSink
-from automa.llm.gateway import CallContext, LLMGateway
+from automa.llm.gateway import MAX_GROWN_OUTPUT_TOKENS, CallContext, LLMGateway
 from automa.llm.types import FinishReason, Message, ToolCall, ToolSpec
 from automa.llm.types import Role as MsgRole
 from automa.memory.prompt import check_memory_project, memory_prompt
@@ -55,6 +55,24 @@ NUDGE_EMPTY = (
     "Your reply was empty. Either call a tool to continue the work, or reply with a "
     "short final summary of what you did (no tool calls) when the task is done."
 )
+# A tool call whose arguments are not a JSON object (cut off at the output limit, seen
+# live: '{"path": "primes.cpp"' with the content missing). It is never run and never
+# sent back as is: the gateway rejects the next request with "Failed to parse JSON"
+# (D142).
+CUT_OFF_CALL = (
+    "ERROR: not run: this tool call was cut off at the output limit, so its arguments "
+    "were incomplete. Write less per call: split long code into several smaller files "
+    "(each well under 150 lines) and write them one at a time."
+)
+
+
+def _arguments_ok(arguments: str) -> bool:
+    try:
+        return isinstance(json.loads(arguments), dict)
+    except (ValueError, TypeError):
+        return False
+
+
 NUDGE_TRUNCATED = (
     "Your reply was cut off at the output limit. Continue with smaller steps: call one "
     "tool at a time, or reply with a short final summary if the task is done."
@@ -342,6 +360,7 @@ class WorkerAgent:
         status = ResultStatus.STEP_LIMIT
         summary = ""
         error: str | None = f"step limit reached ({max_steps} steps)"
+        step_tokens = s.step_max_tokens
         while steps < max_steps:
             steps += 1
             compact_tool_results(
@@ -352,7 +371,7 @@ class WorkerAgent:
                 messages,
                 tier=tier,
                 model=model,
-                max_tokens=s.step_max_tokens,
+                max_tokens=step_tokens,
                 temperature=s.temperature,
                 tools=tools,
                 context=context,
@@ -362,10 +381,19 @@ class WorkerAgent:
             finish = result.response.finish_reason
 
             if reply.tool_calls:
+                intact = [_arguments_ok(tc.arguments) for tc in reply.tool_calls]
                 calls = tuple(
-                    ToolCall(id=f"call_{steps}_{i}", name=tc.name, arguments=tc.arguments)
+                    ToolCall(
+                        id=f"call_{steps}_{i}",
+                        name=tc.name,
+                        arguments=tc.arguments if intact[i] else "{}",
+                    )
                     for i, tc in enumerate(reply.tool_calls)
                 )
+                if finish is FinishReason.LENGTH or not all(intact):
+                    # The reply did not fit: give later steps more room, still under
+                    # the guard (every call's worst case uses its max_tokens) (D142).
+                    step_tokens = max(step_tokens, min(step_tokens * 2, MAX_GROWN_OUTPUT_TOKENS))
                 # Ids are re-issued by us so every tool message answers exactly one call.
                 messages.append(
                     Message(role=MsgRole.ASSISTANT, content=reply.content, tool_calls=calls)
@@ -376,7 +404,9 @@ class WorkerAgent:
                     {"task": task.id, "step": steps, "tool_calls": len(calls)},
                 )
                 for i, call in enumerate(calls):
-                    if i >= s.max_tool_calls_per_step:
+                    if not intact[i]:
+                        text = CUT_OFF_CALL
+                    elif i >= s.max_tool_calls_per_step:
                         text = (
                             f"ERROR: not run: at most {s.max_tool_calls_per_step} tool "
                             "calls per reply"
