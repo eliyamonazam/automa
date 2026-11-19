@@ -31,10 +31,13 @@ from pydantic import (
     StrictBool,
     StrictFloat,
     StrictInt,
+    StrictStr,
     ValidationError,
     field_validator,
     model_validator,
 )
+
+from automa.l10n import DEFAULT_LANGUAGE, DEFAULT_TIMEZONE, Language, resolve_timezone
 
 if TYPE_CHECKING:
     from automa.tools.sandbox import DockerSandbox
@@ -510,9 +513,21 @@ class DisplayConfig(_Strict):
     to show a toman equivalent next to dollar figures such as the cost range of
     ``automa estimate`` and ``automa run``. Unset (the default): dollars only.
     It never changes a price, a cap or the budget guard.
+
+    ``language``: ``"fa"`` (default) or ``"en"``, the language of the web UI (D135).
+    ``timezone``: IANA name (default ``Asia/Tehran``) in which the web UI shows times;
+    a name the system cannot resolve is rejected when the file is loaded.
     """
 
     toman_per_usd: StrictFloat | StrictInt | None = Field(default=None, gt=0, le=MAX_TOMAN_PER_USD)
+    language: Language = DEFAULT_LANGUAGE
+    timezone: StrictStr = DEFAULT_TIMEZONE
+
+    @field_validator("timezone")
+    @classmethod
+    def _timezone(cls, v: str) -> str:
+        resolve_timezone(v)  # ValueError → a clear config error
+        return v
 
 
 class FinanceConfig(_Strict):

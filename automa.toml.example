@@ -93,6 +93,9 @@ output_per_mtok = 20.00
 # changes a price, a cap or the budget guard). Example: the 1xAi rate.
 # [display]
 # toman_per_usd = 323000
+# Web UI language ("fa" or "en") and the time zone its times are shown in.
+# language = "fa"
+# timezone = "Asia/Tehran"
 
 # Hard caps in USD. Reaching a cap stops the run; per_call must not exceed the others.
 [limits]
