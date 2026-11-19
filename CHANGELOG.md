@@ -1,5 +1,9 @@
 # گزارش تغییرات
 
+## 2026-11-19 — اجراکننده ویندوز: انتخاب خودکار توزیع Ubuntu در WSL (خارج از نقشه راه)
+- **یافته (آزمون واقعی روی لپتاپ):** میانبر `automa-web.bat` با `execvpe(bash) failed: No such file or directory` متوقف شد: توزیع پیش‌فرض WSL bash نداشت (مثل `docker-desktop`).
+- **رفع:** بدون `-Distro`، اسکریپت با `wsl -l -q` اولین توزیع `Ubuntu*` (وگرنه اولین توزیع غیر Docker Desktop) رو انتخاب می‌کنه؛ نام توزیع قبل از استفاده با الگوی امن بررسی می‌شه.
+
 ## 2026-11-19 — M12: اجرای آسان روی Windows
 - **انجام‌شده:** `scripts/automa-web.bat` (برای دابل‌کلیک و میانبر دسکتاپ) و `scripts/automa-web.ps1`: داخل WSL از `~/automa` با `.venv` همون‌جا `automa web --allow-actions` رو اجرا می‌کنه، تا جواب دادن `127.0.0.1:8765` صبر می‌کنه و صفحه رو در مرورگر باز می‌کنه؛ پنجره تا Ctrl+C/بستن باز می‌مونه. گزینه‌ها: `-ReadOnly`، `-Port`، `-RepoDir`، `-Distro`، `-NoBrowser`؛ همه اعتبارسنجی‌شده و فرمان bash ثابت و بدون نقل‌قول. راهنمای فارسی کپی فایل‌ها به Windows، ساخت میانبر و رفع مشکل forwarding درگاه WSL در README (D130).
 - **فایل‌های اصلی:** `scripts/automa-web.ps1`، `scripts/automa-web.bat` (جدید، ASCII + CRLF)، `.gitattributes` (جدید)، `README.md`، `tests/test_windows_launcher.py` (۲۳ تست جدید: متن اسکریپت‌ها، اعتبارسنجی پارامترها، نبود سازه‌های خطرناک، و اجرای همون فرمان bash روی نصب جعلی)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D130).

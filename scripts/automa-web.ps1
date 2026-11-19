@@ -44,6 +44,28 @@ if (-not $wsl) {
     exit 2
 }
 
+# The default WSL distro may be one without bash (e.g. Docker Desktop's
+# "docker-desktop"), which fails with "execvpe(bash) failed". Without -Distro, prefer
+# an Ubuntu distro, else any distro that is not Docker Desktop's.
+if (-not $Distro) {
+    $prevEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [System.Text.Encoding]::Unicode  # wsl -l prints UTF-16
+        $listed = & $wsl.Source -l -q 2>$null
+    } catch {
+        $listed = @()
+    } finally {
+        [Console]::OutputEncoding = $prevEncoding
+    }
+    $names = @($listed | ForEach-Object { ("$_" -replace "`0", '').Trim() } | Where-Object { $_ })
+    $pick = $names | Where-Object { $_ -match '^Ubuntu' } | Select-Object -First 1
+    if (-not $pick) { $pick = $names | Where-Object { $_ -notmatch '^docker-desktop' } | Select-Object -First 1 }
+    if ($pick -and $pick -match '^[A-Za-z0-9._-]+$') {
+        $Distro = $pick
+        Write-Host "Using WSL distro: $Distro"
+    }
+}
+
 $Url = "http://127.0.0.1:$Port/"
 
 function Test-Port([int]$P) {

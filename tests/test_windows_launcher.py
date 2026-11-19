@@ -210,3 +210,12 @@ def test_ps1_reports_missing_install_for_exit_code_3() -> None:
     assert "if ($code -eq 3) {" in text
     assert "No Automa install found" in text
     assert "exit $code" in text
+
+
+def test_ps1_prefers_an_ubuntu_distro_when_none_is_given() -> None:
+    # Seen live: the default WSL distro had no bash ("execvpe(bash) failed"), as with
+    # Docker Desktop's docker-desktop distro.
+    text = (ROOT / "scripts" / "automa-web.ps1").read_text(encoding="ascii")
+    assert "-l -q" in text and "'^Ubuntu'" in text and "docker-desktop" in text
+    assert "[System.Text.Encoding]::Unicode" in text
+    assert "$pick -match '^[A-Za-z0-9._-]+$'" in text
