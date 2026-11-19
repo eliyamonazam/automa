@@ -414,3 +414,10 @@ def test_new_cost_range_matches_automa_estimate(new_env: tc.Env) -> None:
     assert e.exit_code == 0, e.output
     total = next(x for x in e.output.splitlines() if x.startswith("total: "))
     assert rng.group(0) in total
+
+
+def test_cli_does_not_import_click_directly() -> None:
+    # click is not a declared dependency (recent typer does not install it): CI broke
+    # once on a direct import, so the CLI uses typer's own Abort/confirm only.
+    source = inspect.getsource(cli)
+    assert not re.search(r"^\s*(import click|from click)", source, re.M)

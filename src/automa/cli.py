@@ -80,7 +80,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, NamedTuple
 
-import click
 import typer
 from pydantic import ValidationError
 
@@ -1235,7 +1234,7 @@ def _confirm_spend(
     else:
         try:
             ok = typer.confirm(f"confirm: {reason}. Continue?", default=False)
-        except (click.exceptions.Abort, typer.Abort):
+        except typer.Abort:
             ok = False
             typer.echo("")
         decision = "confirmed" if ok else "declined"

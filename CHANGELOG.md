@@ -3,8 +3,8 @@
 ## 2026-11-19 — M12: تأیید قبل از خرج (پرسش)
 - **انجام‌شده:** مورد «تأیید قبل از خرج» به دو بخش شکسته شد (پرسش؛ مقایسه بعد از پایان) و بخش اول انجام شد. `automa new` بعد از برنامه خط `cost range: about $X to $Y …; start with: automa run <id>` رو نشون می‌ده (فقط‌خواندنی، بدون فراخوانی). `automa run` اگه سر بالای بازه از `[limits] confirm_above_usd` (پیش‌فرض ۰٫۳ دلار) بیشتر باشه، قبل از هر فراخوانی می‌پرسه `Continue? [y/N]`؛ `--yes`/`-y` بدون پرسش؛ بدون ترمینال و بدون `--yes` با کد ۱۱ و بدون هیچ خرجی متوقف می‌شه؛ تصمیم در رویداد `finance.confirm` (D121).
 - **فایل‌های اصلی:** `src/automa/config.py` (`BudgetLimits.confirm_above_usd`)، `src/automa/cli.py` (`_confirm_spend`، `_stdin_is_terminal`، `_new_cost_range`، `_RunEstimate`، `EXIT_NOT_CONFIRMED`)، `tests/test_run_confirm.py` (تست‌های جدید)، `tests/test_e2e.py`، `tests/test_cli_run_anomaly.py`، `tests/test_cli_run_estimate.py` (`--yes` برای برنامه‌های گرون‌تر از آستانه)، `automa.toml.example`، `README.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D121).
-- **تست‌ها:** `pytest` ← ۴۶۵۲ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI (۳۹ تست جدید)؛ `ruff check` و `ruff format --check` سبز.
-- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود. BudgetGuard، Policy و Approval Gate دست نخوردن؛ آستانه فقط پرسشه و Guard اون رو نمی‌خونه.
+- **تست‌ها:** `pytest` ← ۴۶۵۳ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI (۴۰ تست جدید)؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود. BudgetGuard، Policy و Approval Gate دست نخوردن؛ آستانه فقط پرسشه و Guard اون رو نمی‌خونه. اولین push در CI شکست خورد چون `cli.py` مستقیم `click` رو import می‌کرد (در CI نصب نیست؛ typer جدید بهش وابسته نیست)؛ با `typer.Abort` درست شد و تستی برای جلوگیری اضافه شد.
 - **برای صاحب مخزن:** از این به بعد اگه برنامه‌ای احتمالاً بیشتر از ۰٫۳ دلار بشه، `automa run` می‌پرسه؛ برای اسکریپت‌ها `--yes` بزن یا در `automa.toml` زیر `[limits]` مقدار `confirm_above_usd` رو عوض کن.
 - **قدم بعدی:** تأیید قبل از خرج (بعد از پایان): چاپ و ثبت هزینه واقعی همین اجرا کنار بازه تخمین.
 
