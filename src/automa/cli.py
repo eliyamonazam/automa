@@ -147,6 +147,7 @@ from automa.config import (
 )
 from automa.events import Event, JsonlEventLog
 from automa.finance import (
+    ACTUAL_EVENT,
     ANOMALY_EVENT,
     Anomaly,
     AnomalyReport,
@@ -157,6 +158,7 @@ from automa.finance import (
     EstimateSettings,
     PlanEstimate,
     RangeBasis,
+    RangeVerdict,
     SpendGroup,
     SpendingReport,
     TaskEstimate,
@@ -164,6 +166,7 @@ from automa.finance import (
     attempt_costs,
     attempt_samples,
     call_samples,
+    check_range,
     compare_estimate,
     detect_anomalies,
     estimate_plan,
@@ -979,6 +982,7 @@ def run(
     events = store.events(pid)
     with quality, CostLedger.for_workspace(config.workspace) as ledger:
         spent_before = ledger.spent_nusd(project_id=pid)
+        run_started = datetime.now(UTC)
         est = _run_estimate(
             config,
             store,
@@ -1024,6 +1028,7 @@ def run(
         finally:
             spent = ledger.spent_nusd(project_id=pid)
             typer.echo(f"cost: {_usd(spent - spent_before)} this run, {_usd(spent)} total")
+            typer.echo(_run_vs_estimate(config, events, ledger, pid, run_started))
             for line in _run_anomalies(store, pid, ledger, quality, marks):
                 typer.echo(line)
     for line in _report_lines(report):
@@ -1178,6 +1183,69 @@ def _run_estimate(
         f"{_FIT_SHORT[fit]} (advisory; details: automa estimate {pid})",
         result.range_high_nusd,
     )
+
+
+_VERDICT_TEXT: dict[RangeVerdict, str] = {
+    RangeVerdict.BELOW: "below",
+    RangeVerdict.WITHIN: "within",
+    RangeVerdict.ABOVE: "above",
+}
+
+
+def _run_vs_estimate(
+    config: AutomaConfig,
+    events: JsonlEventLog,
+    ledger: CostLedger,
+    pid: str,
+    run_started: datetime,
+) -> str:
+    """The ``vs estimate:`` line at the end of ``automa run`` (D122): advisory only.
+
+    Compares the money recorded for the estimated tasks since this run's
+    ``finance.estimate`` event (``compare_estimate``) with the cost range printed at
+    the start, and saves the result as a ``finance.actual`` event. Never raises:
+    an unreadable log or ledger only makes the comparison unavailable, and an
+    estimate of an earlier run is never used.
+    """
+    try:
+        comparison = compare_estimate(pid, events.read(), ledger.entries(project_id=pid))
+        check = check_range(comparison, since=run_started)
+    except (OSError, ValueError, TypeError, LedgerError, sqlite3.Error) as e:
+        return f"vs estimate: unavailable ({_safe(str(e)).replace(chr(10), ' ')})"
+    if check is None:
+        return "vs estimate: no cost range was estimated for this run"
+    try:
+        events.emit(
+            Event(
+                ts=datetime.now(UTC),
+                type=ACTUAL_EVENT,
+                project_id=pid,
+                data={
+                    "actual_nusd": check.actual_nusd,
+                    "other_nusd": check.other_nusd,
+                    "range_low_nusd": check.low_nusd,
+                    "range_high_nusd": check.high_nusd,
+                    "worst_nusd": check.worst_nusd,
+                    "verdict": check.verdict.value,
+                },
+            )
+        )
+    except (OSError, ValueError):
+        pass  # advisory: an unwritable event never changes the run
+    rate = config.display.toman_per_usd
+    actual = _usd(check.actual_nusd)
+    if rate is not None:
+        actual += f" (\u2248 {_toman(check.actual_nusd, rate)} toman)"
+    line = (
+        f"vs estimate: actual {actual} for the estimated tasks vs range "
+        f"{_range_text(check.low_nusd, check.high_nusd, rate)}: "
+        f"{_VERDICT_TEXT[check.verdict]}"
+    )
+    if check.other_nusd:
+        line += f"; other calls {_usd(check.other_nusd)}"
+    if check.above_worst:
+        line += "; above the guard cap estimate"
+    return line
 
 
 class _RunEstimate(NamedTuple):

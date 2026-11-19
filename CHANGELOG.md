@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-19 — M12: تأیید قبل از خرج (بعد از پایان)
+- **انجام‌شده:** در پایان `automa run` (بعد از خط `cost:`، حتی بعد از توقف) خط تازه `vs estimate: actual $X for the estimated tasks vs range about $L to $H: within|below|above` چاپ می‌شه (با معادل تومانی اگه `[display] toman_per_usd` تنظیم شده، و `other calls` اگه فراخوانی خارج از وظایف تخمین بوده). مقایسه با `compare_estimate` موجود و تابع خالص تازه `check_range`؛ تخمین اجرای قبلی هرگز استفاده نمی‌شه. نتیجه در رویداد `finance.actual` ثبت می‌شه (D122).
+- **فایل‌های اصلی:** `src/automa/finance/compare.py` (`RangeVerdict`، `RangeCheck`، `range_verdict`، `check_range`، `ACTUAL_EVENT`)، `src/automa/finance/__init__.py`، `src/automa/cli.py` (`_run_vs_estimate`)، `tests/test_run_vs_estimate.py` (۴۴ تست جدید)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D122).
+- **تست‌ها:** `pytest` ← ۴۶۹۷ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود. BudgetGuard، Policy و Approval Gate دست نخوردن؛ مقایسه فقط گزارشه و کد خروج رو عوض نمی‌کنه.
+- **برای صاحب مخزن:** کاری لازم نیست؛ بعد از اجرای واقعی بعدی خط `vs estimate:` نشون می‌ده تخمین چقدر درست بود.
+- **قدم بعدی:** رابط وب، حالت عملیاتی (امنیت): `automa web --allow-actions` با توکن CSRF و تأیید/رد از مرورگر.
+
 ## 2026-11-19 — M12: تأیید قبل از خرج (پرسش)
 - **انجام‌شده:** مورد «تأیید قبل از خرج» به دو بخش شکسته شد (پرسش؛ مقایسه بعد از پایان) و بخش اول انجام شد. `automa new` بعد از برنامه خط `cost range: about $X to $Y …; start with: automa run <id>` رو نشون می‌ده (فقط‌خواندنی، بدون فراخوانی). `automa run` اگه سر بالای بازه از `[limits] confirm_above_usd` (پیش‌فرض ۰٫۳ دلار) بیشتر باشه، قبل از هر فراخوانی می‌پرسه `Continue? [y/N]`؛ `--yes`/`-y` بدون پرسش؛ بدون ترمینال و بدون `--yes` با کد ۱۱ و بدون هیچ خرجی متوقف می‌شه؛ تصمیم در رویداد `finance.confirm` (D121).
 - **فایل‌های اصلی:** `src/automa/config.py` (`BudgetLimits.confirm_above_usd`)، `src/automa/cli.py` (`_confirm_spend`، `_stdin_is_terminal`، `_new_cost_range`، `_RunEstimate`، `EXIT_NOT_CONFIRMED`)، `tests/test_run_confirm.py` (تست‌های جدید)، `tests/test_e2e.py`، `tests/test_cli_run_anomaly.py`، `tests/test_cli_run_estimate.py` (`--yes` برای برنامه‌های گرون‌تر از آستانه)، `automa.toml.example`، `README.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D121).

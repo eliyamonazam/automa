@@ -250,3 +250,77 @@ def _check_entries(entries: Iterable[LedgerEntry]) -> None:
     for e in entries:
         if not isinstance(e, LedgerEntry):
             raise TypeError("entries must be LedgerEntry objects")
+
+
+ACTUAL_EVENT = "finance.actual"
+
+
+class RangeVerdict(StrEnum):
+    """Where the actual cost of the estimated tasks fell against the cost range (D122)."""
+
+    BELOW = "below"  # cheaper than the low end
+    WITHIN = "within"  # low <= actual <= high
+    ABOVE = "above"  # more than the high end (the guard cap may still hold)
+
+
+class RangeCheck(BaseModel):
+    """The actual cost of one run next to the cost range estimated at its start (D122)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False, strict=True)
+
+    actual_nusd: int = Field(ge=0)  # calls of the estimated tasks since the estimate
+    other_nusd: int = Field(ge=0)  # other calls of the project since the estimate
+    low_nusd: int = Field(ge=0)
+    high_nusd: int = Field(ge=0)
+    worst_nusd: int = Field(ge=0)
+    verdict: RangeVerdict
+
+    @property
+    def above_worst(self) -> bool:
+        return self.actual_nusd > self.worst_nusd
+
+    @model_validator(mode="after")
+    def _consistent(self) -> RangeCheck:
+        if not self.low_nusd <= self.high_nusd <= self.worst_nusd:
+            raise ValueError("the cost range must be ordered and within the worst case")
+        if self.verdict is not range_verdict(self.actual_nusd, self.low_nusd, self.high_nusd):
+            raise ValueError("the verdict contradicts the figures")
+        return self
+
+
+def range_verdict(actual_nusd: int, low_nusd: int, high_nusd: int) -> RangeVerdict:
+    """``below``/``within``/``above`` of ``actual`` against ``low``..``high`` (inclusive)."""
+    if actual_nusd < low_nusd:
+        return RangeVerdict.BELOW
+    if actual_nusd > high_nusd:
+        return RangeVerdict.ABOVE
+    return RangeVerdict.WITHIN
+
+
+def check_range(
+    comparison: EstimateComparison, *, since: datetime | None = None
+) -> RangeCheck | None:
+    """The run's actual cost against the range of its estimate (D122), or ``None``.
+
+    ``None`` when there is nothing honest to compare: no readable estimate, an
+    estimate written before ranges existed (D120), or — with ``since`` (the start
+    of the run) — an estimate older than ``since``, which belongs to an earlier
+    run (for example when this run's estimate was unavailable or not saved).
+    Pure and advisory: it never authorizes or stops anything.
+    """
+    if not isinstance(comparison, EstimateComparison):
+        raise TypeError("comparison must be an EstimateComparison")
+    record = comparison.estimate
+    if record is None or record.range_low_nusd is None or record.range_high_nusd is None:
+        return None
+    if since is not None and _utc(record.ts) < _utc(since):
+        return None
+    actual = comparison.tasks.cost_nusd
+    return RangeCheck(
+        actual_nusd=actual,
+        other_nusd=comparison.other.cost_nusd,
+        low_nusd=record.range_low_nusd,
+        high_nusd=record.range_high_nusd,
+        worst_nusd=record.worst_nusd,
+        verdict=range_verdict(actual, record.range_low_nusd, record.range_high_nusd),
+    )

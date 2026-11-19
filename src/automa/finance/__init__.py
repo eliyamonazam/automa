@@ -16,10 +16,15 @@ from automa.finance.anomaly import (
     detect_anomalies,
 )
 from automa.finance.compare import (
+    ACTUAL_EVENT,
     ComparisonOutcome,
     EstimateComparison,
     EstimateRecord,
+    RangeCheck,
+    RangeVerdict,
+    check_range,
     compare_estimate,
+    range_verdict,
 )
 from automa.finance.estimate import (
     DEFAULT_TOKEN_PROFILES,
@@ -70,6 +75,11 @@ __all__ = [
     "TaskEstimate",
     "TaskProgress",
     "compare_estimate",
+    "check_range",
+    "range_verdict",
+    "RangeCheck",
+    "RangeVerdict",
+    "ACTUAL_EVENT",
     "estimate_plan",
     "spending_report",
 ]
