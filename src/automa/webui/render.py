@@ -72,6 +72,8 @@ padding:12px 16px;margin:12px 0}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
 .cards>.card{margin:0}.card h2,.card h3{margin-top:0}
 .goal{margin:.3em 0;overflow-wrap:anywhere;white-space:pre-line}
+.costcard{border-top:1px solid var(--line);margin-top:10px;padding-top:6px}
+.costcard .big{font-size:1.8em;margin:.2em 0}.costcard meter{width:12em}
 .meta{color:var(--muted);font-size:.9em;margin:.2em 0}
 table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid var(--line);
 padding:6px;text-align:start;vertical-align:top}
@@ -190,7 +192,12 @@ def _errors(errors: tuple[str, ...]) -> str:
 
 
 def render_overview(
-    view: Overview, *, actions: bool = False, ideas: bool = False, rate: float | None = None
+    view: Overview,
+    *,
+    actions: bool = False,
+    ideas: bool = False,
+    rate: float | None = None,
+    totals: tuple[float, float] | None = None,
 ) -> str:
     """The project list. ``ideas`` (action mode with a planner, D124) adds the
     "New idea" link; ``rate`` (toman per USD) shows costs first in toman (D133)."""
@@ -200,6 +207,13 @@ def render_overview(
         else "Read-only view."
     )
     parts = ["<h1>Automa projects</h1>", f"<p>{mode}</p>"]
+    if totals is not None:
+        today, month = totals
+        parts.append(
+            '<p class="chips"><span>Spent today: '
+            f"<strong>{text(money(today, rate))}</strong></span>"
+            f"<span>This month: <strong>{text(money(month, rate))}</strong></span></p>"
+        )
     if actions and ideas and view.projects:
         parts.append('<p><a class="button" href="/new"><strong>+ New idea</strong></a></p>')
     if view.showing_tests:
@@ -309,6 +323,7 @@ def render_project(
     run: RunPanel | None = None,
     progress: ProgressView | None = None,
     rate: float | None = None,
+    task_costs: dict[str, float] | None = None,
 ) -> str:
     """One project page. ``forms`` (action mode only) adds approve/reject forms;
     ``notice`` is a one-line result of the last decision, shown at the top;
@@ -328,7 +343,7 @@ def render_project(
         f'<p class="goal" dir="auto">{text(view.goal)}</p>',
         f'<p class="meta">status: <span class="badge">{text(view.status)}</span> · '
         f"created {_time(view.created_at)} · updated {_time(view.updated_at)}</p>",
-        _spent_line(view, rate),
+        _cost_card(view, progress, task_costs or {}, rate),
         f'<p><a href="{text(_project_href(view.id) + "/files")}">Files</a></p>',
     ]
     if questions_waiting and forms is not None:
@@ -389,18 +404,61 @@ def _task_card(t: TaskRow) -> str:
     )
 
 
-def _spent_line(view: ProjectView, rate: float | None) -> str:
-    """What the project has cost so far, with planning and the tasks apart (D133)."""
-    total = f"<p><strong>Spent so far:</strong> {text(money(view.cost_usd, rate))}"
-    if view.cost_usd <= 0:
-        return total + "</p>"
-    planning = min(max(view.planning_usd, 0.0), view.cost_usd)
-    tasks = max(view.cost_usd - planning, 0.0)
-    return (
-        f'{total}</p><p class="chips"><span>Planning (questions, plan, reviews): '
-        f"{text(money(planning, rate))}</span>"
-        f"<span>Doing the tasks: {text(money(tasks, rate))}</span></p>"
-    )
+_VERDICT_TEXT = {
+    "below": "below the estimated range",
+    "within": "within the estimated range",
+    "above": "above the estimated range",
+}
+
+
+def _cost_card(
+    view: ProjectView,
+    progress: ProgressView | None,
+    task_costs: dict[str, float],
+    rate: float | None,
+) -> str:
+    """The project's cost at a glance (D139): the total in large type (toman first
+    when a rate is set), one plain sentence against the estimated range with a meter,
+    planning vs tasks, and what each task cost."""
+    parts = [
+        '<div class="costcard">',
+        f'<p class="big"><strong>{text(money(view.cost_usd, rate))}</strong></p>',
+    ]
+    c = progress.cost if progress is not None else None
+    if c is not None:
+        live = progress is not None and progress.live
+        if live and c.verdict != "above":
+            where = "so far, still running; estimated"
+        else:
+            where = _VERDICT_TEXT.get(c.verdict, c.verdict) + ":"
+        cls = ' class="warn"' if c.verdict == "above" else ""
+        parts.append(
+            f"<p{cls}>This run {text(where)} {text(money_range(c.low_usd, c.high_usd, rate))} "
+            f"{_range_meter(c)}</p>"
+        )
+    elif view.cost_usd <= 0:
+        parts.append('<p class="muted">Nothing spent yet.</p>')
+    if view.cost_usd > 0:
+        planning = min(max(view.planning_usd, 0.0), view.cost_usd)
+        tasks = max(view.cost_usd - planning, 0.0)
+        parts.append(
+            '<p class="chips"><span>Planning: '
+            f"{text(money(planning, rate))}</span>"
+            f"<span>Tasks: {text(money(tasks, rate))}</span></p>"
+        )
+    rows = [
+        f'<tr><td dir="auto">{text(t.title or t.id)}</td>'
+        f"<td>{text(money(task_costs[t.id], rate))}</td></tr>"
+        for t in view.tasks
+        if task_costs.get(t.id, 0) > 0
+    ]
+    if rows:
+        parts.append(
+            "<details><summary>Cost of each task</summary>"
+            f"<table><tbody>{''.join(rows)}</tbody></table></details>"
+        )
+    parts.append("</div>")
+    return "".join(parts)
 
 
 def _progress(p: ProgressView, rate: float | None = None) -> str:
@@ -412,20 +470,6 @@ def _progress(p: ProgressView, rate: float | None = None) -> str:
     if p.total:
         parts.append(f' <meter min="0" max="{p.total}" value="{p.passed}"></meter>')
     parts.append("</p>")
-    if p.cost is not None:
-        c = p.cost
-        so_far = "so far" if p.live else "in total"
-        verdict = c.verdict if not p.live or c.verdict == "above" else "running"
-        cls = ' class="warn"' if c.verdict == "above" else ""
-        other = f" (+ {text(money(c.other_usd, rate))} other calls)" if c.other_usd else ""
-        parts.append(
-            f"<p{cls}>latest run (estimated {_time(c.estimated_at)}): "
-            f"<strong>{text(money(c.spent_usd, rate))}</strong> {so_far}{other} vs range "
-            f"{text(money_range(c.low_usd, c.high_usd, rate))}: {text(verdict)}"
-            f" {_range_meter(c)}</p>"
-        )
-    else:
-        parts.append("<p>No cost range recorded yet (it is written when a run starts).</p>")
     if p.unusual is not None:
         parts.append(_unusual_line(p.unusual, rate))
     if p.live:

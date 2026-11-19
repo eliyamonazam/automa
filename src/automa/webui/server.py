@@ -36,12 +36,14 @@ import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
-from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError
+from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError, nusd_to_usd
 from automa.finance.anomaly import AnomalySettings
+from automa.l10n import DEFAULT_TIMEZONE, resolve_timezone
 from automa.project.store import (
     ProjectStatus,
     ProjectStore,
@@ -295,6 +297,21 @@ class WebApp:
                 return list(ledger.entries()), None
         except LedgerError as e:
             return [], f"ledger: {e}"
+
+    def _totals(self) -> tuple[float, float] | None:
+        """Spent today and this month (local calendar, D139); ``None`` if unreadable."""
+        entries, err = self._entries()
+        if err:
+            return None
+        now = datetime.now(_LOCAL_TZ)
+        today = month = 0
+        for e in entries:
+            local = e.ts.astimezone(_LOCAL_TZ)
+            if (local.year, local.month) == (now.year, now.month):
+                month += e.cost_nusd
+                if local.date() == now.date():
+                    today += e.cost_nusd
+        return nusd_to_usd(today), nusd_to_usd(month)
 
     def _spending(self) -> tuple[dict[str, int], str | None]:
         """Spending per project from a read-only Ledger; never creates one."""
@@ -585,7 +602,11 @@ class WebApp:
             if err:
                 view = view.model_copy(update={"errors": (*view.errors, err)})
             document = render_overview(
-                view, actions=actions, ideas=self._ideas is not None, rate=self._rate
+                view,
+                actions=actions,
+                ideas=self._ideas is not None,
+                rate=self._rate,
+                totals=self._totals(),
             )
             return _html(200, document, security=self._security)
         if self._ideas is not None and self._actions is not None:
@@ -639,9 +660,22 @@ class WebApp:
                 run=self._run_panel(pid),
                 progress=self._progress(pview, own),
                 rate=self._rate,
+                task_costs=_task_costs(own),
             )
             return _html(200, document, security=self._security)
         return self.error(404, "Not found")
+
+
+_LOCAL_TZ = resolve_timezone(DEFAULT_TIMEZONE)
+
+
+def _task_costs(entries: Sequence[LedgerEntry]) -> dict[str, float]:
+    """Cost of each task from its ledger entries (D139)."""
+    totals: dict[str, int] = {}
+    for e in entries:
+        if e.task_id is not None:
+            totals[e.task_id] = totals.get(e.task_id, 0) + e.cost_nusd
+    return {k: nusd_to_usd(v) for k, v in totals.items()}
 
 
 def make_handler(

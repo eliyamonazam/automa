@@ -1,5 +1,12 @@
 # گزارش تغییرات
 
+## 2026-11-19 — M13: کارت هزینه (D139)
+- **انجام‌شده:** صفحه پروژه حالا یک کارت هزینه داره: جمع هزینه با خط درشت (تومان اول، دلار در پرانتز)، یک جمله ساده درباره اجرای آخر نسبت به بازه تخمین («This run within the estimated range: …»، در حال اجرا «so far, still running; estimated …»، بالای بازه با رنگ هشدار) همراه نوار، تفکیک «Planning» و «Tasks»، و جدول تاشوی «Cost of each task» از روی Ledger. صفحه اصلی جمع «Spent today» و «This month» رو به وقت محلی نشون می‌ده.
+- **فایل‌ها:** `src/automa/webui/render.py` (`_cost_card`، حذف `_spent_line`)، `server.py` (`_task_costs`، `WebApp._totals`)، `tests/test_webui_money.py` (۴ تست جدید)، `tests/test_webui_progress.py`.
+- **تست‌ها:** `pytest` ← ۵۴۵۰ سبز، ۲ رد شده (Docker واقعی)، در حالت شبیه CI هم سبز؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** متن کارت هنوز انگلیسیه؛ با «زبان فارسی (۲)» ترجمه می‌شه. فقط نمایش؛ BudgetGuard، Policy و Approval Gate دست نخوردن.
+- **قدم بعدی:** زبان فارسی (۲): صفحه‌ها.
+
 ## 2026-11-19 — M13: صفحه اصلی تمیز (D138)
 - **انجام‌شده:** عنوان انسانی از هدف، جدیدترین اول، آزمون‌های `bench-` پنهان با کلید نمایش، صفحه خوش‌آمد با مثال‌ها.
 - **فایل‌ها:** `src/automa/webui/views.py`، `render.py`، `server.py`، `tests/test_webui.py`، `tests/test_webui_style.py`.

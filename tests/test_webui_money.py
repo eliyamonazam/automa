@@ -191,21 +191,21 @@ def test_overview_without_rate_two_decimals() -> None:
 
 def test_project_page_splits_planning_and_tasks() -> None:
     page = rd.render_project(_view(0.45, planning=0.05), rate=RATE)
-    assert "Spent so far:</strong> about 145 thousand toman ($0.45)" in page
-    assert "Planning (questions, plan, reviews): about 16 thousand toman ($0.05)" in page
-    assert "Doing the tasks: about 129 thousand toman ($0.40)" in page
+    assert '<p class="big"><strong>about 145 thousand toman ($0.45)</strong>' in page
+    assert "Planning: about 16 thousand toman ($0.05)" in page
+    assert "Tasks: about 129 thousand toman ($0.40)" in page
 
 
 def test_project_page_with_nothing_spent_has_no_split() -> None:
     page = rd.render_project(_view(0.0), rate=RATE)
-    assert "Spent so far:</strong> 0 toman ($0.00)" in page
-    assert "Planning (" not in page
+    assert "<strong>0 toman ($0.00)</strong>" in page and "Nothing spent yet." in page
+    assert "Planning:" not in page
 
 
 def test_project_page_split_never_exceeds_the_total() -> None:
     page = rd.render_project(_view(0.1, planning=5.0), rate=None)
-    assert "Planning (questions, plan, reviews): $0.10" in page
-    assert "Doing the tasks: $0.00" in page
+    assert "Planning: $0.10" in page
+    assert "Tasks: $0.00" in page
 
 
 def test_build_project_view_clamps_planning(tmp_path: Path) -> None:
@@ -233,9 +233,11 @@ def _progress(spent: float, other: float = 0.0) -> pg.ProgressView:
 
 def test_progress_amounts_in_toman() -> None:
     page = rd.render_project(_view(0.15), progress=_progress(0.15, other=0.02), rate=RATE)
-    assert "about 48 thousand toman ($0.15)</strong> in total" in page
-    assert "(+ about 6.5 thousand toman ($0.02) other calls)" in page
-    assert "vs range about 32 to 61 thousand toman ($0.10 to $0.19)" in page
+    assert "<strong>about 48 thousand toman ($0.15)</strong>" in page
+    assert (
+        "This run within the estimated range: about 32 to 61 thousand toman ($0.10 to $0.19)"
+        in page
+    )
     # the meter keeps exact values (it is not text)
     assert 'value="0.150000"' in page
     assert not re.search(r"\$\d+\.\d{4}", page)
@@ -302,12 +304,14 @@ def test_served_project_page_shows_planning_cost(
         toman_per_usd=RATE,
     )
     body = app.handle("GET", f"/projects/{pid}", HOST).body.decode()
-    assert "Spent so far:</strong>" in body
+    assert '<div class="costcard">' in body
     # the plan call has no task: everything so far is planning
-    assert "Doing the tasks: 0 toman ($0.00)" in body
-    assert "Planning (questions, plan, reviews):" in body
+    assert "Tasks: 0 toman ($0.00)" in body
+    assert "Planning: " in body
     overview = app.handle("GET", "/", HOST).body.decode()
     assert "cost: " in overview and "toman" in overview
+    # the plan call was just recorded: it counts for today and this month
+    assert "Spent today: <strong>" in overview and "Spent today: <strong>0 toman" not in overview
 
 
 @pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf")])
@@ -328,3 +332,43 @@ def test_create_server_passes_the_rate(tmp_path: Path) -> None:
         assert handler is not None
     finally:
         server.server_close()
+
+
+# --- cost card (D139) ------------------------------------------------------------------
+
+
+def test_cost_card_lists_each_task_that_cost_something() -> None:
+    from automa.webui.views import TaskRow
+
+    tasks = (
+        TaskRow(order=1, id="a", title="Write <page>", role="coder"),
+        TaskRow(order=2, id="b", title="Check it", role="coder"),
+    )
+    view = _view(0.45, planning=0.05).model_copy(update={"tasks": tasks})
+    page = rd.render_project(view, rate=RATE, task_costs={"a": 0.4, "b": 0.0, "zz": 9.0})
+    assert "<summary>Cost of each task</summary>" in page
+    assert "Write &lt;page&gt;</td><td>about 129 thousand toman ($0.40)" in page
+    assert "Check it</td>" not in page  # nothing spent on it
+    assert "$9.00" not in page  # not a task of this plan
+
+
+def test_cost_card_without_task_costs_has_no_table() -> None:
+    page = rd.render_project(_view(0.45), rate=RATE)
+    assert "Cost of each task" not in page
+
+
+def test_task_costs_sums_by_task() -> None:
+    from automa.budget.ledger import LedgerEntry
+
+    def entry(task: str | None, nusd: int) -> LedgerEntry:
+        return LedgerEntry.model_construct(task_id=task, cost_nusd=nusd)
+
+    got = ws._task_costs([entry("a", 100_000_000), entry("a", 50_000_000), entry(None, 7)])
+    assert got == {"a": pytest.approx(0.15)}
+
+
+def test_overview_shows_today_and_month() -> None:
+    page = rd.render_overview(Overview(projects=()), rate=RATE, totals=(0.1, 0.45))
+    assert "Spent today: <strong>about 32 thousand toman ($0.10)</strong>" in page
+    assert "This month: <strong>about 145 thousand toman ($0.45)</strong>" in page
+    assert "Spent today" not in rd.render_overview(Overview(projects=()))
