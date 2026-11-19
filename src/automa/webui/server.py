@@ -33,6 +33,7 @@ import math
 import socket
 import sys
 import threading
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -83,6 +84,8 @@ from automa.webui.ideas import (
     IdeaPlanner,
     is_idea_path,
     parse_clarify_path,
+    parse_thinking_path,
+    project_path,
 )
 from automa.webui.preview import PREVIEW_HEADERS, parse_preview_path, preview_response
 from automa.webui.progress import ProgressView, build_progress
@@ -99,6 +102,7 @@ from automa.webui.render import (
     render_new_idea,
     render_overview,
     render_project,
+    render_thinking,
     text,
     visible,
 )
@@ -233,6 +237,7 @@ class WebApp:
         runs: RunPreflight | BackgroundRuns | None = None,
         anomaly: AnomalySettings | None = None,
         toman_per_usd: float | None = None,
+        background_ideas: bool = False,
     ):
         self._store = ProjectStore.for_workspace(workspace)
         self._anomaly = anomaly
@@ -247,7 +252,11 @@ class WebApp:
         else:
             self._runs = BackgroundRuns(self._store, runs)
         # New ideas only in action mode (D124); a read-only server never plans.
-        self._ideas = IdeaFlow(self._store, planner) if actions is not None and planner else None
+        self._ideas = (
+            IdeaFlow(self._store, planner, background=background_ideas)
+            if actions is not None and planner
+            else None
+        )
         self._ledger_path = ledger_path
         self._allowed = allowed
         self._actions = actions
@@ -529,6 +538,20 @@ class WebApp:
         )
         return Response(200, data, headers)
 
+    def _thinking(self, pid: str) -> Response:
+        """The waiting page of a background Executive step (D137)."""
+        assert self._ideas is not None  # noqa: S101 - only routed in idea mode
+        job = self._ideas.job(pid)
+        if job is None:
+            return self._redirect(project_path(pid))
+        if job.done and job.next_path is not None:
+            return self._redirect(job.next_path)
+        if job.done:
+            return self.error(409, "The Executive could not finish", job.error or "unknown error")
+        elapsed = int(time.monotonic() - job.started)
+        document = render_thinking(pid, job.phase, elapsed)
+        return _html(200, document, security=self._security)
+
     def _preview(self, pid: str, path: str) -> Response:
         """A project's HTML result, isolated in an opaque sandbox (D136)."""
         try:
@@ -563,6 +586,9 @@ class WebApp:
             return _html(200, document, security=self._security)
         if self._ideas is not None and self._actions is not None:
             forms = ActionForms(self._actions.csrf_token)
+            thinking_pid = parse_thinking_path(path)
+            if thinking_pid is not None:
+                return self._thinking(thinking_pid)
             if path == NEW_PATH:
                 return _html(200, render_new_idea(forms), security=self._security)
             clarify_pid = parse_clarify_path(path)
@@ -722,6 +748,7 @@ def create_server(
         runs=runs,
         anomaly=anomaly,
         toman_per_usd=toman_per_usd,
+        background_ideas=True,  # the browser waits on a "thinking" page (D137)
     )
     server.RequestHandlerClass = make_handler(app, log)
     return server

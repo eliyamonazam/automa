@@ -786,11 +786,27 @@ def test_socket_idea_flow(running: tuple[int, FakePlanner, ProjectStore]) -> Non
     status, headers, _ = _req(port, "POST", "/new", post, body)
     assert status == 303
     (pid,) = store.list_ids()
-    assert headers["Location"] == f"/projects/{pid}/clarify"
+    # The real server plans in the background behind a "thinking" page (D137).
+    assert headers["Location"] == f"/projects/{pid}/thinking"
+    location = _follow_thinking(port, host, pid)
+    assert location == f"/projects/{pid}/clarify"
     answers = urlencode({"csrf": token}).encode()
-    status, _, _ = _req(port, "POST", headers["Location"], post, answers)
-    assert status == 303
+    status, headers, _ = _req(port, "POST", location, post, answers)
+    assert status == 303 and headers["Location"] == f"/projects/{pid}/thinking"
+    assert _follow_thinking(port, host, pid) == f"/projects/{pid}"
     assert store.has_plan(pid)
+
+
+def _follow_thinking(port: int, host: dict[str, str], pid: str) -> str:
+    import time
+
+    for _ in range(100):
+        status, headers, _ = _req(port, "GET", f"/projects/{pid}/thinking", host)
+        if status == 303:
+            return headers["Location"]
+        assert status == 200
+        time.sleep(0.05)
+    raise AssertionError("the background step did not finish")
 
 
 def test_socket_cross_origin_idea_refused(running: tuple[int, FakePlanner, ProjectStore]) -> None:
@@ -800,3 +816,98 @@ def test_socket_cross_origin_idea_refused(running: tuple[int, FakePlanner, Proje
     assert status == 403
     assert store.list_ids() == []
     assert planner.calls == []
+
+
+# -- background mode: a "thinking" page instead of a hanging request (D137) -------
+
+
+class SlowPlanner(FakePlanner):
+    """Blocks in clarify/plan until released, like a real Executive call."""
+
+    def __init__(self, store: ProjectStore) -> None:
+        super().__init__(store)
+        import threading
+
+        self.gate = threading.Event()
+
+    def clarify(self, project_id: str) -> list[str]:
+        self.gate.wait(5)
+        return super().clarify(project_id)
+
+    def plan(self, project_id: str, clarifications: Sequence[Clarification]) -> None:
+        self.gate.wait(5)
+        super().plan(project_id, clarifications)
+
+
+def _bg_env(root: Path, planner_cls: type[FakePlanner] = SlowPlanner) -> Env:
+    env = Env.__new__(Env)
+    env.root = root
+    env.store = ProjectStore.for_workspace(root)
+    env.planner = planner_cls(env.store)
+    env.app = ws.WebApp(
+        root,
+        root / LEDGER,
+        ws.allowed_hosts("127.0.0.1", PORT),
+        actions=_settings(),
+        planner=env.planner,
+        background_ideas=True,
+    )
+    return env
+
+
+def test_background_idea_returns_at_once_and_waits_on_thinking_page(tmp_path: Path) -> None:
+    env = _bg_env(tmp_path)
+    r = env.new("Build a site")
+    assert r.status == 303
+    (pid,) = env.store.list_ids()
+    assert _location(r) == f"/projects/{pid}/thinking"
+    waiting = env.get(f"/projects/{pid}/thinking")
+    assert waiting.status == 200
+    body = _body(waiting)
+    assert '<meta http-equiv="refresh" content="3">' in body and "Thinking" in body
+    # A second idea while the Executive is busy is refused.
+    assert env.new("Another").status == 409
+    env.planner.gate.set()
+    env.app._ideas.wait(pid)  # type: ignore[union-attr]
+    done = env.get(f"/projects/{pid}/thinking")
+    assert done.status == 303 and _location(done) == f"/projects/{pid}/clarify"
+
+    r = env.post(f"/projects/{pid}/clarify", {"csrf": TOKEN, "a0": "me", "a1": ""})
+    assert r.status == 303 and _location(r) == f"/projects/{pid}/thinking"
+    env.app._ideas.wait(pid)  # type: ignore[union-attr]
+    done = env.get(f"/projects/{pid}/thinking")
+    assert done.status == 303 and _location(done) == f"/projects/{pid}"
+    assert env.store.has_plan(pid)
+    # The lock is free again.
+    assert env.new("Next idea").status == 303
+
+
+def test_background_failure_is_shown_and_frees_the_lock(tmp_path: Path) -> None:
+    env = _bg_env(tmp_path, FakePlanner)
+    env.planner.fail["clarify"] = wi.IdeaError("budget", "daily cap reached")
+    r = env.new("Build a site")
+    (pid,) = env.store.list_ids()
+    env.app._ideas.wait(pid)  # type: ignore[union-attr]
+    page = env.get(_location(r))
+    assert page.status == 409 and "daily cap reached" in _body(page)
+    assert env.new("Retry").status == 303
+
+
+def test_thinking_without_job_goes_to_project(tmp_path: Path) -> None:
+    env = _bg_env(tmp_path, FakePlanner)
+    env.store.create("g", project_id="p1")
+    r = env.get("/projects/p1/thinking")
+    assert r.status == 303 and _location(r) == "/projects/p1"
+    assert env.get("/projects/..%2Fx/thinking").status == 404
+
+
+def test_read_only_server_has_no_thinking_page(tmp_path: Path) -> None:
+    env = Env(tmp_path, actions=False)
+    env.store.create("g", project_id="p1")
+    assert env.get("/projects/p1/thinking").status == 404
+
+
+def test_serve_uses_background_ideas() -> None:
+    import inspect
+
+    assert "background_ideas=True" in inspect.getsource(ws.create_server)

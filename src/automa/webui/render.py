@@ -516,6 +516,24 @@ def render_new_idea(forms: ActionForms) -> str:
     return page("Automa — new idea", body, actions=True)
 
 
+def render_thinking(project_id: str, phase: str, elapsed_s: int) -> str:
+    """The self-refreshing page shown while the Executive works (D137)."""
+    what = (
+        "is reading your idea and deciding whether to ask a few questions"
+        if phase == "questions"
+        else "is making the plan and the cost estimate"
+    )
+    body = (
+        '<p><a href="/">← all projects</a></p>'
+        '<div class="card"><h1>⏳ Thinking…</h1>'
+        f"<p>The Executive {text(what)}. This usually takes under a minute; this page "
+        "refreshes by itself and moves on when it is done.</p>"
+        f'<p class="muted">{text(str(max(0, elapsed_s)))} s so far · project '
+        f"{text(project_id)}</p></div>"
+    )
+    return page("Automa — thinking", body, actions=True, refresh=3)
+
+
 def render_clarify(project_id: str, goal: str, questions: list[str], forms: ActionForms) -> str:
     """One answer field per stored question (questions are model output: escaped)."""
     fields = "".join(

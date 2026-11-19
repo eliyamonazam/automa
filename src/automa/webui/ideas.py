@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import re
 import threading
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Protocol
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from automa.plan import Clarification
 from automa.plan.models import MAX_ANSWER_CHARS, MAX_CLARIFICATIONS
@@ -131,13 +133,82 @@ def _refusal(e: IdeaError, project_id: str | None) -> ActionRefused:
     return ActionRefused(KIND_STATUS[e.kind], f"{e.message}{where}")
 
 
-class IdeaFlow:
-    """The two idea steps over a :class:`ProjectStore` and an :class:`IdeaPlanner`."""
+def thinking_path(project_id: str) -> str:
+    return f"/projects/{quote(project_id, safe='')}/thinking"
 
-    def __init__(self, store: ProjectStore, planner: IdeaPlanner) -> None:
+
+def parse_thinking_path(path: str) -> str | None:
+    """The project id of a ``/projects/<pid>/thinking`` path, else ``None``."""
+    if not path.startswith("/projects/") or not path.endswith("/thinking"):
+        return None
+    raw = path[len("/projects/") : -len("/thinking")]
+    if "/" in raw:
+        return None
+    try:
+        return validate_project_id(unquote(raw))
+    except ProjectStoreError:
+        return None
+
+
+@dataclass
+class Job:
+    """One background Executive step (D137): asking questions or planning."""
+
+    phase: str  # "questions" | "planning"
+    started: float
+    done: bool = False
+    next_path: str | None = None
+    error: str | None = None
+
+
+class IdeaFlow:
+    """The two idea steps over a :class:`ProjectStore` and an :class:`IdeaPlanner`.
+
+    With ``background=True`` (the real server, D137) the slow Executive calls run in
+    a thread: the POST returns at once and the browser waits on a self-refreshing
+    "thinking" page instead of a request that hangs for a minute.
+    """
+
+    def __init__(
+        self, store: ProjectStore, planner: IdeaPlanner, *, background: bool = False
+    ) -> None:
         self._store = store
         self._planner = planner
         self._busy = threading.Lock()
+        self._background = background
+        self._jobs: dict[str, Job] = {}
+        self._threads: dict[str, threading.Thread] = {}
+
+    def job(self, project_id: str) -> Job | None:
+        return self._jobs.get(project_id)
+
+    def wait(self, project_id: str, timeout: float = 10.0) -> None:
+        """Wait for a background job (tests and shutdown)."""
+        t = self._threads.get(project_id)
+        if t is not None:
+            t.join(timeout)
+
+    def _spawn(self, project_id: str, phase: str, work: Callable[[], str]) -> str:
+        """Run ``work`` (returns the next path) in a thread; the lock is released
+        when it ends. Returns the thinking page path."""
+        job = Job(phase=phase, started=time.monotonic())
+        self._jobs[project_id] = job
+
+        def runner() -> None:
+            try:
+                job.next_path = work()
+            except ActionRefused as e:
+                job.error = e.message
+            except Exception as e:  # noqa: BLE001 - shown to the owner, never re-raised
+                job.error = f"unexpected error: {type(e).__name__}"
+            finally:
+                job.done = True
+                self._busy.release()
+
+        thread = threading.Thread(target=runner, name=f"idea-{project_id}", daemon=True)
+        self._threads[project_id] = thread
+        thread.start()
+        return thinking_path(project_id)
 
     @property
     def planner(self) -> IdeaPlanner:
@@ -151,6 +222,7 @@ class IdeaFlow:
         """Create the project and ask (or plan); returns where the browser goes next."""
         goal, ask = parse_idea(form)
         self._acquire()
+        handed_off = False
         try:
             try:
                 self._planner.prepare()
@@ -161,23 +233,33 @@ class IdeaFlow:
             except ProjectStoreError as e:
                 raise ActionRefused(400, str(e)) from None
             pid = project.id
-            if ask:
-                try:
-                    questions = self._planner.clarify(pid)
-                except IdeaError as e:
-                    # Same statuses as ``automa new`` after a failed question round.
-                    if e.kind == "budget":
-                        self._store.set_status(pid, ProjectStatus.PAUSED)
-                    elif e.kind == "planning":
-                        self._store.set_status(pid, ProjectStatus.FAILED)
-                    raise _refusal(e, pid) from None
-                if questions:
-                    self._store.save_questions(pid, questions)
-                    return clarify_path(pid)
-            self._plan(pid, [])
-            return project_path(pid)
+            if self._background:
+                handed_off = True
+                return self._spawn(
+                    pid, "questions" if ask else "planning", lambda: self._first_step(pid, ask)
+                )
+            return self._first_step(pid, ask)
         finally:
-            self._busy.release()
+            if not handed_off:
+                self._busy.release()
+
+    def _first_step(self, pid: str, ask: bool) -> str:
+        """Ask questions (or plan right away); returns the next path."""
+        if ask:
+            try:
+                questions = self._planner.clarify(pid)
+            except IdeaError as e:
+                # Same statuses as ``automa new`` after a failed question round.
+                if e.kind == "budget":
+                    self._store.set_status(pid, ProjectStatus.PAUSED)
+                elif e.kind == "planning":
+                    self._store.set_status(pid, ProjectStatus.FAILED)
+                raise _refusal(e, pid) from None
+            if questions:
+                self._store.save_questions(pid, questions)
+                return clarify_path(pid)
+        self._plan(pid, [])
+        return project_path(pid)
 
     def pending_questions(self, project_id: str) -> list[str]:
         """The questions still waiting for answers, or ``ActionRefused``."""
@@ -198,6 +280,7 @@ class IdeaFlow:
     def answer(self, project_id: str, form: Mapping[str, str]) -> str:
         """Record the answers and make the plan; returns the project page path."""
         self._acquire()
+        handed_off = False
         try:
             questions = self.pending_questions(project_id)
             items = parse_answers(form, questions)
@@ -209,10 +292,19 @@ class IdeaFlow:
                 self._store.save_clarifications(project_id, items)
             except ProjectStoreError as e:
                 raise ActionRefused(409, str(e)) from None
-            self._plan(project_id, items)
-            return project_path(project_id)
+            if self._background:
+                handed_off = True
+                return self._spawn(
+                    project_id, "planning", lambda: self._plan_then(project_id, items)
+                )
+            return self._plan_then(project_id, items)
         finally:
-            self._busy.release()
+            if not handed_off:
+                self._busy.release()
+
+    def _plan_then(self, project_id: str, items: Sequence[Clarification]) -> str:
+        self._plan(project_id, items)
+        return project_path(project_id)
 
     def _plan(self, project_id: str, items: Sequence[Clarification]) -> None:
         try:
