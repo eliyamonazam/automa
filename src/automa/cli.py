@@ -60,6 +60,8 @@ Exit codes (stable, for scripts):
 * 9 — ``automa self next``: the roadmap has no open item (``[ ]``/``[~]``) left;
   items waiting for the owner (``[!]``) are listed
 * 10 — ``automa self next``: the roadmap is missing, unreadable or ambiguous
+* 11 — ``automa run``: the cost range is above ``[limits] confirm_above_usd`` and
+  the run was not confirmed (declined, or no terminal and no ``--yes``); nothing ran
 * 130 — interrupted (Ctrl+C); the project is ``paused`` and can be resumed
 """
 
@@ -78,6 +80,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, NamedTuple
 
+import click
 import typer
 from pydantic import ValidationError
 
@@ -302,6 +305,7 @@ EXIT_PAUSED = 7
 EXIT_BENCH_FAILED = 8
 EXIT_SELF_NOTHING_OPEN = 9
 EXIT_ROADMAP_INVALID = 10
+EXIT_NOT_CONFIRMED = 11
 EXIT_INTERRUPTED = 130
 
 # Exit code of each way a run can end (see the module docstring).
@@ -696,6 +700,7 @@ def _plan_with_executive(
     for line in _plan_lines(plan):
         typer.echo(line)
     typer.echo(f"status: {store.load(pid).status.value}")
+    typer.echo(f"cost range: {_new_cost_range(config, store, pid)}")
 
 
 def _compat_context(config: AutomaConfig) -> tuple[dict[str, Tier], frozenset[Tier]]:
@@ -755,6 +760,58 @@ def _new_from_workflow(
     for line in _plan_lines(plan):
         typer.echo(_safe(line))
     typer.echo(f"status: {store.load(pid).status.value}")
+    typer.echo(f"cost range: {_new_cost_range(config, store, pid)}")
+
+
+def _new_cost_range(config: AutomaConfig, store: ProjectStore, pid: str) -> str:
+    """The ``cost range:`` line of ``automa new`` (D121): what running the new plan
+    may cost, before anything is spent on it.
+
+    Same figures as ``automa estimate`` with the default run settings (router as in
+    automa.toml), read-only: the quality log is opened read-only, nothing is
+    written and no model is called. Advisory: any problem only makes it
+    "unavailable"; the project and its plan are already saved either way.
+    """
+    try:
+        plan = store.load_plan(pid)
+        roles, _ = _roles_and_skills(config)
+        settings = EstimateSettings.from_settings(
+            OrchestratorSettings(max_parallel=config.orchestrator.max_parallel)
+        )
+        stats: list[QualityStats] = []
+        costs: dict[tuple[str, str], list[int]] = {}
+        path = config.workspace / QUALITY_FILE
+        if path.exists() or path.is_symlink():
+            with QualityLog(path, read_only=True) as log:
+                stats = log.stats()
+                costs = attempt_costs(log.records())
+        router = Router(config, stats) if config.router.enabled else None
+        result = estimate_plan(
+            plan, config, roles, stats, settings=settings, router=router, costs=costs
+        )
+    except (
+        ProjectStoreError,
+        ConfigError,
+        RoleError,
+        SkillError,
+        QualityError,
+        ValueError,
+        KeyError,
+        OSError,
+    ) as e:
+        reason = _safe(str(e)).replace("\n", " ")
+        return f"unavailable ({reason}); see later: automa estimate {pid}"
+    rng = _range_text(result.range_low_nusd, result.range_high_nusd, config.display.toman_per_usd)
+    threshold = _confirm_threshold_nusd(config.limits.confirm_above_usd)
+    ask = (
+        f"; automa run will ask before starting (above {_usd(threshold)})"
+        if result.range_high_nusd > threshold
+        else ""
+    )
+    return (
+        f"{rng}, {_RANGE_BASIS_TEXT[result.range_basis]}; guard cap (worst case) "
+        f"{_usd(result.worst_nusd)}{ask}; start with: automa run {pid}"
+    )
 
 
 def _print_suggestions(config: AutomaConfig, goal: str) -> None:
@@ -864,6 +921,15 @@ def run(
             "quality log; default: [router] enabled in automa.toml (off).",
         ),
     ] = None,
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help="Start without asking even if the cost range is above "
+            "[limits] confirm_above_usd (needed when there is no terminal to ask).",
+        ),
+    ] = False,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Path to automa.toml.")
     ] = None,
@@ -914,20 +980,20 @@ def run(
     events = store.events(pid)
     with quality, CostLedger.for_workspace(config.workspace) as ledger:
         spent_before = ledger.spent_nusd(project_id=pid)
-        typer.echo(
-            "estimate: "
-            + _run_estimate(
-                config,
-                store,
-                pid,
-                roles,
-                settings,
-                stats,
-                router,
-                spent_before,
-                _quality_costs(quality) if stats is not None else None,
-            )
+        est = _run_estimate(
+            config,
+            store,
+            pid,
+            roles,
+            settings,
+            stats,
+            router,
+            spent_before,
+            _quality_costs(quality) if stats is not None else None,
         )
+        typer.echo(f"estimate: {est.line}")
+        # Before the guard, the gateway and any model call (D121).
+        _confirm_spend(config, events, pid, est.high_nusd, yes=yes)
         marks = _RunMarks.take(ledger, quality, pid)
         guard = BudgetGuard(config.limits, ledger, events=events)
         gateway = LLMGateway(config, provider, guard=guard)
@@ -1044,7 +1110,7 @@ def _run_estimate(
     router: Router | None,
     spent_nusd: int,
     costs: dict[tuple[str, str], list[int]] | None = None,
-) -> str:
+) -> _RunEstimate:
     """The ``estimate:`` line of ``automa run`` (D64): advisory only.
 
     Same inputs as ``automa estimate`` — the statistics snapshot and router of this
@@ -1055,9 +1121,11 @@ def _run_estimate(
     saved as a ``finance.estimate`` event for later comparison with the real cost.
     The realistic range (D119) leads the line; the worst case is only the guard cap
     (D120). ``costs``: worker cost per judged attempt, from the same quality log.
+    Returns the line and the upper end of the range (``None`` when unavailable),
+    which only decides whether the run asks before spending (D121).
     """
     if stats is None:
-        return "unavailable (the quality log statistics cannot be read)"
+        return _RunEstimate("unavailable (the quality log statistics cannot be read)", None)
     try:
         plan = store.load_plan(pid)
         progress, excluded = _estimate_inputs(store, pid, plan)
@@ -1075,7 +1143,7 @@ def _run_estimate(
         )
     except (ProjectStoreError, ConfigError, ValueError, KeyError) as e:
         reason = _safe(str(e)).replace("\n", " ")
-        return f"unavailable ({reason})"
+        return _RunEstimate(f"unavailable ({reason})", None)
     left = max(0, cap_to_nusd(config.limits.project_usd) - spent_nusd)
     fit = result.assess(left)
     try:
@@ -1104,12 +1172,99 @@ def _run_estimate(
     except (OSError, ValueError):
         pass  # advisory: an unwritable event never changes the run
     rng = _range_text(result.range_low_nusd, result.range_high_nusd, config.display.toman_per_usd)
-    return (
+    return _RunEstimate(
         f"{len(result.tasks)} task(s) to run; {rng}, "
         f"{_RANGE_BASIS_TEXT[result.range_basis]}; guard cap (worst case) "
         f"{_usd(result.worst_nusd)}; project budget left {_usd(left)}: "
-        f"{_FIT_SHORT[fit]} (advisory; details: automa estimate {pid})"
+        f"{_FIT_SHORT[fit]} (advisory; details: automa estimate {pid})",
+        result.range_high_nusd,
     )
+
+
+class _RunEstimate(NamedTuple):
+    """The ``estimate:`` line of ``automa run`` and the upper end of its range."""
+
+    line: str
+    high_nusd: int | None  # None: no estimate
+
+
+CONFIRM_EVENT = "finance.confirm"
+
+
+def _stdin_is_terminal() -> bool:
+    """Whether ``automa run`` can ask a question (a separate function so tests can
+    stand in for a terminal)."""
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def _confirm_threshold_nusd(usd: float) -> int:
+    return 0 if usd <= 0 else cap_to_nusd(usd)
+
+
+def _confirm_spend(
+    config: AutomaConfig, events: JsonlEventLog, pid: str, high_nusd: int | None, *, yes: bool
+) -> None:
+    """Ask "continue?" before the first model call of ``automa run`` (D121).
+
+    Asked when the upper end of the cost range is above ``[limits]
+    confirm_above_usd``; with no range (estimate unavailable) it is not asked and a
+    note says so. ``--yes`` starts without asking; without a terminal and without
+    ``--yes`` the run stops (exit 11) before anything is spent or changed. The
+    decision is saved as a ``finance.confirm`` event. This is only a question before
+    starting: the budget guard bounds every call either way.
+    """
+    threshold = _confirm_threshold_nusd(config.limits.confirm_above_usd)
+    if high_nusd is None:
+        # Nothing to compare: the reason is on the estimate line, and a real problem
+        # (such as an unconfigured tier) is reported by the run before any call.
+        typer.echo("confirm: not asked, no cost range (the budget guard bounds every call)")
+        return
+    if high_nusd <= threshold:
+        return
+    above = f"up to {_usd(high_nusd)}"
+    if config.display.toman_per_usd is not None:
+        above += f" (\u2248 {_toman(high_nusd, config.display.toman_per_usd)} toman)"
+    reason = f"{above}; asking above {_usd(threshold)} ([limits] confirm_above_usd)"
+    if yes:
+        decision = "yes_flag"
+    elif not _stdin_is_terminal():
+        decision = "no_terminal"
+    else:
+        try:
+            ok = typer.confirm(f"confirm: {reason}. Continue?", default=False)
+        except (click.exceptions.Abort, typer.Abort):
+            ok = False
+            typer.echo("")
+        decision = "confirmed" if ok else "declined"
+    try:
+        events.emit(
+            Event(
+                ts=datetime.now(UTC),
+                type=CONFIRM_EVENT,
+                project_id=pid,
+                data={
+                    "range_high_nusd": high_nusd,
+                    "threshold_nusd": threshold,
+                    "decision": decision,
+                },
+            )
+        )
+    except (OSError, ValueError):
+        pass  # the decision below stands either way
+    if decision == "yes_flag":
+        typer.echo(f"confirm: {reason}; starting (--yes)")
+    elif decision == "no_terminal":
+        raise _fail(
+            f"not started: {reason}, and there is no terminal to ask. Nothing was spent; "
+            f"to start anyway run: automa run {pid} --yes",
+            EXIT_NOT_CONFIRMED,
+        )
+    elif decision == "declined":
+        typer.echo(f"not started: nothing was spent and project {pid} is unchanged")
+        raise typer.Exit(EXIT_NOT_CONFIRMED)
 
 
 class _RunMarks:

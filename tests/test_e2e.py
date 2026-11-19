@@ -219,7 +219,7 @@ def test_full_lifecycle_new_status_run_status(e2e: E2E) -> None:
 
     # -- run: dependency order, real tools, command check, model evaluation -----------
     e2e.script(*design_attempt(), *build_attempt(), judgment(True), *docs_attempt())
-    r = e2e.cli("run", PID)
+    r = e2e.cli("run", PID, "--yes")
     assert r.exit_code == cli.EXIT_OK, r.output
     assert "status: done (completed)" in r.output
     assert "attempts this run: 3" in r.output
@@ -263,7 +263,7 @@ def test_full_lifecycle_new_status_run_status(e2e: E2E) -> None:
 
     # -- running a finished project again is a no-op ------------------------------------
     n = len(e2e.provider.requests)
-    again = e2e.cli("run", PID)
+    again = e2e.cli("run", PID, "--yes")
     assert again.exit_code == cli.EXIT_OK, again.output
     assert len(e2e.provider.requests) == n
     assert e2e.ledger_spent_nusd() == spent
@@ -280,7 +280,7 @@ def test_lifecycle_with_rejection_provider_outage_and_resume(e2e: E2E) -> None:
         judgment(False, "add a docstring"),
         ProviderError("upstream down"),
     )
-    r = e2e.cli("run", PID)
+    r = e2e.cli("run", PID, "--yes")
     assert r.exit_code == cli.EXIT_PROVIDER, r.output
     assert "paused at task build" in r.output and f"automa run {PID}" in r.output
     assert e2e.status_json()["status"] == ProjectStatus.PAUSED.value
@@ -293,7 +293,7 @@ def test_lifecycle_with_rejection_provider_outage_and_resume(e2e: E2E) -> None:
     mark = len(e2e.provider.requests)
     fixed = '"""Print the greeting."""\n' + GREET_PY
     e2e.script(*build_attempt(fixed), judgment(True), *docs_attempt())
-    r = e2e.cli("run", PID)
+    r = e2e.cli("run", PID, "--yes")
     assert r.exit_code == cli.EXIT_OK, r.output
     assert "status: done (completed)" in r.output
     assert len(e2e.store.task_history(PID, "design")) == 1
@@ -313,7 +313,7 @@ def test_lifecycle_budget_stop_mid_task_and_resume_after_raising_cap(e2e: E2E) -
     cap_usd = planned / 1e9 + 0.037
     e2e.write_config(project=cap_usd)
     e2e.script(*design_attempt(), *build_attempt(), judgment(True), *docs_attempt())
-    r = e2e.cli("run", PID)
+    r = e2e.cli("run", PID, "--yes")
     assert r.exit_code == cli.EXIT_BUDGET, r.output
     assert "paused at task design" in r.output and "'project'" in r.output
     assert "raise the cap" in r.output
@@ -326,7 +326,7 @@ def test_lifecycle_budget_stop_mid_task_and_resume_after_raising_cap(e2e: E2E) -
     # Same cap again: still refused before any provider call (the stop is not lifted
     # by simply re-running).
     mark = len(e2e.provider.requests)
-    r = e2e.cli("run", PID)
+    r = e2e.cli("run", PID, "--yes")
     assert r.exit_code == cli.EXIT_BUDGET, r.output
     assert len(e2e.provider.requests) == mark
     assert e2e.ledger_spent_nusd() == stopped
@@ -335,7 +335,7 @@ def test_lifecycle_budget_stop_mid_task_and_resume_after_raising_cap(e2e: E2E) -
     e2e.write_config(project=5.0)
     e2e.provider = FakeProvider()
     e2e.script(*design_attempt(), *build_attempt(), judgment(True), *docs_attempt())
-    r = e2e.cli("run", PID)
+    r = e2e.cli("run", PID, "--yes")
     assert r.exit_code == cli.EXIT_OK, r.output
     assert e2e.status_json()["status"] == ProjectStatus.DONE.value
     assert e2e.provider.remaining == 0

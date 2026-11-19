@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-19 — M12: تأیید قبل از خرج (پرسش)
+- **انجام‌شده:** مورد «تأیید قبل از خرج» به دو بخش شکسته شد (پرسش؛ مقایسه بعد از پایان) و بخش اول انجام شد. `automa new` بعد از برنامه خط `cost range: about $X to $Y …; start with: automa run <id>` رو نشون می‌ده (فقط‌خواندنی، بدون فراخوانی). `automa run` اگه سر بالای بازه از `[limits] confirm_above_usd` (پیش‌فرض ۰٫۳ دلار) بیشتر باشه، قبل از هر فراخوانی می‌پرسه `Continue? [y/N]`؛ `--yes`/`-y` بدون پرسش؛ بدون ترمینال و بدون `--yes` با کد ۱۱ و بدون هیچ خرجی متوقف می‌شه؛ تصمیم در رویداد `finance.confirm` (D121).
+- **فایل‌های اصلی:** `src/automa/config.py` (`BudgetLimits.confirm_above_usd`)، `src/automa/cli.py` (`_confirm_spend`، `_stdin_is_terminal`، `_new_cost_range`، `_RunEstimate`، `EXIT_NOT_CONFIRMED`)، `tests/test_run_confirm.py` (تست‌های جدید)، `tests/test_e2e.py`، `tests/test_cli_run_anomaly.py`، `tests/test_cli_run_estimate.py` (`--yes` برای برنامه‌های گرون‌تر از آستانه)، `automa.toml.example`، `README.md`، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D121).
+- **تست‌ها:** `pytest` ← ۴۶۵۲ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI (۳۹ تست جدید)؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود. BudgetGuard، Policy و Approval Gate دست نخوردن؛ آستانه فقط پرسشه و Guard اون رو نمی‌خونه.
+- **برای صاحب مخزن:** از این به بعد اگه برنامه‌ای احتمالاً بیشتر از ۰٫۳ دلار بشه، `automa run` می‌پرسه؛ برای اسکریپت‌ها `--yes` بزن یا در `automa.toml` زیر `[limits]` مقدار `confirm_above_usd` رو عوض کن.
+- **قدم بعدی:** تأیید قبل از خرج (بعد از پایان): چاپ و ثبت هزینه واقعی همین اجرا کنار بازه تخمین.
+
 ## 2026-11-19 — M12: بازه هزینه (نمایش)
 - **انجام‌شده:** `automa estimate` و خط `estimate:` در `automa run` حالا «about $X to $Y» نشون می‌دن (با هزینه‌های واقعی هر تلاش از لاگ کیفیت، یا پروفایل‌های پیش‌فرض اگه تاریخچه نیست) و پایه بازه رو می‌گن؛ بدترین حالت فقط به‌عنوان «guard cap (worst case)». کلید اختیاری `[display] toman_per_usd` (مثلاً ۳۲۳۰۰۰) معادل تومانی رو کنار دلار می‌ذاره: «(≈ 19,400 to 109,800 toman)». خط `run` دیگه «unknown» نداره. رویداد `finance.estimate` بازه رو هم (به nUSD) ثبت می‌کنه (D120).
 - **فایل‌های اصلی:** `src/automa/config.py` (`DisplayConfig`)، `src/automa/cli.py` (`_toman`، `_range_text`، `_quality_costs`، `estimate`، `_run_estimate`)، `src/automa/finance/compare.py` (فیلدهای بازه در `EstimateRecord`)، `automa.toml.example`، `README.md`، `tests/test_cost_range_display.py` (۴۹ تست جدید)، `tests/test_cli_estimate.py` و `tests/test_cli_run_estimate.py` (به‌روز)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D120).

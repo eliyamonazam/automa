@@ -117,7 +117,7 @@ def test_expected_exceeds_is_only_advisory(env: cr.Env) -> None:
     rr.seed(env, "fake-medium", Tier.MEDIUM, passed=5, cost_nusd=10 * 10**9)
     env.project(cr.task_dict("a"))
     env.script(*cr.write("a"))
-    r = env.run(cr.PID)
+    r = env.run(cr.PID, "--yes")  # above [limits] confirm_above_usd (D121)
     assert "will likely stop at the project cap" in line(r.output)
     # Advisory: the run still goes ahead and finishes normally.
     assert r.exit_code == cli.EXIT_OK, r.output

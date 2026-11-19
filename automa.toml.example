@@ -99,6 +99,9 @@ output_per_mtok = 20.00
 project_usd = 5.0
 daily_usd = 2.0
 per_call_usd = 0.25
+# Not a cap: automa run asks "Continue?" before spending when the upper end of the
+# cost range is above this (0 = always ask; --yes starts without asking).
+confirm_above_usd = 0.3
 
 # Where run_command runs. "local" (default): on this machine, with your privileges,
 # NOT isolated. "docker": each call in a fresh container with no network, read-only

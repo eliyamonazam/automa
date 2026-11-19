@@ -86,7 +86,7 @@ def lines(output: str) -> list[str]:
 def run_one(env: cr.Env, *args: str) -> Any:
     env.project(cr.task_dict("a"))
     env.script(*cr.write("a"))
-    return env.run(cr.PID, *args)
+    return env.run(cr.PID, "--yes", *args)
 
 
 def run_ledger_ids(env: cr.Env) -> list[int]:
@@ -178,12 +178,12 @@ def test_calls_of_earlier_runs_are_not_reported_again(env: cr.Env) -> None:
     history(env)
     env.project(cr.task_dict("a"), cr.task_dict("b", "a"))
     env.script(*cr.write("a"), ProviderError("down"))
-    first = env.run(cr.PID)
+    first = env.run(cr.PID, "--yes")
     assert first.exit_code == cli.EXIT_PROVIDER, first.output
     first_ids = [e["call_id"] for e in anomaly_events(env)]
     assert first_ids and lines(first.output)[0].startswith(f"unusual spending: {len(first_ids)} ")
     env.script(*cr.write("b"))
-    second = env.run(cr.PID)
+    second = env.run(cr.PID, "--yes")
     assert second.exit_code == cli.EXIT_OK, second.output
     events = anomaly_events(env)
     later = [e["call_id"] for e in events[len(first_ids) :]]
@@ -196,7 +196,7 @@ def test_runs_after_an_interrupt(env: cr.Env) -> None:
     history(env)
     env.project(cr.task_dict("a"))
     env.script(cr.calls(("write_file", {"path": "a.txt", "content": "ok"})), KeyboardInterrupt())
-    r = env.run(cr.PID)
+    r = env.run(cr.PID, "--yes")
     assert r.exit_code == cli.EXIT_INTERRUPTED
     assert lines(r.output)[0].startswith("unusual spending: 1 this run")
     assert [e["call_id"] for e in anomaly_events(env)] == run_ledger_ids(env)
@@ -220,10 +220,10 @@ def test_attempts_judged_before_the_run_are_not_reported(env: cr.Env) -> None:
     rr.seed(env, "fake-medium", Tier.MEDIUM, passed=5)
     env.project(cr.task_dict("a"), cr.task_dict("b", "a"))
     env.script(*cr.write("a"), ProviderError("down"))
-    env.run(cr.PID)
+    env.run(cr.PID, "--yes")
     assert [e["task_id"] for e in anomaly_events(env)] == ["a"]
     env.script(*cr.write("b"))
-    env.run(cr.PID)
+    env.run(cr.PID, "--yes")
     assert [e["task_id"] for e in anomaly_events(env)] == ["a", "b"]
 
 

@@ -217,6 +217,9 @@ class BudgetLimits(_Strict):
     project_usd: float = Field(default=5.0, gt=0)
     daily_usd: float = Field(default=2.0, gt=0)
     per_call_usd: float = Field(default=0.25, gt=0)
+    # Not a cap and never read by the guard: ``automa run`` asks "continue?" before
+    # spending when the upper end of the cost range is above this (0: always ask).
+    confirm_above_usd: float = Field(default=0.3, ge=0, le=1_000_000, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _per_call_within_caps(self) -> BudgetLimits:
