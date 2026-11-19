@@ -84,6 +84,7 @@ from automa.webui.ideas import (
     is_idea_path,
     parse_clarify_path,
 )
+from automa.webui.preview import PREVIEW_HEADERS, parse_preview_path, preview_response
 from automa.webui.progress import ProgressView, build_progress
 from automa.webui.render import (
     ACTION_CONTENT_SECURITY_POLICY,
@@ -528,6 +529,19 @@ class WebApp:
         )
         return Response(200, data, headers)
 
+    def _preview(self, pid: str, path: str) -> Response:
+        """A project's HTML result, isolated in an opaque sandbox (D136)."""
+        try:
+            data, mime, csp = preview_response(self._store, pid, path)
+        except FilesRefused as e:
+            return self.error(e.status, "Not available", e.message)
+        headers = (
+            ("Content-Type", mime),
+            ("Content-Security-Policy", csp),
+            *PREVIEW_HEADERS,
+        )
+        return Response(200, data, headers)
+
     def _route(self, target: str, host: str = "") -> Response:
         parts = urlsplit(target)
         path = parts.path
@@ -535,6 +549,9 @@ class WebApp:
         files_target = parse_files_path(path)
         if files_target is not None:
             return self._files(*files_target, parts.query, host)
+        preview_target = parse_preview_path(path)
+        if preview_target is not None:
+            return self._preview(*preview_target)
         if path == "/":
             spent, err = self._spending()
             view = build_overview(self._store, spent)

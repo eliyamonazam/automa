@@ -23,6 +23,7 @@ from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.webui.files import FileContent, FileListing, FilesRoute, files_href
 from automa.webui.ideas import ASK_VALUE
 from automa.webui.money import money, money_range
+from automa.webui.preview import is_previewable, preview_href
 from automa.webui.progress import REFRESH_SECONDS, CostProgress, ProgressView, UnusualSpending
 from automa.webui.views import ApprovalView, Overview, ProjectView, TaskRow
 
@@ -584,6 +585,11 @@ def render_files(listing: FileListing, *, actions: bool = False) -> str:
                 down = text(files_href(pid, FilesRoute.DOWNLOAD, e.path))
                 cell = f'<a href="{view}" dir="auto">{name}</a>'
                 size, extra = _size_text(e.size), f'<a href="{down}">download</a>'
+                if is_previewable(e.path):
+                    show = text(preview_href(pid, e.path))
+                    extra += (
+                        f' · <a href="{show}" target="_blank" rel="noopener noreferrer">▶ open</a>'
+                    )
             else:
                 label = "symlink, not followed" if e.kind == "symlink" else "not a regular file"
                 cell = f'<span dir="auto">{name}</span> <span class="warn">({label})</span>'
@@ -609,6 +615,12 @@ def render_file(content: FileContent, *, actions: bool = False, img_src: str | N
         f'<h1 dir="auto">{text(path.rsplit("/", 1)[-1])}</h1>',
         f'<p>{text(_size_text(content.size))} · <a href="{down}">download</a></p>',
     ]
+    if is_previewable(path):
+        show = text(preview_href(pid, path))
+        parts.append(
+            f'<p><a class="button" href="{show}" target="_blank" rel="noopener noreferrer">'
+            "▶ open the page (runs isolated: no network, no access to Automa)</a></p>"
+        )
     use_img = None
     if content.kind == "text" and content.text is not None:
         if content.truncated:

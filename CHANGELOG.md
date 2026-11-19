@@ -1,5 +1,10 @@
 # گزارش تغییرات
 
+## 2026-11-19 — M13: پیش‌نمایش نتیجه HTML (D136)
+- **انجام‌شده:** `/projects/<pid>/preview/<path>` صفحه‌های HTML پروژه رو در sandbox بی‌مبدأ با CSS، اسکریپت و تصویرهای نسبی خودشون باز می‌کنه؛ لینک «▶ open» در فهرست فایل‌ها و صفحه فایل. آزمون مرورگر: JS اجرا، تصویر و CSS بارگذاری، مبدأ `null`، کوکی و `fetch` مسدود.
+- **فایل‌ها:** `src/automa/webui/preview.py` (جدید)، `server.py`، `render.py`، `tests/test_webui_preview.py` (۱۴ تست).
+- **تست‌ها:** تست‌های رابط وب سبز؛ `ruff` ← بدون خطا.
+
 ## 2026-11-19 — M13: زبان فارسی (بخش ۱: پایه)
 - **انجام‌شده:** مورد «زبان فارسی» به سه بخش شکسته شد (پایه، صفحه‌ها، فرم‌ها و پیام‌ها) و پایه انجام شد: `[display] language` (پیش‌فرض `"fa"`) و `[display] timezone` (پیش‌فرض `Asia/Tehran`) در `automa.toml`؛ ماژول تازهٔ `automa.l10n` با ارقام فارسی، تبدیل به تاریخ شمسی («۲۸ آبان ۱۴۰۵ ساعت ۲۱:۴۰») و زمان نسبی به وقت محلی («همین الان»، «۵ دقیقه پیش»، «دیروز ساعت ۲۱:۴۰»، «سه‌شنبه ساعت …»)؛ پول به فارسی در `automa.webui.money`: «حدود ۱۴۵ هزار تومان (۰٫۴۵ دلار)».
 - **فایل‌های اصلی:** `src/automa/l10n.py` (جدید)، `src/automa/webui/money.py` (پارامتر `lang`)، `src/automa/config.py` (`DisplayConfig.language`/`timezone`)، `automa.toml.example`، `tests/test_l10n.py` (۷۰ تست جدید)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D135)، `ROADMAP.md`.
