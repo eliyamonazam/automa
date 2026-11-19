@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-19 — M13: برنامه به اندازه کار (کاهش هزینه)
+- **انجام‌شده:** prompt برنامه‌ریزی Executive حالا به‌جای «وظیفه‌های کوچک» می‌گه «کمترین تعداد وظیفه که کار رو درست انجام بده»، و بخش جدید «Plan size» داره: هدف کوچیک (یک یا دو فایل) = یک وظیفه؛ هیچ‌وقت وظیفهٔ جدای بازبینی/تست نهایی/QA نساز چون Verifier بعد از هر وظیفه بررسی می‌کنه؛ همهٔ معیارهای پذیرش در همون وظیفه‌ای که فایل رو می‌سازه. مبنا: پروژهٔ واقعی اول (۴ وظیفه با `final-review`، ۰٫۳۵ دلار) (D134).
+- **فایل‌های اصلی:** `src/automa/agents/executive.py` (`PLAN_SYSTEM_PROMPT`)، `tests/test_plan_size.py` (۱۳ تست جدید با FakeProvider)، `docs/DECISIONS.md` (D134)، `ROADMAP.md`.
+- **تست‌ها:** `pytest` ← ۵۳۵۴ سبز، ۲ رد شده (Docker واقعی)، در حالت شبیه CI (`GITHUB_ACTIONS=true FORCE_COLOR=1`) هم همین؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** اثر واقعی روی هزینه فقط با یک اجرای واقعی روی 1xAi معلوم می‌شه. ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود. BudgetGuard، Policy و Approval Gate دست نخوردن.
+- **برای صاحب مخزن:** کاری لازم نیست؛ ایدهٔ بعدی‌ات رو که امتحان کردی، ببین تعداد وظیفه‌ها و هزینه کمتر شده یا نه.
+- **قدم بعدی:** زبان فارسی در رابط وب (`[display] language`، ترجمه، RTL، تاریخ نسبی، ارقام فارسی).
+
 ## 2026-11-19 — M13: رفع مشکلات عکس‌ها (بخش ۳: پول خوانا به تومان)
 - **انجام‌شده:** همهٔ مبلغ‌های رابط وب حالا اول به تومان گرد‌شده‌ان و دلار با دو رقم اعشار در پرانتز: «about 145 thousand toman ($0.45)» (به‌جای «$0.4500» یا «$0.0034 (≈ 1,100 toman)»). بازه‌ها هم همین‌طور: «about 32 to 61 thousand toman ($0.10 to $0.19)»؛ سقف پروژه «about 969 thousand toman ($3.00)». صفحهٔ پروژه یک خط «Spent so far» داره و زیرش جدا: «Planning (questions, plan, reviews)» و «Doing the tasks». بدون `toman_per_usd` فقط دلار دورقمی نشون داده می‌شه. خروجی خط فرمان، Ledger و BudgetGuard دقیقاً همون‌ان (D133).
 - **فایل‌های اصلی:** `src/automa/webui/money.py` (جدید)، `src/automa/webui/render.py` (`_spent_line`، مبلغ‌های Progress/Unusual/کارت‌ها)، `src/automa/webui/views.py` (`planning_usd`)، `src/automa/webui/server.py` (`toman_per_usd`، جمع فراخوانی‌های بدون وظیفه)، `src/automa/cli.py` (`_web_cost_range`، `automa web`)، `tests/test_webui_money.py` (۵۷ تست جدید)، به‌روزرسانی assertهای چهار رقمی در تست‌های قبلی رابط وب، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D133)، `ROADMAP.md`.
