@@ -22,7 +22,7 @@ from automa.project.store import MAX_GOAL_CHARS
 from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.webui.files import FileContent, FileListing, FilesRoute, files_href
 from automa.webui.ideas import ASK_VALUE
-from automa.webui.progress import REFRESH_SECONDS, CostProgress, ProgressView
+from automa.webui.progress import REFRESH_SECONDS, CostProgress, ProgressView, UnusualSpending
 from automa.webui.views import ApprovalView, Overview, ProjectView, TaskRow
 
 # Joiners needed by Persian text; every other Cf character (incl. bidi controls) is escaped.
@@ -373,6 +373,8 @@ def _progress(p: ProgressView) -> str:
         )
     else:
         parts.append("<p>No cost range recorded yet (it is written when a run starts).</p>")
+    if p.unusual is not None:
+        parts.append(_unusual_line(p.unusual))
     if p.live:
         parts.append(f'<p class="badge">running: this page refreshes every {REFRESH_SECONDS} s</p>')
     if p.events:
@@ -388,6 +390,17 @@ def _progress(p: ProgressView) -> str:
         )
     parts.append("</section>")
     return "".join(parts)
+
+
+def _unusual_line(u: UnusualSpending) -> str:
+    """At most one line about unusual spending (D132): how many and the largest."""
+    # A flagged sample is a model call or a judged attempt: both are "steps" here.
+    what = "1 step cost" if u.count == 1 else f"{u.count} steps cost"
+    times = f", {u.ratio:.1f}× the usual cost" if u.ratio is not None else ""
+    return (
+        f'<p class="warn">Unusual spending: {what} much more than usual this run '
+        f"(largest ${u.largest_usd:.4f}{times}). Advisory only: nothing was stopped.</p>"
+    )
 
 
 def _range_meter(c: CostProgress) -> str:

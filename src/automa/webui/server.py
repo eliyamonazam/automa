@@ -39,6 +39,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
 from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError
+from automa.finance.anomaly import AnomalySettings
 from automa.project.store import (
     ProjectStatus,
     ProjectStore,
@@ -228,8 +229,10 @@ class WebApp:
         actions: ActionSettings | None = None,
         planner: IdeaPlanner | None = None,
         runs: RunPreflight | BackgroundRuns | None = None,
+        anomaly: AnomalySettings | None = None,
     ):
         self._store = ProjectStore.for_workspace(workspace)
+        self._anomaly = anomaly
         # Background runs only in action mode (D125); a read-only server never runs.
         if actions is None or runs is None:
             self._runs: BackgroundRuns | None = None
@@ -301,6 +304,7 @@ class WebApp:
             entries,
             running=running,
             pending_approvals=len(view.pending),
+            anomaly=self._anomaly,
         )
 
     def handle(
@@ -651,13 +655,15 @@ def create_server(
     allow_actions: bool = False,
     planner: IdeaPlanner | None = None,
     runs: RunPreflight | None = None,
+    anomaly: AnomalySettings | None = None,
 ) -> ThreadingHTTPServer:
     """A bound (not yet serving) server. ``port=0`` picks a free port (tests).
 
     ``allow_actions`` (D123) enables approve/reject forms with a fresh CSRF token for
     this server's lifetime; the default is the read-only server of D78. ``planner``
     (only used with ``allow_actions``, D124) enables the "New idea" pages; ``runs``
-    (only with ``allow_actions``, D125) enables the "Start run" button."""
+    (only with ``allow_actions``, D125) enables the "Start run" button; ``anomaly``
+    is the unusual-spending threshold of the progress panel (``[finance]``, D132)."""
     host = validate_bind_host(host)
     port = validate_port(port)
 
@@ -675,7 +681,9 @@ def create_server(
         if allow_actions
         else None
     )
-    app = WebApp(workspace, ledger_path, hosts, actions=actions, planner=planner, runs=runs)
+    app = WebApp(
+        workspace, ledger_path, hosts, actions=actions, planner=planner, runs=runs, anomaly=anomaly
+    )
     server.RequestHandlerClass = make_handler(app, log)
     return server
 

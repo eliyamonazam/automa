@@ -35,7 +35,9 @@ from automa.quality import QualityLog, QualityRecord
 from test_ledger import FixedClock, make_pair
 
 T0 = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
-NO_FLOOR = AnomalySettings(min_cost_nusd=0)
+# The original sensitivity (D69): most detector tests keep it; D132 raised the defaults.
+NO_FLOOR = AnomalySettings(factor=3.0, min_cost_nusd=0)
+LEGACY = AnomalySettings(factor=3.0, min_cost_nusd=1_000_000)
 _ids = iter(range(1, 100_000))
 
 
@@ -110,7 +112,7 @@ def costs(r: AnomalyReport) -> list[int]:
 
 def test_default_settings() -> None:
     s = AnomalySettings()
-    assert s.factor == 3.0 and s.min_samples == 5 and s.min_cost_nusd == 1_000_000
+    assert s.factor == 5.0 and s.min_samples == 5 and s.min_cost_nusd == 50_000_000
 
 
 @pytest.mark.parametrize(
@@ -225,9 +227,9 @@ def test_min_samples_setting() -> None:
 
 
 def test_floor_suppresses_tiny_costs() -> None:
-    r = detect_anomalies(series([10] * 5 + [500_000]))  # default floor $0.001
+    r = detect_anomalies(series([10] * 5 + [500_000]), LEGACY)  # floor $0.001
     assert r.anomalies == () and r.checked == 1
-    r = detect_anomalies(series([10] * 5 + [1_000_000]))
+    r = detect_anomalies(series([10] * 5 + [1_000_000]), LEGACY)
     assert costs(r) == [1_000_000] and r.anomalies[0].threshold_nusd == 1_000_000
 
 

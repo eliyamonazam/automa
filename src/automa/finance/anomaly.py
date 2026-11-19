@@ -6,6 +6,13 @@ history of *earlier* samples of the same kind, role and model: when there are at
 least ``min_samples`` of them and the sample costs more than ``factor`` times
 their median (and at least ``min_cost_nusd``), it is an anomaly.
 
+Benchmark projects (ids starting with ``bench-``) are small, cheap tasks; their
+calls would make every real call look expensive. So a sample of a real project
+is compared with the earlier samples of *real* projects only, once there are at
+least ``min_samples`` of them; until then (and for benchmark samples) with all
+earlier samples (D132). Defaults (factor 5, at least $0.05) keep the warning for
+calls that matter.
+
 Advisory only: nothing here calls a model, writes anything or stops a run. The
 ``BudgetGuard`` remains the only authority over money.
 
@@ -26,10 +33,21 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from automa.budget import LedgerEntry, nusd_to_usd
+from automa.budget import LedgerEntry, nusd_to_usd, usd_to_nusd
+from automa.config import AutomaConfig
 from automa.quality import QualityRecord
 
 ANOMALY_EVENT = "finance.anomaly"
+# Same prefix as ``automa.bench.PROJECT_PREFIX`` (kept here to avoid an import cycle;
+# a test checks they agree).
+BENCHMARK_PROJECT_PREFIX = "bench-"
+DEFAULT_FACTOR = 5.0
+DEFAULT_MIN_COST_NUSD = 50_000_000  # $0.05
+
+
+def is_benchmark_project(project_id: str) -> bool:
+    """Whether a project id is one ``automa bench`` created."""
+    return project_id.startswith(BENCHMARK_PROJECT_PREFIX)
 
 
 class _Frozen(BaseModel):
@@ -41,10 +59,23 @@ class SampleKind(StrEnum):
     ATTEMPT = "attempt"  # one judged attempt (worker cost from the quality log)
 
 
+class BaselineSource(StrEnum):
+    PROJECTS = "projects"  # earlier samples of non-benchmark projects only
+    ALL = "all"  # earlier samples of every project, benchmarks included
+
+
 class AnomalySettings(_Frozen):
-    factor: float = Field(default=3.0, gt=1.0, le=1_000.0)
+    factor: float = Field(default=DEFAULT_FACTOR, gt=1.0, le=1_000.0)
     min_samples: int = Field(default=5, ge=2, le=10_000)
-    min_cost_nusd: int = Field(default=1_000_000, ge=0)  # ignore anything below $0.001
+    min_cost_nusd: int = Field(default=DEFAULT_MIN_COST_NUSD, ge=0)  # ignore anything below
+
+
+def anomaly_settings(config: AutomaConfig) -> AnomalySettings:
+    """The detector settings from ``[finance]`` in automa.toml (D132)."""
+    return AnomalySettings(
+        factor=float(config.finance.anomaly_factor),
+        min_cost_nusd=usd_to_nusd(float(config.finance.anomaly_min_usd)),
+    )
 
 
 class CostSample(_Frozen):
@@ -76,6 +107,7 @@ class Anomaly(_Frozen):
     baseline_nusd: int = Field(ge=0)  # median of the earlier samples
     history: int = Field(ge=2)  # how many earlier samples
     threshold_nusd: int = Field(ge=0)  # smallest cost that would have been flagged
+    baseline_source: BaselineSource = BaselineSource.ALL
 
     @property
     def ratio(self) -> float | None:
@@ -98,6 +130,7 @@ class Anomaly(_Frozen):
             "baseline_nusd": self.baseline_nusd,
             "threshold_nusd": self.threshold_nusd,
             "history": self.history,
+            "baseline_source": self.baseline_source.value,
             "sample_ts": _utc(s.ts).isoformat(),
         }
 
@@ -193,7 +226,9 @@ def detect_anomalies(
     """Flag samples that cost far more than the earlier samples of their (kind, role, model).
 
     Samples are processed in time order (UTC; ties keep the input order). Only
-    strictly earlier input positions in that order count as history.
+    strictly earlier input positions in that order count as history. A sample of a
+    non-benchmark project uses the non-benchmark history when it has at least
+    ``min_samples`` entries, otherwise the whole history (D132).
     """
     cfg = settings if settings is not None else AnomalySettings()
     factor = Fraction(cfg.factor)
@@ -203,11 +238,18 @@ def detect_anomalies(
             raise TypeError("samples must be CostSample objects")
     ordered = sorted(enumerate(items), key=lambda p: (_utc(p[1].ts), p[0]))
 
-    history: dict[tuple[SampleKind, str, str], list[int]] = {}
+    every: dict[tuple[SampleKind, str, str], list[int]] = {}
+    real: dict[tuple[SampleKind, str, str], list[int]] = {}
     checked = without = 0
     found: list[Anomaly] = []
     for _, s in ordered:
-        past = history.setdefault(s.key, [])
+        bench = is_benchmark_project(s.project_id)
+        all_past = every.setdefault(s.key, [])
+        real_past = real.setdefault(s.key, [])
+        if not bench and len(real_past) >= cfg.min_samples:
+            past, source = real_past, BaselineSource.PROJECTS
+        else:
+            past, source = all_past, BaselineSource.ALL
         if len(past) < cfg.min_samples:
             without += 1
         else:
@@ -221,9 +263,12 @@ def detect_anomalies(
                         baseline_nusd=baseline,
                         history=len(past),
                         threshold_nusd=threshold,
+                        baseline_source=source,
                     )
                 )
-        past.append(s.cost_nusd)
+        all_past.append(s.cost_nusd)
+        if not bench:
+            real_past.append(s.cost_nusd)
 
     return AnomalyReport(
         settings=cfg, checked=checked, without_history=without, anomalies=tuple(found)

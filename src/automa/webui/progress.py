@@ -8,7 +8,8 @@ the Ledger entries the caller read. It gives the project page:
 * the cost of the latest run so far next to the cost range estimated at its start
   (the same ``compare_estimate``/``check_range`` as ``automa run``, D122),
 * the latest events, newest first, with only short scalar fields (never
-  ``detail``, error text or model output),
+  ``detail``, error text or model output); ``finance.anomaly`` events are left
+  out of that list and become at most one summary line (D132),
 * whether the page should refresh itself (a simple ``<meta http-equiv="refresh">``,
   no script, D127).
 
@@ -21,7 +22,8 @@ import json
 import os
 import stat
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
+from fractions import Fraction
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
@@ -29,7 +31,8 @@ from pydantic import BaseModel, ConfigDict
 from automa.budget import nusd_to_usd
 from automa.budget.ledger import LedgerEntry
 from automa.events import Event
-from automa.finance.compare import check_range, compare_estimate
+from automa.finance.anomaly import ANOMALY_EVENT, AnomalySettings
+from automa.finance.compare import ESTIMATE_EVENT, check_range, compare_estimate
 from automa.project.store import EVENTS_FILE, ProjectStore
 
 MAX_EVENTS_BYTES = 16 * 1024 * 1024  # a larger event log is reported, not read
@@ -76,11 +79,20 @@ class CostProgress(_View):
     verdict: str  # below / within / above (final only once the run is over)
 
 
+class UnusualSpending(_View):
+    """The unusual-spending warnings of the latest run, as one line (D132)."""
+
+    count: int  # flagged calls/attempts that still pass the current thresholds
+    largest_usd: float
+    ratio: float | None  # of the largest one; ``None`` when its baseline was $0
+
+
 class ProgressView(_View):
     live: bool = False  # the page refreshes itself
     passed: int = 0
     total: int = 0
     cost: CostProgress | None = None
+    unusual: UnusualSpending | None = None
     events: tuple[EventLine, ...] = ()
     errors: tuple[str, ...] = ()
 
@@ -143,11 +155,62 @@ def event_line(event: Event) -> EventLine:
 
 
 def recent_events(events: Sequence[Event], limit: int = RECENT_EVENTS) -> tuple[EventLine, ...]:
-    """The latest ``limit`` events, newest first (stable for equal timestamps)."""
+    """The latest ``limit`` events, newest first (stable for equal timestamps).
+
+    ``finance.anomaly`` events are left out: they are summed up in one line by
+    :func:`unusual_spending` instead (D132)."""
     if limit < 0:
         raise ValueError("limit must not be negative")
-    indexed = sorted(enumerate(events), key=lambda p: (p[1].ts, p[0]), reverse=True)
+    shown = [e for e in events if e.type != ANOMALY_EVENT]
+    indexed = sorted(enumerate(shown), key=lambda p: (p[1].ts, p[0]), reverse=True)
     return tuple(event_line(e) for _, e in indexed[:limit])
+
+
+def _utc(ts: datetime) -> datetime:
+    return ts.replace(tzinfo=UTC) if ts.tzinfo is None else ts.astimezone(UTC)
+
+
+def _nusd(value: Any) -> int | None:
+    """A recorded non-negative integer nUSD amount, or ``None`` (bool is not an int here)."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def unusual_spending(
+    events: Sequence[Event], settings: AnomalySettings | None = None
+) -> UnusualSpending | None:
+    """One summary of the ``finance.anomaly`` events of the latest run (D132).
+
+    The latest run starts at the latest ``finance.estimate`` event (all events when
+    there is none). Each recorded warning is checked again against ``settings``
+    (more than ``factor`` times its recorded baseline *and* at least
+    ``min_cost_nusd``), so warnings recorded with the older, noisier thresholds
+    are not shown. Malformed events are skipped. ``None`` when nothing is left.
+    """
+    cfg = settings if settings is not None else AnomalySettings()
+    starts = [_utc(e.ts) for e in events if e.type == ESTIMATE_EVENT]
+    since = max(starts) if starts else None
+    factor = Fraction(cfg.factor)
+    kept: list[tuple[int, int]] = []
+    for e in events:
+        if e.type != ANOMALY_EVENT or (since is not None and _utc(e.ts) < since):
+            continue
+        cost = _nusd(e.data.get("cost_nusd"))
+        baseline = _nusd(e.data.get("baseline_nusd"))
+        if cost is None or baseline is None:
+            continue
+        if cost < cfg.min_cost_nusd or cost <= factor * baseline:
+            continue
+        kept.append((cost, baseline))
+    if not kept:
+        return None
+    cost, baseline = max(kept)
+    return UnusualSpending(
+        count=len(kept),
+        largest_usd=nusd_to_usd(cost),
+        ratio=cost / baseline if baseline else None,
+    )
 
 
 def cost_progress(
@@ -179,6 +242,7 @@ def build_progress(
     *,
     running: bool,
     pending_approvals: int = 0,
+    anomaly: AnomalySettings | None = None,
 ) -> ProgressView:
     """The progress part of a project page.
 
@@ -204,6 +268,7 @@ def build_progress(
         passed=sum(1 for s in task_states if s == PASSED),
         total=len(task_states),
         cost=cost,
+        unusual=unusual_spending(events, anomaly),
         events=recent_events(events),
         errors=tuple(errors),
     )

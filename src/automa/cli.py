@@ -154,6 +154,7 @@ from automa.finance import (
     ANOMALY_EVENT,
     Anomaly,
     AnomalyReport,
+    AnomalySettings,
     BudgetFit,
     ComparisonOutcome,
     EstimateBasis,
@@ -166,6 +167,7 @@ from automa.finance import (
     SpendingReport,
     TaskEstimate,
     TaskProgress,
+    anomaly_settings,
     attempt_costs,
     attempt_samples,
     call_samples,
@@ -1074,7 +1076,9 @@ def run(
             spent = ledger.spent_nusd(project_id=pid)
             typer.echo(f"cost: {_usd(spent - spent_before)} this run, {_usd(spent)} total")
             typer.echo(_run_vs_estimate(config, events, ledger, pid, run_started))
-            for line in _run_anomalies(store, pid, ledger, quality, marks):
+            for line in _run_anomalies(
+                store, pid, ledger, quality, marks, anomaly_settings(config)
+            ):
                 typer.echo(line)
     for line in _report_lines(report):
         typer.echo(line)
@@ -1421,11 +1425,13 @@ def _run_anomalies(
     ledger: CostLedger,
     quality: QualityLog,
     marks: _RunMarks,
+    settings: AnomalySettings | None = None,
 ) -> list[str]:
     """The ``unusual spending:`` lines after ``automa run`` (D71): advisory only.
 
     The same check as ``automa finance report`` (D69, D70) — every ledger call and
-    judged attempt of every project, roles from every plan, default settings — so a
+    judged attempt of every project, roles from every plan, ``[finance]`` settings
+    (D132) — so a
     sample flagged here is the one the report shows. Only this run's samples (calls
     added and attempts judged since ``marks``) are reported, each saved as a
     ``finance.anomaly`` event. Nothing is stopped and the exit code never changes;
@@ -1438,7 +1444,7 @@ def _run_anomalies(
         roles, _ = _report_roles(store, store.list_ids())
         calls, _ = call_samples(entries, roles)
         records = quality.records() if marks.judged is not None else []
-        report = detect_anomalies([*calls, *attempt_samples(records)])
+        report = detect_anomalies([*calls, *attempt_samples(records)], settings)
     except (
         LedgerError,
         QualityError,
@@ -2244,7 +2250,7 @@ def _report_anomalies(
     to ``--project``/``--since``/``--until``."""
     calls, left_out = call_samples(entries, roles)
     records, attempts_read, warnings = _quality_records(config)
-    report = detect_anomalies([*calls, *attempt_samples(records)])
+    report = detect_anomalies([*calls, *attempt_samples(records)], anomaly_settings(config))
     shown = [
         a
         for a in report.anomalies
@@ -3633,6 +3639,7 @@ def web(
             allow_actions=allow_actions,
             planner=_WebIdeaPlanner(config) if allow_actions else None,
             runs=_WebRunPreflight(config, config_path) if allow_actions else None,
+            anomaly=anomaly_settings(config),
         )
     except webui_server.WebServerError as e:
         raise _fail(str(e), EXIT_USER) from None

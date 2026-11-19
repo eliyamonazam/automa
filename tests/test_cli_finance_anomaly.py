@@ -24,7 +24,18 @@ from test_finance_anomaly import rec
 from test_ledger import FixedClock, make_pair
 
 T0 = fr.T0
-env = fr.env  # fixture
+# The original sensitivity (D69/D70); D132 raised the defaults to 5x and $0.05.
+LEGACY_FINANCE = "\n[finance]\nanomaly_factor = 3.0\nanomaly_min_usd = 0.001\n"
+
+
+@pytest.fixture
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> cr.Env:
+    e = cr.Env(tmp_path, monkeypatch)
+    with e.config.open("a", encoding="utf-8") as f:
+        f.write(LEGACY_FINANCE)
+    return e
+
+
 report = fr.report
 report_json = fr.report_json
 

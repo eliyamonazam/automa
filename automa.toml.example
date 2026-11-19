@@ -187,3 +187,10 @@ timeout_s = 180.0
 [web]
 auto_approve_reads = false
 max_auto_reads_per_task = 20
+
+# Unusual-spending warning (advisory only; never stops a run or changes a cap).
+# A call is flagged only when it costs more than anomaly_factor times the usual
+# cost of the same role and model AND at least anomaly_min_usd.
+# [finance]
+# anomaly_factor = 5.0
+# anomaly_min_usd = 0.05

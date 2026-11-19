@@ -48,6 +48,9 @@ output_per_mtok = 80.0
 project_usd = 5.0
 daily_usd = 2.0
 per_call_usd = 0.25
+[finance]
+anomaly_factor = 3.0
+anomaly_min_usd = 0.001
 """
 
 PAST = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)

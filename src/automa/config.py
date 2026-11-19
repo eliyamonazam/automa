@@ -515,6 +515,19 @@ class DisplayConfig(_Strict):
     toman_per_usd: StrictFloat | StrictInt | None = Field(default=None, gt=0, le=MAX_TOMAN_PER_USD)
 
 
+class FinanceConfig(_Strict):
+    """``[finance]`` in automa.toml: when unusual spending is reported (D132).
+
+    A call or judged attempt is flagged only when it costs more than
+    ``anomaly_factor`` times the usual (median) cost of earlier ones of the same
+    role and model *and* at least ``anomaly_min_usd``. Advisory only: it never
+    stops a run or changes a cap; the budget guard alone decides spending.
+    """
+
+    anomaly_factor: StrictFloat | StrictInt = Field(default=5.0, gt=1, le=1_000)
+    anomaly_min_usd: StrictFloat | StrictInt = Field(default=0.05, ge=0, le=1_000)
+
+
 class VerifierConfig(_Strict):
     """``[verifier]`` in automa.toml: the cross-family evaluator (D96).
 
@@ -566,6 +579,7 @@ class AutomaConfig(_Strict):
     verifier: VerifierConfig = Field(default_factory=VerifierConfig)
     images: ImagesConfig = Field(default_factory=ImagesConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
+    finance: FinanceConfig = Field(default_factory=FinanceConfig)
 
     @field_validator("roles")
     @classmethod
