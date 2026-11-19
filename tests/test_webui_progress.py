@@ -355,7 +355,7 @@ def test_render_live_progress(store: ProjectStore) -> None:
     assert '<meta http-equiv="refresh" content="5">' in doc
     assert "tasks passed: <strong>1 / 3</strong>" in doc
     assert '<meter min="0" max="3" value="1"></meter>' in doc
-    assert "$0.1200</strong> so far vs range about $0.0500 to $0.3000: running" in doc
+    assert "$0.12</strong> so far vs range about $0.05 to $0.30: running" in doc
     assert "worst case" not in doc and "guard cap" not in doc
     assert 'max="0.300000" value="0.120000"' in doc
     assert "refreshes every 5 s" in doc
@@ -374,7 +374,7 @@ def test_render_finished_progress_shows_verdict_and_no_refresh(store: ProjectSto
     )
     doc = rd.render_project(_view(store), progress=pg.ProgressView(passed=3, total=3, cost=cost))
     assert 'http-equiv="refresh"' not in doc
-    assert "in total (+ $0.0100 other calls)" in doc and ": above" in doc
+    assert "in total (+ $0.01 other calls)" in doc and ": above" in doc
     assert '<p class="warn">latest run' in doc
 
 
@@ -486,7 +486,7 @@ def _get(workspace: Path) -> str:
 def test_server_project_page_has_progress(workspace: Path, store: ProjectStore) -> None:
     body = _get(workspace)
     assert "<h2>Progress</h2>" in body and "tasks passed: <strong>0 / 3</strong>" in body
-    assert "$0.2500" in body  # only p1's spending, not p2's
+    assert "$0.25" in body  # only p1's spending, not p2's
     assert 'http-equiv="refresh"' not in body
 
 
@@ -494,7 +494,7 @@ def test_server_cost_against_range(workspace: Path, store: ProjectStore) -> None
     big = {"range_high_nusd": 1_000_000_000, "worst_nusd": 2_000_000_000}
     _emit(store, fc.est(**{**RANGE, **big}))
     body = _get(workspace)
-    assert "$0.2500</strong> in total vs range about" in body and ": within" in body
+    assert "$0.25</strong> in total vs range about" in body and ": within" in body
 
 
 def test_server_refreshes_while_project_runs(workspace: Path, store: ProjectStore) -> None:

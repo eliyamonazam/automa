@@ -291,6 +291,7 @@ from automa.tools.approvals import (
 )
 from automa.tools.github import GitHubRead, describe_github_request
 from automa.tools.web import FetchUrl, describe_fetch_request
+from automa.webui import money as webui_money
 from automa.webui import runs as webui_runs
 from automa.webui import server as webui_server
 from automa.webui.ideas import IdeaError
@@ -833,27 +834,25 @@ def _new_cost_range(config: AutomaConfig, store: ProjectStore, pid: str) -> str:
 
 
 def _web_cost_range(config: AutomaConfig, store: ProjectStore, pid: str) -> str:
-    """The ``Cost range`` line of the web project page (D131).
+    """The ``Cost range`` line of the web project page (D131, D133).
 
     Same figures as :func:`_new_cost_range`, but for a person in a browser: no
     theoretical "worst case" of every attempt at the most expensive model (it read
     like a real price), no terminal commands; instead the project's real safety cap
-    (``[limits] project_usd``, the cap BudgetGuard enforces). Read-only and advisory.
+    (``[limits] project_usd``, the cap BudgetGuard enforces). Amounts read first in
+    rounded toman with dollars to two decimals (D133). Read-only and advisory.
     """
     rate = config.display.toman_per_usd
-    cap_nusd = cap_to_nusd(config.limits.project_usd)
-    cap = _usd(cap_nusd)
-    if rate is not None:
-        cap += f" (\u2248 {_toman(cap_nusd, rate)} toman)"
+    cap = webui_money.nusd_money(cap_to_nusd(config.limits.project_usd), rate)
     try:
         result = _new_estimate(config, store, pid)
     except _ESTIMATE_ERRORS as e:
         reason = _safe(str(e)).replace("\n", " ")
         return f"unavailable ({reason}); project safety cap {cap}"
-    rng = _range_text(result.range_low_nusd, result.range_high_nusd, rate)
+    rng = webui_money.nusd_money_range(result.range_low_nusd, result.range_high_nusd, rate)
     threshold = _confirm_threshold_nusd(config.limits.confirm_above_usd)
     ask = (
-        f"; you confirm before it starts (above {_usd(threshold)})"
+        f"; you confirm before it starts (above {webui_money.nusd_money(threshold, rate)})"
         if result.range_high_nusd > threshold
         else ""
     )
@@ -3640,6 +3639,7 @@ def web(
             planner=_WebIdeaPlanner(config) if allow_actions else None,
             runs=_WebRunPreflight(config, config_path) if allow_actions else None,
             anomaly=anomaly_settings(config),
+            toman_per_usd=config.display.toman_per_usd,
         )
     except webui_server.WebServerError as e:
         raise _fail(str(e), EXIT_USER) from None

@@ -193,8 +193,8 @@ def test_web_cost_range_shows_the_real_project_cap(
 ) -> None:
     e, pid = _planned(tmp_path, monkeypatch, project=3.0)
     line = cli._web_cost_range(e.config, e.store, pid)
-    assert re.search(r"about \$\d+\.\d{4} to \$\d+\.\d{4}", line), line
-    assert "project safety cap $3.0000: spending never goes above it" in line
+    assert re.search(r"about \$\d+\.\d\d to \$\d+\.\d\d", line), line
+    assert "project safety cap $3.00: spending never goes above it" in line
     assert "worst" not in line and "automa" not in line
 
 
@@ -204,8 +204,8 @@ def test_web_cost_range_with_toman(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         update={"display": e.config.display.model_copy(update={"toman_per_usd": 323000.0})}
     )
     line = cli._web_cost_range(config, e.store, pid)
-    assert "project safety cap $3.0000 (≈ 969,000 toman)" in line
-    assert re.search(r"\(≈ [\d,]+ to [\d,]+ toman\)", line), line
+    assert "project safety cap about 969 thousand toman ($3.00)" in line
+    assert re.search(r"about [\d.,]+ (to [\d.,]+ )?(thousand |million )?toman", line), line
 
 
 def test_web_cost_range_says_confirmation_is_needed(
@@ -216,7 +216,7 @@ def test_web_cost_range_says_confirmation_is_needed(
         update={"limits": e.config.limits.model_copy(update={"confirm_above_usd": 0.0})}
     )
     line = cli._web_cost_range(config, e.store, pid)
-    assert "you confirm before it starts (above $0.0000)" in line
+    assert "you confirm before it starts (above $0.00)" in line
     assert "automa run" not in line
 
 

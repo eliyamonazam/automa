@@ -73,6 +73,8 @@ class ProjectView(_View):
     created_at: datetime
     updated_at: datetime
     cost_usd: float
+    # Part of cost_usd spent on calls without a task (questions, plan, review; D133).
+    planning_usd: float = 0.0
     plan_version: int | None = None
     tasks: tuple[TaskRow, ...] = ()
     pending: tuple[ApprovalView, ...] = ()
@@ -182,9 +184,14 @@ def build_overview(store: ProjectStore, spent_nusd: dict[str, int]) -> Overview:
     return Overview(projects=tuple(rows), errors=tuple(errors))
 
 
-def build_project_view(store: ProjectStore, project_id: str, spent_nusd: int) -> ProjectView:
+def build_project_view(
+    store: ProjectStore, project_id: str, spent_nusd: int, *, planning_nusd: int = 0
+) -> ProjectView:
     """One project. Raises ``ProjectStoreError`` if the project itself is missing/corrupt;
-    an unreadable plan, task result or approvals directory becomes an error line."""
+    an unreadable plan, task result or approvals directory becomes an error line.
+
+    ``planning_nusd`` is the part of ``spent_nusd`` on calls without a task (D133);
+    it is clamped to ``[0, spent_nusd]`` so the split never reads more than the total."""
     project = store.load(project_id)
     errors: list[str] = []
     plan_version = None
@@ -208,6 +215,7 @@ def build_project_view(store: ProjectStore, project_id: str, spent_nusd: int) ->
         created_at=project.created_at,
         updated_at=project.updated_at,
         cost_usd=nusd_to_usd(spent_nusd),
+        planning_usd=nusd_to_usd(min(max(planning_nusd, 0), max(spent_nusd, 0))),
         plan_version=plan_version,
         tasks=tuple(tasks),
         pending=tuple(pending),

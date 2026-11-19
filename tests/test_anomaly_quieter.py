@@ -332,7 +332,7 @@ def test_render_one_line_when_unusual() -> None:
     html = rd._progress(_view(unusual=u))
     assert html.count("Unusual spending") == 1
     assert '<p class="warn">Unusual spending: 2 steps cost much more than usual' in html
-    assert "$0.8000" in html and "8.0× the usual cost" in html
+    assert "$0.80" in html and "8.0× the usual cost" in html
     assert "nothing was stopped" in html
     assert ANOMALY_EVENT not in html
 

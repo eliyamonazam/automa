@@ -22,6 +22,7 @@ from automa.project.store import MAX_GOAL_CHARS
 from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.webui.files import FileContent, FileListing, FilesRoute, files_href
 from automa.webui.ideas import ASK_VALUE
+from automa.webui.money import money, money_range
 from automa.webui.progress import REFRESH_SECONDS, CostProgress, ProgressView, UnusualSpending
 from automa.webui.views import ApprovalView, Overview, ProjectView, TaskRow
 
@@ -187,9 +188,11 @@ def _errors(errors: tuple[str, ...]) -> str:
     return f'<section class="card err"><h2>Unreadable data</h2><ul>{items}</ul></section>'
 
 
-def render_overview(view: Overview, *, actions: bool = False, ideas: bool = False) -> str:
+def render_overview(
+    view: Overview, *, actions: bool = False, ideas: bool = False, rate: float | None = None
+) -> str:
     """The project list. ``ideas`` (action mode with a planner, D124) adds the
-    "New idea" link."""
+    "New idea" link; ``rate`` (toman per USD) shows costs first in toman (D133)."""
     mode = (
         "Actions enabled: approve or reject requests on each project page."
         if actions
@@ -213,7 +216,8 @@ def render_overview(view: Overview, *, actions: bool = False, ideas: bool = Fals
                 f'<h2><a href="{text(_project_href(p.id))}">{text(p.id)}</a> '
                 f'<span class="badge">{text(p.status)}</span></h2>'
                 f'<p class="goal" dir="auto">{text(p.goal_preview)}</p>'
-                f'<p class="chips"><span>cost: ${p.cost_usd:.4f}</span><span>{waiting}</span>'
+                f'<p class="chips"><span>cost: {text(money(p.cost_usd, rate))}</span>'
+                f"<span>{waiting}</span>"
                 f"<span>created {_time(p.created_at)}</span></p></article>"
             )
         parts.append('<div class="cards">' + "".join(cards) + "</div>")
@@ -271,6 +275,7 @@ def render_project(
     questions_waiting: bool = False,
     run: RunPanel | None = None,
     progress: ProgressView | None = None,
+    rate: float | None = None,
 ) -> str:
     """One project page. ``forms`` (action mode only) adds approve/reject forms;
     ``notice`` is a one-line result of the last decision, shown at the top;
@@ -278,7 +283,8 @@ def render_project(
     links to the answer form of a new idea (D124); ``run`` (action mode with
     background runs, D125) adds the start button and the last background run;
     ``progress`` (D127) adds tasks passed, cost so far against the range, the latest
-    events and, while running, a self-refresh of the page."""
+    events and, while running, a self-refresh of the page; ``rate`` (toman per USD)
+    shows every amount first in rounded toman with dollars in parentheses (D133)."""
     parts = ['<p><a href="/">← all projects</a></p>']
     if notice:
         parts.append(f'<p class="badge" dir="auto">{text(notice)}</p>')
@@ -288,8 +294,8 @@ def render_project(
         '<p class="meta"><strong>Goal:</strong></p>',
         f'<p class="goal" dir="auto">{text(view.goal)}</p>',
         f'<p class="meta">status: <span class="badge">{text(view.status)}</span> · '
-        f"cost: ${view.cost_usd:.4f} · created {_time(view.created_at)} · "
-        f"updated {_time(view.updated_at)}</p>",
+        f"created {_time(view.created_at)} · updated {_time(view.updated_at)}</p>",
+        _spent_line(view, rate),
         f'<p><a href="{text(_project_href(view.id) + "/files")}">Files</a></p>',
     ]
     if questions_waiting and forms is not None:
@@ -302,7 +308,7 @@ def render_project(
         parts.append(f"<p><strong>Cost range:</strong> {text(cost_range)}</p>")
     parts.append("</section>")
     if progress is not None:
-        parts.append(_progress(progress))
+        parts.append(_progress(progress, rate))
     if run is not None and forms is not None:
         parts.append(_run_panel(view.id, run, forms))
     parts.append(f"<h2>Pending approvals ({len(view.pending)})</h2>")
@@ -350,7 +356,21 @@ def _task_card(t: TaskRow) -> str:
     )
 
 
-def _progress(p: ProgressView) -> str:
+def _spent_line(view: ProjectView, rate: float | None) -> str:
+    """What the project has cost so far, with planning and the tasks apart (D133)."""
+    total = f"<p><strong>Spent so far:</strong> {text(money(view.cost_usd, rate))}"
+    if view.cost_usd <= 0:
+        return total + "</p>"
+    planning = min(max(view.planning_usd, 0.0), view.cost_usd)
+    tasks = max(view.cost_usd - planning, 0.0)
+    return (
+        f'{total}</p><p class="chips"><span>Planning (questions, plan, reviews): '
+        f"{text(money(planning, rate))}</span>"
+        f"<span>Doing the tasks: {text(money(tasks, rate))}</span></p>"
+    )
+
+
+def _progress(p: ProgressView, rate: float | None = None) -> str:
     """Tasks passed, the latest run's cost against its range and the latest events (D127)."""
     parts = [
         '<section class="card"><h2>Progress</h2>',
@@ -364,17 +384,17 @@ def _progress(p: ProgressView) -> str:
         so_far = "so far" if p.live else "in total"
         verdict = c.verdict if not p.live or c.verdict == "above" else "running"
         cls = ' class="warn"' if c.verdict == "above" else ""
-        other = f" (+ ${c.other_usd:.4f} other calls)" if c.other_usd else ""
+        other = f" (+ {text(money(c.other_usd, rate))} other calls)" if c.other_usd else ""
         parts.append(
             f"<p{cls}>latest run (estimated {_time(c.estimated_at)}): "
-            f"<strong>${c.spent_usd:.4f}</strong> {so_far}{other} vs range about "
-            f"${c.low_usd:.4f} to ${c.high_usd:.4f}: {text(verdict)}"
+            f"<strong>{text(money(c.spent_usd, rate))}</strong> {so_far}{other} vs range "
+            f"{text(money_range(c.low_usd, c.high_usd, rate))}: {text(verdict)}"
             f" {_range_meter(c)}</p>"
         )
     else:
         parts.append("<p>No cost range recorded yet (it is written when a run starts).</p>")
     if p.unusual is not None:
-        parts.append(_unusual_line(p.unusual))
+        parts.append(_unusual_line(p.unusual, rate))
     if p.live:
         parts.append(f'<p class="badge">running: this page refreshes every {REFRESH_SECONDS} s</p>')
     if p.events:
@@ -392,14 +412,15 @@ def _progress(p: ProgressView) -> str:
     return "".join(parts)
 
 
-def _unusual_line(u: UnusualSpending) -> str:
+def _unusual_line(u: UnusualSpending, rate: float | None = None) -> str:
     """At most one line about unusual spending (D132): how many and the largest."""
     # A flagged sample is a model call or a judged attempt: both are "steps" here.
     what = "1 step cost" if u.count == 1 else f"{u.count} steps cost"
     times = f", {u.ratio:.1f}× the usual cost" if u.ratio is not None else ""
     return (
         f'<p class="warn">Unusual spending: {what} much more than usual this run '
-        f"(largest ${u.largest_usd:.4f}{times}). Advisory only: nothing was stopped.</p>"
+        f"(largest {text(money(u.largest_usd, rate))}{times}). "
+        "Advisory only: nothing was stopped.</p>"
     )
 
 

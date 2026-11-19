@@ -103,7 +103,7 @@ def test_overview_page_with_ledger_spending(workspace: Path) -> None:
     r = _app(workspace).handle("GET", "/", GOOD_HOST)
     assert r.status == 200
     body = r.body.decode()
-    assert "p1" in body and "$0.7500" in body and "1 pending" in body
+    assert "p1" in body and "$0.75" in body and "1 pending" in body
     assert "<b>a</b>" not in body and "&lt;b&gt;a&lt;/b&gt;" in body
 
 
@@ -111,7 +111,7 @@ def test_project_page(workspace: Path) -> None:
     r = _app(workspace).handle("GET", "/projects/p1", GOOD_HOST)
     assert r.status == 200
     body = r.body.decode()
-    assert "$0.7500" in body and "Pending approvals (1)" in body
+    assert "$0.75" in body and "Pending approvals (1)" in body
     assert "<script" not in body and "&lt;script&gt;" in body
 
 
@@ -210,7 +210,7 @@ def test_no_ledger_means_zero_and_none_is_created(tmp_path: Path) -> None:
     app = _app(tmp_path)
     for target in ("/", "/projects/p1"):
         r = app.handle("GET", target, GOOD_HOST)
-        assert r.status == 200 and "$0.0000" in r.body.decode()
+        assert r.status == 200 and "$0.00" in r.body.decode()
     assert not (tmp_path / LEDGER).exists()
     assert _tree(tmp_path) == before
 
@@ -250,7 +250,7 @@ def test_symlinked_ledger_is_refused(
     r = _app(workspace).handle("GET", "/", GOOD_HOST)
     assert r.status == 200
     body = r.body.decode()
-    assert "symlink" in body and "$0.7500" not in body
+    assert "symlink" in body and "$0.75" not in body
 
 
 def test_corrupt_project_page_is_500_without_crash(workspace: Path) -> None:

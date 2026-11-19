@@ -29,6 +29,7 @@ and only for that project's ``raw`` path.
 from __future__ import annotations
 
 import ipaddress
+import math
 import socket
 import sys
 import threading
@@ -230,9 +231,13 @@ class WebApp:
         planner: IdeaPlanner | None = None,
         runs: RunPreflight | BackgroundRuns | None = None,
         anomaly: AnomalySettings | None = None,
+        toman_per_usd: float | None = None,
     ):
         self._store = ProjectStore.for_workspace(workspace)
         self._anomaly = anomaly
+        if toman_per_usd is not None and not (math.isfinite(toman_per_usd) and toman_per_usd > 0):
+            raise ValueError(f"toman_per_usd must be a positive number, got {toman_per_usd!r}")
+        self._rate = toman_per_usd  # display only (D133): never used by the guard
         # Background runs only in action mode (D125); a read-only server never runs.
         if actions is None or runs is None:
             self._runs: BackgroundRuns | None = None
@@ -535,7 +540,9 @@ class WebApp:
             view = build_overview(self._store, spent)
             if err:
                 view = view.model_copy(update={"errors": (*view.errors, err)})
-            document = render_overview(view, actions=actions, ideas=self._ideas is not None)
+            document = render_overview(
+                view, actions=actions, ideas=self._ideas is not None, rate=self._rate
+            )
             return _html(200, document, security=self._security)
         if self._ideas is not None and self._actions is not None:
             forms = ActionForms(self._actions.csrf_token)
@@ -563,7 +570,12 @@ class WebApp:
             entries, err = self._entries()
             own = [e for e in entries if e.project_id == pid]
             try:
-                pview = build_project_view(self._store, pid, sum(e.cost_nusd for e in own))
+                pview = build_project_view(
+                    self._store,
+                    pid,
+                    sum(e.cost_nusd for e in own),
+                    planning_nusd=sum(e.cost_nusd for e in own if e.task_id is None),
+                )
             except (ProjectStoreError, ApprovalError) as e:
                 return self.error(500, "Project unreadable", str(e))
             if err:
@@ -579,6 +591,7 @@ class WebApp:
                 questions_waiting=waiting,
                 run=self._run_panel(pid),
                 progress=self._progress(pview, own),
+                rate=self._rate,
             )
             return _html(200, document, security=self._security)
         return self.error(404, "Not found")
@@ -656,6 +669,7 @@ def create_server(
     planner: IdeaPlanner | None = None,
     runs: RunPreflight | None = None,
     anomaly: AnomalySettings | None = None,
+    toman_per_usd: float | None = None,
 ) -> ThreadingHTTPServer:
     """A bound (not yet serving) server. ``port=0`` picks a free port (tests).
 
@@ -663,7 +677,8 @@ def create_server(
     this server's lifetime; the default is the read-only server of D78. ``planner``
     (only used with ``allow_actions``, D124) enables the "New idea" pages; ``runs``
     (only with ``allow_actions``, D125) enables the "Start run" button; ``anomaly``
-    is the unusual-spending threshold of the progress panel (``[finance]``, D132)."""
+    is the unusual-spending threshold of the progress panel (``[finance]``, D132);
+    ``toman_per_usd`` shows every amount first in rounded toman (D133)."""
     host = validate_bind_host(host)
     port = validate_port(port)
 
@@ -682,7 +697,14 @@ def create_server(
         else None
     )
     app = WebApp(
-        workspace, ledger_path, hosts, actions=actions, planner=planner, runs=runs, anomaly=anomaly
+        workspace,
+        ledger_path,
+        hosts,
+        actions=actions,
+        planner=planner,
+        runs=runs,
+        anomaly=anomaly,
+        toman_per_usd=toman_per_usd,
     )
     server.RequestHandlerClass = make_handler(app, log)
     return server
