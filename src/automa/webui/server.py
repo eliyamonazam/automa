@@ -20,6 +20,10 @@ and — when a planner is given (D124) — to the new-idea paths of :mod:`automa
 gateway — and, when a run preflight is given (D125), to ``/projects/<pid>/start``,
 which starts ``automa run`` as a background child process (:mod:`automa.webui.runs`).
 Every POST passes the same Host, same-origin and CSRF checks first.
+
+``/projects/<pid>/files…`` (D128) browses the project's ``files/`` read-only through
+:mod:`automa.webui.files`; only a file view of a checked image gets an ``img-src``,
+and only for that project's ``raw`` path.
 """
 
 from __future__ import annotations
@@ -55,6 +59,19 @@ from automa.webui.actions import (
     parse_action_path,
     parse_form,
 )
+from automa.webui.files import (
+    FILE_CONTENT_SECURITY_POLICY,
+    FilesRefused,
+    FilesRoute,
+    build_listing,
+    content_disposition,
+    download_bytes,
+    image_bytes,
+    image_source,
+    parse_files_path,
+    parse_path_query,
+    read_file,
+)
 from automa.webui.ideas import (
     ANSWER_FIELDS,
     IDEA_FIELDS,
@@ -72,7 +89,10 @@ from automa.webui.render import (
     ActionForms,
     RunPanel,
     page,
+    page_csp,
     render_clarify,
+    render_file,
+    render_files,
     render_new_idea,
     render_overview,
     render_project,
@@ -116,6 +136,13 @@ ACTION_SECURITY_HEADERS: tuple[tuple[str, str], ...] = tuple(
     else (name, value)
     for name, value in SECURITY_HEADERS
 )
+
+
+def _replace_csp(security: tuple[tuple[str, str], ...], csp: str) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (name, csp) if name == "Content-Security-Policy" else (name, value)
+        for name, value in security
+    )
 
 
 class WebServerError(ValueError):
@@ -299,7 +326,7 @@ class WebApp:
         if method == "POST":
             return self._post(target, headers, body)
         # HEAD gets the same status and headers; the handler omits the body.
-        return self._route(target)
+        return self._route(target, host.strip().lower())
 
     def _post(self, target: str, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
         if self._actions is None:  # POST is only allowed in action mode (never reached)
@@ -460,10 +487,45 @@ class WebApp:
             return f"{req.id}: approved; the call runs at most once, on the next: automa run {pid}"
         return f"{req.id}: rejected; the model will be told on the next: automa run {pid}"
 
-    def _route(self, target: str) -> Response:
+    def _files(self, pid: str, route: FilesRoute, query: str, host: str) -> Response:
+        """The read-only browser of ``files/`` (D128)."""
+        actions = self._actions is not None
+        try:
+            path = parse_path_query(query, allow_root=route is FilesRoute.LIST)
+            if route is FilesRoute.LIST:
+                listing = build_listing(self._store, pid, path)
+                return _html(200, render_files(listing, actions=actions), security=self._security)
+            if route is FilesRoute.VIEW:
+                content = read_file(self._store, pid, path)
+                img_src = image_source(host, pid) if content.kind == "image" else None
+                document = render_file(content, actions=actions, img_src=img_src)
+                security = self._security
+                if img_src is not None:
+                    csp = page_csp(actions=actions, img_src=img_src) + "; frame-ancestors 'none'"
+                    security = _replace_csp(security, csp)
+                return _html(200, document, security=security)
+            if route is FilesRoute.RAW:
+                data, mime = image_bytes(self._store, pid, path)
+                disposition = content_disposition(path, attachment=False)
+            else:
+                data, mime = download_bytes(self._store, pid, path), "application/octet-stream"
+                disposition = content_disposition(path, attachment=True)
+        except FilesRefused as e:
+            return self.error(e.status, "Not available", e.message)
+        headers = (
+            ("Content-Type", mime),
+            ("Content-Disposition", disposition),
+            *_replace_csp(self._security, FILE_CONTENT_SECURITY_POLICY),
+        )
+        return Response(200, data, headers)
+
+    def _route(self, target: str, host: str = "") -> Response:
         parts = urlsplit(target)
         path = parts.path
         actions = self._actions is not None
+        files_target = parse_files_path(path)
+        if files_target is not None:
+            return self._files(*files_target, parts.query, host)
         if path == "/":
             spent, err = self._spending()
             view = build_overview(self._store, spent)

@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-19 — M12: رابط وب، مرورگر فایل‌های پروژه
+- **انجام‌شده:** در صفحهٔ هر پروژه لینک «Files»: فهرست پوشهٔ `files/` (با پوشه‌های تو در تو، اندازه و لینک دانلود)، نمایش فایل متنی (escape، تا ۲۵۶KiB)، نمایش تصویر PNG/JPEG (فقط وقتی امضای فایل با پسوند جور باشه؛ `img-src` فقط برای مسیر raw همین پروژه) و دانلود هر فایل با `Content-Disposition: attachment`. symlinkها نشون داده می‌شن ولی دنبال نمی‌شن؛ هیچ مسیری بیرون از `files/` خونده نمی‌شه؛ در هر دو حالت (فقط‌خواندنی و `--allow-actions`) کار می‌کنه و هیچ چیزی نمی‌نویسه (D128).
+- **فایل‌های اصلی:** `src/automa/webui/files.py` (جدید)، `src/automa/tools/workspace.py` (`read_bytes`، `file_size`، `FileTooLarge`)، `src/automa/webui/render.py` (`page_csp`، `render_files`، `render_file`، لینک Files)، `src/automa/webui/server.py` (مسیرهای files)، `tests/test_webui_files.py` (۱۱۰ تست جدید، شامل بیرون‌زدن با `..`/symlink/جایگزینی symlink بعد از فهرست، تصویر جعلی، CSP و سوکت واقعی)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D128)، `ROADMAP.md`.
+- **تست‌ها:** `pytest` ← ۵۱۴۳ سبز، ۲ رد شده (Docker واقعی)، هم معمولی و هم حالت شبیه CI؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** ابزار `add_repo` در دسترس نبود؛ مخزن از قبل کلون شده بود و بسته دوباره نصب شد. BudgetGuard، Policy و Approval Gate دست نخوردن؛ این بخش فقط خواندنیه.
+- **برای صاحب مخزن:** کاری لازم نیست؛ هنگام امتحان رابط وب، «Files» یک پروژهٔ تمام‌شده رو باز کن.
+- **قدم بعدی:** رابط وب: ظاهر تمیز و فارسی‌پسند (RTL، فونت، کارت‌ها، تم تیره).
+
 ## 2026-11-19 — M12: رابط وب، پیشرفت زنده
 - **انجام‌شده:** مورد «پیشرفت زنده و فایل‌ها» به سه بخش شکسته شد (پیشرفت زنده؛ مرورگر `files/`؛ ظاهر فارسی‌پسند) و بخش اول انجام شد. صفحهٔ هر پروژه حالا بخش «Progress» داره: «tasks passed: 2 / 5» با نوار، هزینهٔ آخرین اجرا تا این لحظه در برابر بازهٔ همون تخمین («$0.12 so far vs range about $0.05 to $0.30»، و هشدار اگه از سر بالا گذشت) و ۱۵ رویداد آخر (فقط فیلدهای کوتاه مثل task/attempt/model، هرگز متن مدل). جدول برنامه ستون‌های State و Model داره. وقتی اجرا در جریانه (در ترمینال یا از دکمهٔ Start) صفحه هر ۵ ثانیه خودش تازه می‌شه، بدون هیچ JavaScript؛ اگه تأییدی در انتظار باشه رفرش خاموشه تا فرم پاک نشه (D127).
 - **فایل‌های اصلی:** `src/automa/webui/progress.py` (جدید)، `src/automa/webui/views.py` (`TaskRow.state`/`model`)، `src/automa/webui/render.py` (`page(refresh=…)`، `_progress`، ستون‌ها)، `src/automa/webui/server.py` (`_entries`، `_progress`)، `tests/test_webui_progress.py` (۷۴ تست جدید)، `docs/ARCHITECTURE.md`، `docs/DECISIONS.md` (D127)، `ROADMAP.md`.

@@ -20,6 +20,7 @@ from urllib.parse import quote
 from automa.plan.models import MAX_ANSWER_CHARS
 from automa.project.store import MAX_GOAL_CHARS
 from automa.tools.approvals import MAX_NOTE_CHARS
+from automa.webui.files import FileContent, FileListing, FilesRoute, files_href
 from automa.webui.ideas import ASK_VALUE
 from automa.webui.progress import REFRESH_SECONDS, ProgressView
 from automa.webui.views import ApprovalView, Overview, ProjectView
@@ -85,7 +86,25 @@ class ActionForms:
     csrf_token: str
 
 
-def page(title: str, body: str, *, actions: bool = False, refresh: int | None = None) -> str:
+def page_csp(*, actions: bool = False, img_src: str | None = None) -> str:
+    """The page's Content-Security-Policy; ``img_src`` (D128) is the one image source
+    a file view may load (checked: ``http://`` and no space, quote or ``;``)."""
+    csp = ACTION_CONTENT_SECURITY_POLICY if actions else CONTENT_SECURITY_POLICY
+    if img_src is None:
+        return csp
+    if not img_src.startswith("http://") or any(c in img_src for c in " \t\r\n;,'\"<>"):
+        raise ValueError(f"invalid image source: {img_src!r}")
+    return csp.replace("img-src 'none'", f"img-src {img_src}")
+
+
+def page(
+    title: str,
+    body: str,
+    *,
+    actions: bool = False,
+    refresh: int | None = None,
+    img_src: str | None = None,
+) -> str:
     """A complete HTML document around already-safe ``body``.
 
     In action mode the CSP allows forms to post to this server only, and the referrer
@@ -93,7 +112,7 @@ def page(title: str, body: str, *, actions: bool = False, refresh: int | None = 
     (with ``no-referrer`` it would send ``Origin: null``, which the server refuses).
     ``refresh`` (seconds) makes the browser reload the same page, with no script (D127).
     """
-    csp = ACTION_CONTENT_SECURITY_POLICY if actions else CONTENT_SECURITY_POLICY
+    csp = page_csp(actions=actions, img_src=img_src)
     referrer = "same-origin" if actions else "no-referrer"
     reload = ""
     if refresh is not None:
@@ -222,6 +241,7 @@ def render_project(
         f'<p>status: <span class="badge">{text(view.status)}</span> · '
         f"cost: ${view.cost_usd:.4f} · created {_time(view.created_at)} · "
         f"updated {_time(view.updated_at)}</p>",
+        f'<p><a href="{text(_project_href(view.id) + "/files")}">Files</a></p>',
     ]
     if questions_waiting and forms is not None:
         href = text(_project_href(view.id) + "/clarify")
@@ -403,3 +423,98 @@ def render_clarify(project_id: str, goal: str, questions: list[str], forms: Acti
         f'{fields}<p><button type="submit">Send answers and make the plan</button></p></form>'
     )
     return page(f"Automa — {project_id} questions", body, actions=True)
+
+
+def _size_text(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KiB"
+    return f"{size / (1024 * 1024):.1f} MiB"
+
+
+def _crumbs(project_id: str, path: str) -> str:
+    """``files / a / b`` with a link per directory."""
+    links = [f'<a href="{text(files_href(project_id, FilesRoute.LIST))}">files</a>']
+    parts = path.split("/") if path else []
+    for i, part in enumerate(parts):
+        sub = "/".join(parts[: i + 1])
+        href = text(files_href(project_id, FilesRoute.LIST, sub))
+        links.append(f'<a href="{href}" dir="auto">{text(part)}</a>')
+    return " / ".join(links)
+
+
+def render_files(listing: FileListing, *, actions: bool = False) -> str:
+    """One directory of a project's ``files/`` (D128). Symlinks and special files
+    are listed but never linked."""
+    pid = listing.project_id
+    parts = [
+        f'<p><a href="{text(_project_href(pid))}">← {text(pid)}</a></p>',
+        f"<h1>Files of {text(pid)}</h1>",
+        f"<p>{_crumbs(pid, listing.dir)}</p>",
+    ]
+    if listing.missing:
+        parts.append("<p>No files yet.</p>")
+        return page(f"Automa — {pid} files", "".join(parts), actions=actions)
+    if listing.parent is not None:
+        up = text(files_href(pid, FilesRoute.LIST, listing.parent))
+        parts.append(f'<p><a href="{up}">↑ up</a></p>')
+    if not listing.entries:
+        parts.append("<p>Empty directory.</p>")
+    else:
+        rows = []
+        for e in listing.entries:
+            name = text(e.name)
+            if e.kind == "dir":
+                href = text(files_href(pid, FilesRoute.LIST, e.path))
+                cell, size, extra = f'<a href="{href}" dir="auto">{name}/</a>', "-", ""
+            elif e.kind == "file":
+                view = text(files_href(pid, FilesRoute.VIEW, e.path))
+                down = text(files_href(pid, FilesRoute.DOWNLOAD, e.path))
+                cell = f'<a href="{view}" dir="auto">{name}</a>'
+                size, extra = _size_text(e.size), f'<a href="{down}">download</a>'
+            else:
+                label = "symlink, not followed" if e.kind == "symlink" else "not a regular file"
+                cell = f'<span dir="auto">{name}</span> <span class="warn">({label})</span>'
+                size, extra = "-", ""
+            rows.append(f"<tr><td>{cell}</td><td>{text(size)}</td><td>{extra}</td></tr>")
+        parts.append(
+            "<table><thead><tr><th>Name</th><th>Size</th><th></th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+        )
+        if listing.total > len(listing.entries):
+            parts.append(f"<p>Showing {len(listing.entries)} of {listing.total} entries.</p>")
+    return page(f"Automa — {pid} files", "".join(parts), actions=actions)
+
+
+def render_file(content: FileContent, *, actions: bool = False, img_src: str | None = None) -> str:
+    """The view page of one file (D128): escaped text, a checked image (loaded only
+    from ``img_src``) or a download line."""
+    pid, path = content.project_id, content.path
+    parent = path.rsplit("/", 1)[0] if "/" in path else ""
+    down = text(files_href(pid, FilesRoute.DOWNLOAD, path))
+    parts = [
+        f'<p><a href="{text(_project_href(pid))}">← {text(pid)}</a> · {_crumbs(pid, parent)}</p>',
+        f'<h1 dir="auto">{text(path.rsplit("/", 1)[-1])}</h1>',
+        f'<p>{text(_size_text(content.size))} · <a href="{down}">download</a></p>',
+    ]
+    use_img = None
+    if content.kind == "text" and content.text is not None:
+        if content.truncated:
+            parts.append(
+                f'<p class="warn">Only the first {text(_size_text(len(content.text.encode())))} '
+                "are shown; download the file for all of it.</p>"
+            )
+        parts.append(f'<pre dir="auto">{text(content.text)}</pre>')
+    elif content.kind == "image" and img_src is not None:
+        src = text(files_href(pid, FilesRoute.RAW, path))
+        parts.append(
+            f"<p>{text(content.image_format or '')} {content.width}×{content.height}</p>"
+            f'<p><img src="{src}" alt="{text(path)}" width="{content.width}" '
+            f'height="{content.height}" style="max-width:100%;height:auto"></p>'
+        )
+        use_img = img_src
+    else:
+        note = content.note or "binary file"
+        parts.append(f'<p class="warn">{text(note)}: not shown here.</p>')
+    return page(f"Automa — {path}", "".join(parts), actions=actions, img_src=use_img)

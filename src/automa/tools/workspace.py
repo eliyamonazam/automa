@@ -34,6 +34,10 @@ class WorkspaceError(ToolError):
     """A path or file operation was refused or failed."""
 
 
+class FileTooLarge(WorkspaceError):
+    """A file is larger than the caller's limit (nothing beyond the limit was read)."""
+
+
 @dataclass(frozen=True)
 class DirEntry:
     name: str
@@ -121,6 +125,58 @@ class Workspace:
         norm = normalize(path)
         with self._dir(norm.split("/")):
             return self._root.joinpath(*norm.split("/"))
+
+    def file_size(self, path: str) -> int:
+        """Size of an existing regular file (never follows a symlink)."""
+        norm = normalize(path)
+        *dirs, name = norm.split("/")
+        with self._dir(dirs) as dfd:
+            try:
+                st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+            except FileNotFoundError:
+                raise WorkspaceError(f"file not found: {norm}") from None
+        if not stat.S_ISREG(st.st_mode):
+            raise WorkspaceError(f"not a regular file (or a symlink): {norm}")
+        return st.st_size
+
+    def read_bytes(
+        self, path: str, *, max_bytes: int, truncate: bool = False
+    ) -> tuple[bytes, bool]:
+        """``(data, truncated)`` of a regular file, opened without following symlinks.
+
+        At most ``max_bytes`` are returned. A longer file is cut when ``truncate`` is
+        true and refused (``WorkspaceError``) otherwise; nothing larger is ever read.
+        """
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0:
+            raise WorkspaceError("max_bytes must be a non-negative integer")
+        norm = normalize(path)
+        *dirs, name = norm.split("/")
+        with self._dir(dirs) as dfd:
+            try:
+                fd = os.open(name, os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC, dir_fd=dfd)
+            except FileNotFoundError:
+                raise WorkspaceError(f"file not found: {norm}") from None
+            except OSError:
+                raise WorkspaceError(f"cannot open {norm} (symlink or not a file)") from None
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise WorkspaceError(f"not a regular file: {norm}")
+                chunks: list[bytes] = []
+                remaining = max_bytes + 1
+                while remaining > 0:
+                    chunk = os.read(fd, min(remaining, 65536))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    remaining -= len(chunk)
+            finally:
+                os.close(fd)
+        data = b"".join(chunks)
+        if len(data) <= max_bytes:
+            return data, False
+        if not truncate:
+            raise FileTooLarge(f"{norm} is larger than {max_bytes} bytes")
+        return data[:max_bytes], True
 
     def read_text(self, path: str, *, max_bytes: int = MAX_READ_BYTES) -> tuple[str, bool]:
         """Return ``(text, truncated)``. Only regular UTF-8 files are readable."""
