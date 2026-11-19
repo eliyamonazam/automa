@@ -673,6 +673,7 @@ class WebApp:
                 progress=self._progress(pview, own),
                 rate=self._rate,
                 task_costs=_task_costs(own),
+                lang=self._lang,
             )
             return _html(200, document, security=self._security)
         return self.error(404, "Not found")

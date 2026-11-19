@@ -311,7 +311,10 @@ def test_served_project_page_shows_planning_cost(
     overview = app.handle("GET", "/", HOST).body.decode()
     assert "cost: " in overview and "toman" in overview
     # the plan call was just recorded: it counts for today and this month
-    assert "Spent today: <strong>" in overview and "Spent today: <strong>0 toman" not in overview
+    assert (
+        'Spent today:</span> <span class="value"><strong>' in overview
+        and 'Spent today:</span> <span class="value"><strong>0 toman' not in overview
+    )
 
 
 @pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf")])
@@ -369,6 +372,12 @@ def test_task_costs_sums_by_task() -> None:
 
 def test_overview_shows_today_and_month() -> None:
     page = rd.render_overview(Overview(projects=()), rate=RATE, totals=(0.1, 0.45))
-    assert "Spent today: <strong>about 32 thousand toman ($0.10)</strong>" in page
-    assert "This month: <strong>about 145 thousand toman ($0.45)</strong>" in page
+    assert (
+        'Spent today:</span> <span class="value"><strong>about 32 thousand toman ($0.10)</strong>'
+        in page
+    )
+    assert (
+        'This month:</span> <span class="value"><strong>about 145 thousand toman ($0.45)</strong>'
+        in page
+    )
     assert "Spent today" not in rd.render_overview(Overview(projects=()))

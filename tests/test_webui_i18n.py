@@ -164,7 +164,7 @@ def test_persian_home_page() -> None:
     assert "<title>پروژه‌های Automa</title>" in doc and "<h1>پروژه‌های Automa</h1>" in doc
     assert "+ ایدهٔ جدید" in doc
     assert "۴ آزمون پنهان شده" in doc and 'href="/?tests=1">نمایش آزمون‌ها<' in doc
-    assert '<span class="badge">تموم شد</span>' in doc
+    assert '<span class="badge ps-done">تموم شد</span>' in doc
     assert "۳ منتظر تأیید" in doc
     assert "هزینه: حدود ۱۴۵ هزار تومان (۰٫۴۵ دلار)" in doc
     assert "ساخته‌شده ۵ دقیقه پیش" in doc
@@ -213,7 +213,10 @@ def test_recorded_data_is_not_translated_and_stays_escaped() -> None:
 def test_english_home_page_is_unchanged_without_a_clock() -> None:
     doc = rd.render_overview(Overview(projects=(_row(status="done"),)))
     assert '<html lang="en">' in doc and "Automa projects" in doc
-    assert "created 2026-11-19T18:05:00+00:00" in doc and '<span class="badge">done</span>' in doc
+    assert (
+        "created 2026-11-19T18:05:00+00:00" in doc
+        and '<span class="badge ps-done">done</span>' in doc
+    )
     assert "approvals: 0" in doc and "cost: $0.45" in doc
 
 
@@ -296,8 +299,11 @@ def test_cli_web_passes_display_language(
 
 def test_persian_today_and_month_totals() -> None:
     doc = rd.render_overview(Overview(), totals=(0.45, 3.0), rate=RATE, lang="fa")
-    assert "خرج امروز: <strong>حدود ۱۴۵ هزار تومان (۰٫۴۵ دلار)</strong>" in doc
-    assert "این ماه: <strong>" in doc and "Spent today" not in doc
+    assert (
+        'خرج امروز:</span> <span class="value"><strong>حدود ۱۴۵ هزار تومان (۰٫۴۵ دلار)</strong>'
+        in doc
+    )
+    assert 'این ماه:</span> <span class="value"><strong>' in doc and "Spent today" not in doc
 
 
 def test_totals_use_the_configured_time_zone(tmp_path: Path) -> None:

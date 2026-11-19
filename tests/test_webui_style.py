@@ -122,7 +122,7 @@ def test_style_is_not_mistaken_for_an_action_word() -> None:
 
 def test_overview_shows_projects_as_cards(store: ProjectStore) -> None:
     doc = rd.render_overview(build_overview(store, {}))
-    assert '<div class="cards"><article class="card project">' in doc
+    assert '<div class="cards"><article class="card project ps-' in doc
     assert f'<p class="goal" dir="auto">{PERSIAN}</p>' in doc
     assert "<table" not in doc
     assert 'href="/projects/p1"' in doc and "cost: $" in doc and "approvals: 0" in doc
@@ -152,7 +152,7 @@ def test_overview_with_no_projects_has_no_card_grid(tmp_path: Path) -> None:
 
 def test_project_header_is_a_card_with_persian_goal(store: ProjectStore) -> None:
     doc = rd.render_project(build_project_view(store, "p1", 0))
-    assert '<section class="card"><h1>p1</h1>' in doc
+    assert '<header class="hero"><h1 dir="auto">' in doc and "<code>p1</code>" in doc
     assert f'<p class="goal" dir="auto">{PERSIAN}</p>' in doc
 
 

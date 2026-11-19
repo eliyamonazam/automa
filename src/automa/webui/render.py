@@ -17,17 +17,25 @@ from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from urllib.parse import quote
 
-from automa.l10n import DEFAULT_TIMEZONE, Language, relative_time, resolve_timezone
+from automa.l10n import (
+    DEFAULT_TIMEZONE,
+    Language,
+    localize_digits,
+    relative_time,
+    resolve_timezone,
+)
 from automa.plan.models import MAX_ANSWER_CHARS
 from automa.project.store import MAX_GOAL_CHARS
 from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.webui.files import FileContent, FileListing, FilesRoute, files_href
 from automa.webui.i18n import MESSAGES, WELCOME_EXAMPLE_KEYS, status_label, t
 from automa.webui.ideas import ASK_VALUE
+from automa.webui.journey import MESSAGES as JOURNEY_MESSAGES
+from automa.webui.journey import Journey, build_journey, jt
 from automa.webui.money import money, money_range
 from automa.webui.preview import is_previewable, preview_href
 from automa.webui.progress import REFRESH_SECONDS, CostProgress, ProgressView, UnusualSpending
-from automa.webui.views import ApprovalView, Overview, ProjectView, TaskRow
+from automa.webui.views import ApprovalView, Overview, ProjectView, TaskRow, project_title
 
 # Joiners needed by Persian text; every other Cf character (incl. bidi controls) is escaped.
 _ALLOWED_FORMAT_CHARS = frozenset({"‌", "‍"})
@@ -51,53 +59,104 @@ MONO_STACK = 'ui-monospace,"Cascadia Mono",Consolas,"DejaVu Sans Mono",monospace
 
 _STYLE = (
     """
-:root{color-scheme:light dark;--bg:#f5f6f8;--card:#fff;--fg:#1d1d1f;--muted:#5f6368;
---line:#e1e3e8;--accent:#2457c5;--code:#f0f1f4;--warn:#9a3d00;--err:#b00020;
---chip:#eceef2;--ok:#d6f5dd;--bad:#fbd9d9;--busy:#fff0c2}
-@media (prefers-color-scheme: dark){:root{--bg:#121214;--card:#1c1c20;--fg:#e8e8ea;
---muted:#a3a7ae;--line:#2e2f35;--accent:#8ab4ff;--code:#26262b;--warn:#ffb070;
---err:#ff7b8a;--chip:#2c2d33;--ok:#1f4a2a;--bad:#5a2323;--busy:#5a4a12}}
+:root{color-scheme:light dark;--bg:#f3f5fb;--card:#fff;--fg:#1b1f2a;--muted:#667085;
+--line:#e3e7f0;--accent:#5b4be0;--accentb:#0ea5a4;--code:#f1f3f9;--warn:#b54708;
+--err:#c01048;--chip:#eef0f7;--ok:#dcfae6;--okfg:#067647;--bad:#fee4e2;--badfg:#b42318;
+--busy:#fef0c7;--busyfg:#93370d;--info:#e0eaff;--infofg:#3538cd;--shadow:#1b1f2a14}
+@media (prefers-color-scheme: dark){:root{--bg:#0f1117;--card:#181b24;--fg:#eceef4;
+--muted:#9aa3b5;--line:#2a2f3c;--accent:#9b8cff;--accentb:#2dd4bf;--code:#222633;
+--warn:#fdb022;--err:#fd6f8e;--chip:#252a37;--ok:#0f3d27;--okfg:#75e0a7;--bad:#4a1a1a;
+--badfg:#fda29b;--busy:#4a3410;--busyfg:#fec84b;--info:#1f2550;--infofg:#a4bcfd;
+--shadow:#00000066}}
 *{box-sizing:border-box}
 body{font-family:"""
     + FONT_STACK
     + """;font-size:16px;line-height:1.7;margin:0 auto;padding:16px;max-width:1100px;
 color:var(--fg);background:var(--bg)}
-h1{font-size:1.5em;margin:.4em 0}h2{font-size:1.2em;margin:1.2em 0 .5em}h3{font-size:1.05em}
+h1{font-size:1.6em;margin:.3em 0}h2{font-size:1.2em;margin:1.2em 0 .5em}h3{font-size:1.05em}
 a{color:var(--accent)}code,pre{font-family:"""
     + MONO_STACK
     + """}
 [dir=auto],pre{unicode-bidi:plaintext}
 pre{white-space:pre-wrap;word-break:break-word;background:var(--code);padding:8px 10px;
 border-radius:8px;text-align:start}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
-padding:12px 16px;margin:12px 0}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.hero{background:linear-gradient(135deg,#5b4be0,#0ea5a4);color:#fff;border-radius:18px;
+padding:18px 22px;margin:4px 0 16px;box-shadow:0 8px 24px var(--shadow)}
+.hero h1{margin:0 0 .2em;font-size:1.7em}.hero p{margin:.2em 0;opacity:.95}
+.hero a{color:#fff}.hero .muted{color:#ffffffcc}
+.hero .button{background:#fff;color:#4338ca;box-shadow:none}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;
+margin:12px 0}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:14px;
+padding:10px 14px;box-shadow:0 2px 8px var(--shadow)}
+.stat .label{color:var(--muted);font-size:.85em}.stat .value{font-size:1.25em;font-weight:700}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;
+padding:14px 18px;margin:12px 0;box-shadow:0 2px 10px var(--shadow)}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
 .cards>.card{margin:0}.card h2,.card h3{margin-top:0}
+.project{border-top:5px solid var(--accent)}.project h2 a{text-decoration:none}
+.project.ps-done{border-top-color:#12b76a}.project.ps-failed{border-top-color:#f04438}
+.project.ps-running{border-top-color:#f79009}.project.ps-paused{border-top-color:#98a2b3}
 .goal{margin:.3em 0;overflow-wrap:anywhere;white-space:pre-line}
+.now{font-size:1.15em;font-weight:600;padding:10px 14px;border-radius:12px;
+background:var(--info);color:var(--infofg);margin:10px 0}
+.now.ok{background:var(--ok);color:var(--okfg)}.now.bad{background:var(--bad);color:var(--badfg)}
+.now.busy{background:var(--busy);color:var(--busyfg)}
 .costcard{border-top:1px solid var(--line);margin-top:10px;padding-top:6px}
-.costcard .big{font-size:1.8em;margin:.2em 0}.costcard meter{width:12em}
-.meta{color:var(--muted);font-size:.9em;margin:.2em 0}
+.costcard .big{font-size:1.9em;margin:.2em 0;color:var(--accent)}
+.costcard meter{width:12em}
+.meta{color:var(--muted);font-size:.9em;margin:.2em 0}.muted{color:var(--muted)}
 table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid var(--line);
-padding:6px;text-align:start;vertical-align:top}
+padding:6px 8px;text-align:start;vertical-align:top}th{color:var(--muted);font-weight:600}
 .scroll{overflow-x:auto}
 .warn{color:var(--warn)}.err{color:var(--err)}
-.badge{display:inline-block;padding:0 8px;border-radius:10px;background:var(--chip);
-font-size:.9em}
-.st-passed{background:var(--ok)}.st-failed,.st-blocked{background:var(--bad)}
-.st-running,.st-verifying{background:var(--busy)}
-.task{border-inline-start:4px solid var(--line)}.t-passed{border-inline-start-color:#2e9e4f}
-.t-failed,.t-blocked{border-inline-start-color:#c62828}
-.t-running,.t-verifying{border-inline-start-color:#c9a000}
-.chips{display:flex;flex-wrap:wrap;gap:4px 12px;color:var(--muted);font-size:.9em;margin:.3em 0}
+.badge{display:inline-block;padding:1px 10px;border-radius:999px;background:var(--chip);
+font-size:.85em;font-weight:600;vertical-align:middle}
+.st-passed,.ps-done .badge.st,.badge.ps-done{background:var(--ok);color:var(--okfg)}
+.st-failed,.st-blocked,.badge.ps-failed{background:var(--bad);color:var(--badfg)}
+.st-running,.st-verifying,.badge.ps-running{background:var(--busy);color:var(--busyfg)}
+.badge.ps-planning,.badge.ps-new{background:var(--info);color:var(--infofg)}
+.task{border-inline-start:5px solid var(--line)}.t-passed{border-inline-start-color:#12b76a}
+.t-failed,.t-blocked{border-inline-start-color:#f04438}
+.t-running,.t-verifying{border-inline-start-color:#f79009}
+.chips{display:flex;flex-wrap:wrap;gap:6px 12px;color:var(--muted);font-size:.9em;margin:.3em 0}
 meter{width:12em;vertical-align:middle}
+.bar{height:14px;border-radius:999px;background:var(--chip);overflow:hidden;margin:8px 0}
+.bar .fill{height:100%;border-radius:999px;
+background:linear-gradient(90deg,var(--accent),var(--accentb))}
+.steps{list-style:none;margin:14px 0;padding:0;display:flex;flex-wrap:wrap;gap:0}
+.steps li{flex:1 1 120px;position:relative;text-align:center;padding:0 6px 6px;
+min-width:110px}
+.steps li::before{content:"";position:absolute;top:17px;inset-inline-start:0;width:100%;
+height:4px;background:var(--line);z-index:0}
+.steps li:first-child::before{inset-inline-start:50%;width:50%}
+.steps li:last-child::before{width:50%}
+.steps li:only-child::before{display:none}
+.steps .dot{position:relative;z-index:1;display:inline-flex;align-items:center;
+justify-content:center;width:38px;height:38px;border-radius:50%;background:var(--card);
+border:3px solid var(--line);font-weight:700}
+.steps .name{display:block;font-size:.9em;margin-top:4px;overflow-wrap:anywhere}
+.steps .when{display:block;font-size:.78em;color:var(--muted)}
+.steps .s-done::before{background:#12b76a}
+.steps .s-done .dot{background:#12b76a;border-color:#12b76a;color:#fff}
+.steps .s-now .dot{border-color:#f79009;background:var(--busy);color:var(--busyfg)}
+.steps .s-now .name{font-weight:700}
+.steps .s-fail .dot{background:#f04438;border-color:#f04438;color:#fff}
 textarea,input,button{font:inherit;color:inherit}
-textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:8px;
-padding:8px}
+textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
+padding:10px}
 input[type=text],input:not([type]){background:var(--card);border:1px solid var(--line);
-border-radius:6px;padding:2px 6px}
-button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:4px 14px;
-cursor:pointer}
-@media (prefers-color-scheme: dark){button{color:#121214}}
+border-radius:8px;padding:4px 8px}
+button,.button{display:inline-block;background:linear-gradient(135deg,var(--accent),
+var(--accentb));color:#fff;border:0;border-radius:999px;padding:6px 18px;cursor:pointer;
+font-weight:600;text-decoration:none;box-shadow:0 4px 12px var(--shadow)}
+details>summary{cursor:pointer;color:var(--muted)}
+@media (prefers-color-scheme: dark){button,.button{color:#0f1117}}
+@media (max-width:640px){body{padding:10px;font-size:15px}.hero{padding:14px 16px}
+.hero h1{font-size:1.35em}.cards{grid-template-columns:1fr}
+.steps{flex-direction:column}.steps li{flex:none;text-align:start;padding:0 0 8px 0;
+min-width:0}
+.steps li::before{display:none}.steps .name,.steps .when{display:inline;margin:0 8px}}
 """
 )
 
@@ -226,18 +285,22 @@ def render_overview(
     mode = t("overview.mode.actions" if actions else "overview.mode.readonly", lang)
     title = t("overview.title", lang)
     new_idea = text(t("overview.new_idea", lang))
-    parts = [f"<h1>{text(title)}</h1>", f"<p>{text(mode)}</p>"]
+    hero = [f'<header class="hero"><h1>{text(title)}</h1>', f"<p>{text(mode)}</p>"]
+    if actions and ideas and view.projects:
+        hero.append(f'<p><a class="button" href="/new"><strong>{new_idea}</strong></a></p>')
+    hero.append("</header>")
+    parts = ["".join(hero)]
     if totals is not None:
         today, month = totals
         spent_today = text(t("overview.spent_today", lang))
         this_month = text(t("overview.this_month", lang))
         parts.append(
-            f'<p class="chips"><span>{spent_today} '
-            f"<strong>{text(money(today, rate, lang=lang))}</strong></span>"
-            f"<span>{this_month} <strong>{text(money(month, rate, lang=lang))}</strong></span></p>"
+            f'<div class="stats"><div class="stat"><span class="label">{spent_today}</span> '
+            f'<span class="value"><strong>{text(money(today, rate, lang=lang))}</strong>'
+            f'</span></div><div class="stat"><span class="label">{this_month}</span> '
+            f'<span class="value"><strong>{text(money(month, rate, lang=lang))}</strong>'
+            "</span></div></div>"
         )
-    if actions and ideas and view.projects:
-        parts.append(f'<p><a class="button" href="/new"><strong>{new_idea}</strong></a></p>')
     if view.showing_tests:
         parts.append(f'<p class="muted"><a href="/">{text(t("overview.hide_tests", lang))}</a></p>')
     elif view.hidden_tests:
@@ -260,9 +323,10 @@ def render_overview(
             cost = t("overview.cost", lang, amount=money(p.cost_usd, rate, lang=lang))
             created = t("overview.created", lang, when=_when(p.created_at, lang, tz, now))
             cards.append(
-                '<article class="card project">'
+                f'<article class="card project ps-{_ps_class(p.status)}">'
                 f'<h2 dir="auto"><a href="{text(_project_href(p.id))}">{text(p.title or p.id)}</a> '
-                f'<span class="badge">{text(status_label(p.status, lang))}</span></h2>'
+                f'<span class="badge ps-{_ps_class(p.status)}">'
+                f"{text(status_label(p.status, lang))}</span></h2>"
                 f'<p class="muted"><code>{text(p.id)}</code></p>'
                 f'<p class="goal" dir="auto">{text(p.goal_preview)}</p>'
                 f'<p class="chips"><span>{text(cost)}</span>'
@@ -346,6 +410,7 @@ def render_project(
     progress: ProgressView | None = None,
     rate: float | None = None,
     task_costs: dict[str, float] | None = None,
+    lang: Language = "en",
 ) -> str:
     """One project page. ``forms`` (action mode only) adds approve/reject forms;
     ``notice`` is a one-line result of the last decision, shown at the top;
@@ -355,17 +420,20 @@ def render_project(
     ``progress`` (D127) adds tasks passed, cost so far against the range, the latest
     events and, while running, a self-refresh of the page; ``rate`` (toman per USD)
     shows every amount first in rounded toman with dollars in parentheses (D133)."""
-    parts = ['<p><a href="/">← all projects</a></p>']
+    running = run is not None and run.running
+    journey = build_journey(view, lang=lang, questions_waiting=questions_waiting, running=running)
+    back = text(jt("nav.back", lang))
+    parts = [f'<p><a href="/">{back}</a></p>']
     if notice:
         parts.append(f'<p class="badge" dir="auto">{text(notice)}</p>')
+    parts.append(_hero_and_journey(view, journey, lang))
     parts += [
         '<section class="card">',
-        f"<h1>{text(view.id)}</h1>",
         '<p class="meta"><strong>Goal:</strong></p>',
         f'<p class="goal" dir="auto">{text(view.goal)}</p>',
         f'<p class="meta">status: <span class="badge">{text(view.status)}</span> · '
         f"created {_time(view.created_at)} · updated {_time(view.updated_at)}</p>",
-        _cost_card(view, progress, task_costs or {}, rate),
+        _cost_card(view, progress, task_costs or {}, rate, lang),
         f'<p><a href="{text(_project_href(view.id) + "/files")}">Files</a></p>',
     ]
     if questions_waiting and forms is not None:
@@ -397,7 +465,47 @@ def render_project(
     errors = view.errors + (progress.errors if progress is not None else ())
     parts.append(_errors(errors))
     refresh = REFRESH_SECONDS if progress is not None and progress.live else None
-    return page(f"Automa — {view.id}", "".join(parts), actions=forms is not None, refresh=refresh)
+    title = f"Automa — {project_title(view.goal) or view.id}"
+    return page(title, "".join(parts), actions=forms is not None, refresh=refresh, lang=lang)
+
+
+_STEP_MARK = {"done": "✓", "fail": "✕"}
+
+
+def _hero_and_journey(view: ProjectView, j: Journey, lang: Language) -> str:
+    """The colourful header (title, status) and the journey (D141): the "now"
+    sentence, a progress bar and one step per stage. Classes are fixed values; all
+    text is escaped."""
+    status = _ps_class(view.status)
+    title = project_title(view.goal) or view.id
+    steps = []
+    for i, st in enumerate(j.steps, start=1):
+        mark = _STEP_MARK.get(st.state, localize_digits(str(i), lang))
+        steps.append(
+            f'<li class="s-{st.state}"><span class="dot">{text(mark)}</span>'
+            f'<span class="name" dir="auto">{text(st.name)}</span></li>'
+        )
+    percent = max(0, min(100, int(j.percent)))
+    return (
+        '<header class="hero">'
+        f'<h1 dir="auto">{text(title)} '
+        f'<span class="badge ps-{status}">{text(status_label(view.status, lang))}</span></h1>'
+        f'<p class="muted"><code>{text(view.id)}</code></p></header>'
+        '<section class="card journey">'
+        f'<p class="now {j.tone}" dir="auto">{text(j.now)}</p>'
+        f'<div class="bar" role="progressbar" aria-valuenow="{percent}" aria-valuemin="0" '
+        f'aria-valuemax="100"><div class="fill" style="width:{percent}%"></div></div>'
+        f'<p class="meta">{text(jt("progress.percent", lang, percent=percent))}</p>'
+        f'<ol class="steps">{"".join(steps)}</ol></section>'
+    )
+
+
+_PROJECT_STATUSES = frozenset({"new", "planning", "running", "paused", "done", "failed"})
+
+
+def _ps_class(status: str) -> str:
+    """A fixed CSS class for a project status (never recorded text in an attribute)."""
+    return status if status in _PROJECT_STATUSES else "none"
 
 
 _STATE_CLASSES = frozenset({"pending", "running", "verifying", "passed", "failed", "blocked"})
@@ -426,57 +534,45 @@ def _task_card(t: TaskRow) -> str:
     )
 
 
-_VERDICT_TEXT = {
-    "below": "below the estimated range",
-    "within": "within the estimated range",
-    "above": "above the estimated range",
-}
-
-
 def _cost_card(
     view: ProjectView,
     progress: ProgressView | None,
     task_costs: dict[str, float],
     rate: float | None,
+    lang: Language = "en",
 ) -> str:
     """The project's cost at a glance (D139): the total in large type (toman first
     when a rate is set), one plain sentence against the estimated range with a meter,
     planning vs tasks, and what each task cost."""
     parts = [
         '<div class="costcard">',
-        f'<p class="big"><strong>{text(money(view.cost_usd, rate))}</strong></p>',
+        f'<p class="big"><strong>{text(money(view.cost_usd, rate, lang=lang))}</strong></p>',
     ]
     c = progress.cost if progress is not None else None
     if c is not None:
         live = progress is not None and progress.live
-        if live and c.verdict != "above":
-            where = "so far, still running; estimated"
-        else:
-            where = _VERDICT_TEXT.get(c.verdict, c.verdict) + ":"
+        span = money_range(c.low_usd, c.high_usd, rate, lang=lang)
+        key = "cost.live" if live and c.verdict != "above" else f"cost.{c.verdict}"
+        line = jt(key, lang, range=span) if key in JOURNEY_MESSAGES else span
         cls = ' class="warn"' if c.verdict == "above" else ""
-        parts.append(
-            f"<p{cls}>This run {text(where)} {text(money_range(c.low_usd, c.high_usd, rate))} "
-            f"{_range_meter(c)}</p>"
-        )
+        parts.append(f"<p{cls}>{text(line)} {_range_meter(c)}</p>")
     elif view.cost_usd <= 0:
-        parts.append('<p class="muted">Nothing spent yet.</p>')
+        parts.append(f'<p class="muted">{text(jt("cost.nothing", lang))}</p>')
     if view.cost_usd > 0:
         planning = min(max(view.planning_usd, 0.0), view.cost_usd)
         tasks = max(view.cost_usd - planning, 0.0)
-        parts.append(
-            '<p class="chips"><span>Planning: '
-            f"{text(money(planning, rate))}</span>"
-            f"<span>Tasks: {text(money(tasks, rate))}</span></p>"
-        )
+        plan_s = jt("cost.planning", lang, amount=money(planning, rate, lang=lang))
+        task_s = jt("cost.tasks", lang, amount=money(tasks, rate, lang=lang))
+        parts.append(f'<p class="chips"><span>{text(plan_s)}</span><span>{text(task_s)}</span></p>')
     rows = [
         f'<tr><td dir="auto">{text(t.title or t.id)}</td>'
-        f"<td>{text(money(task_costs[t.id], rate))}</td></tr>"
+        f"<td>{text(money(task_costs[t.id], rate, lang=lang))}</td></tr>"
         for t in view.tasks
         if task_costs.get(t.id, 0) > 0
     ]
     if rows:
         parts.append(
-            "<details><summary>Cost of each task</summary>"
+            f"<details><summary>{text(jt('cost.each', lang))}</summary>"
             f"<table><tbody>{''.join(rows)}</tbody></table></details>"
         )
     parts.append("</div>")
@@ -503,9 +599,10 @@ def _progress(p: ProgressView, rate: float | None = None) -> str:
             for e in p.events
         )
         parts.append(
+            "<details><summary>Technical details</summary>"
             f"<h3>Latest events ({len(p.events)}, newest first)</h3>"
             '<div class="scroll"><table><thead><tr><th>Time</th><th>Event</th>'
-            f"<th>Details</th></tr></thead><tbody>{rows}</tbody></table></div>"
+            f"<th>Details</th></tr></thead><tbody>{rows}</tbody></table></div></details>"
         )
     parts.append("</section>")
     return "".join(parts)
@@ -527,8 +624,10 @@ def _range_meter(c: CostProgress) -> str:
     """A meter of the cost so far over the estimated range (D131): its end is the top
     of the range (or the cost, when above), never the theoretical worst case."""
     top = max(c.high_usd, c.spent_usd)
+    # Lower is better and the range's top splits the meter (D141): inside the range
+    # the browser draws it green, above it red (it used to stay green when above).
     return (
-        f'<meter min="0" low="{c.low_usd:.6f}" high="{c.high_usd:.6f}" '
+        f'<meter min="0" low="{c.high_usd:.6f}" high="{c.high_usd:.6f}" optimum="0" '
         f'max="{top:.6f}" value="{c.spent_usd:.6f}"></meter>'
     )
 
