@@ -62,6 +62,8 @@ Exit codes (stable, for scripts):
 * 10 — ``automa self next``: the roadmap is missing, unreadable or ambiguous
 * 11 — ``automa run``: the cost range is above ``[limits] confirm_above_usd`` and
   the run was not confirmed (declined, or no terminal and no ``--yes``); nothing ran
+* 12 — ``automa run``: stopped on request between steps (the web UI "Stop" button,
+  D126); the project is ``paused`` and ``automa run`` resumes it
 * 130 — interrupted (Ctrl+C); the project is ``paused`` and can be resumed
 """
 
@@ -312,6 +314,7 @@ EXIT_BENCH_FAILED = 8
 EXIT_SELF_NOTHING_OPEN = 9
 EXIT_ROADMAP_INVALID = 10
 EXIT_NOT_CONFIRMED = 11
+EXIT_STOPPED = 12
 EXIT_INTERRUPTED = 130
 
 # Exit code of each way a run can end (see the module docstring).
@@ -324,6 +327,7 @@ RUN_EXIT_CODES: dict[StopReason, int] = {
     StopReason.APPROVAL: EXIT_PAUSED,
     StopReason.VERIFICATION: EXIT_PAUSED,
     StopReason.TOOL_LAYER: EXIT_PAUSED,
+    StopReason.USER: EXIT_STOPPED,
 }
 
 LEDGER_FILENAME = "ledger.sqlite3"
@@ -1484,6 +1488,7 @@ _REASON_HINTS: dict[StopReason, str] = {
     StopReason.APPROVAL: "review the request with: automa approvals {pid}",
     StopReason.VERIFICATION: "the verifier gave no valid evaluation; the result is kept",
     StopReason.TOOL_LAYER: "the tool layer failed; see the events log",
+    StopReason.USER: "it was stopped on request (web UI); nothing is lost",
 }
 
 

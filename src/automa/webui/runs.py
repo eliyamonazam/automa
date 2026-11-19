@@ -20,6 +20,14 @@ while the project is marked ``running`` (e.g. by a terminal run). The child's ou
 goes to a new file ``<project>/web-runs/run-<UTC time>.log`` (created exclusively,
 never through a symlink). A watcher thread records ``web.run_started`` and
 ``web.run_finished`` (with the exit code) in the project's events.
+
+``POST /projects/<pid>/stop`` (same checks, D126) asks the running child to pause
+after its current step: it writes the project's stop request
+(``ProjectStore.request_stop``), which the Orchestrator honours between steps — no
+model call is interrupted and nothing is killed. The child then exits with code 12
+and the project is ``paused``; "Start run" or ``automa run <pid>`` resumes it. A stop
+is only accepted while this server's child is running; when the child ends, any
+request left over is removed (under the same lock), so it can never stop a later run.
 """
 
 from __future__ import annotations
@@ -45,12 +53,15 @@ from automa.tools.command import spawn_automa_run
 from automa.webui.actions import CONFIRM_VALUE, ActionRefused
 
 START_FIELDS = frozenset({"csrf", "confirm"})
+STOP_FIELDS = frozenset({"csrf"})
 RUNS_DIR = "web-runs"
 STARTED_EVENT = "web.run_started"
 FINISHED_EVENT = "web.run_finished"
+STOP_EVENT = "web.stop_requested"
 LOG_TAIL_BYTES = 8_192
 LOG_TAIL_LINES = 12
 _START_RE = re.compile(r"^/projects/([^/]+)/start$")
+_STOP_RE = re.compile(r"^/projects/([^/]+)/stop$")
 
 # Meaning of each ``automa run`` exit code (see the ``automa.cli`` docstring).
 EXIT_MEANINGS: Mapping[int, str] = {
@@ -63,6 +74,7 @@ EXIT_MEANINGS: Mapping[int, str] = {
     6: "finished, but some task failed for good",
     7: "paused: an approval is needed or another cause (see the log)",
     11: "not started: the cost range grew above confirm_above_usd; reload and confirm",
+    12: "stopped on request: the project is paused; start again to resume",
     130: "interrupted: the project is paused; start again to resume",
 }
 
@@ -120,9 +132,24 @@ def start_path(project_id: str) -> str:
     return "/projects/" + quote(project_id, safe="") + "/start"
 
 
+def stop_path(project_id: str) -> str:
+    from urllib.parse import quote
+
+    return "/projects/" + quote(project_id, safe="") + "/stop"
+
+
 def parse_start_path(path: str) -> str | None:
     """The project id of a ``/projects/<pid>/start`` path, else ``None``."""
-    m = _START_RE.fullmatch(path)
+    return _parse(_START_RE, path)
+
+
+def parse_stop_path(path: str) -> str | None:
+    """The project id of a ``/projects/<pid>/stop`` path, else ``None``."""
+    return _parse(_STOP_RE, path)
+
+
+def _parse(pattern: re.Pattern[str], path: str) -> str | None:
+    m = pattern.fullmatch(path)
     if m is None:
         return None
     try:
@@ -140,6 +167,7 @@ class RunState:
     confirmed: bool
     exit_code: int | None
     tail: tuple[str, ...] = ()
+    stop_requested: bool = False
 
     @property
     def running(self) -> bool:
@@ -148,6 +176,8 @@ class RunState:
     @property
     def summary(self) -> str:
         if self.exit_code is None:
+            if self.stop_requested:
+                return "stopping: the run pauses after its current step"
             return "running in the background"
         return f"ended with exit code {self.exit_code}: {exit_meaning(self.exit_code)}"
 
@@ -159,6 +189,7 @@ class _Run:
     log_path: Path
     confirmed: bool
     exit_code: int | None = None
+    stop_requested: bool = False
 
 
 def _now() -> datetime:
@@ -224,7 +255,39 @@ class BackgroundRuns:
             if run is None:
                 return None
             snapshot = (run.started_at, run.log_path, run.confirmed, run.exit_code)
-        return RunState(*snapshot, tail=read_tail(snapshot[1]))
+            stopping = run.stop_requested and run.exit_code is None
+        return RunState(*snapshot, tail=read_tail(snapshot[1]), stop_requested=stopping)
+
+    def can_stop(self, project_id: str) -> bool:
+        """Whether the stop button is shown (this server's child is still running)."""
+        with self._lock:
+            run = self._active(project_id)
+            return run is not None and not run.stop_requested
+
+    def stop(self, project_id: str, form: Mapping[str, str]) -> None:
+        """Ask the running child to pause after its current step (D126).
+
+        Raises :class:`ActionRefused` when no child of this server is running for
+        the project. Asking twice is harmless (the second time changes nothing).
+        """
+        if project_id not in self._store.list_ids():
+            raise ActionRefused(404, "no such project")
+        with self._lock:
+            run = self._active(project_id)
+            if run is None:
+                raise ActionRefused(
+                    409,
+                    f"no background run of project {project_id} is running here "
+                    "(a run started in a terminal is stopped there with Ctrl+C)",
+                )
+            if run.stop_requested:
+                return
+            try:
+                self._store.request_stop(project_id, via="web")
+            except (OSError, ProjectStoreError) as e:
+                raise ActionRefused(500, f"could not request the stop: {e}") from None
+            run.stop_requested = True
+        self._emit(project_id, STOP_EVENT, {"log": run.log_path.name})
 
     def can_start(self, project_id: str) -> bool:
         """Whether the start button is shown (planned, not running, not done)."""
@@ -303,6 +366,12 @@ class BackgroundRuns:
         code = run.process.wait()
         with self._lock:
             run.exit_code = code
+            if run.stop_requested:
+                # A request the child never saw (it ended first) must not stop a later run.
+                try:
+                    self._store.clear_stop_request(project_id)
+                except (OSError, ProjectStoreError):
+                    pass
         self._emit(project_id, FINISHED_EVENT, {"exit_code": code, "log": run.log_path.name})
 
     def _emit(self, project_id: str, kind: str, data: dict[str, object]) -> None:

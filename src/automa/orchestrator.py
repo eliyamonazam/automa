@@ -136,6 +136,7 @@ class StopReason(StrEnum):
     VERIFICATION = "verification"  # verifier produced no valid evaluation
     TOOL_LAYER = "tool_layer"  # the tool layer itself failed
     CONFIG = "config"  # e.g. no model configured for the task's tier
+    USER = "user"  # stop requested by the user between steps (web UI "Stop", D126)
 
 
 class RunReport(BaseModel):
@@ -313,7 +314,34 @@ class Orchestrator:
     # -- public ------------------------------------------------------------
 
     def run(self, project_id: str) -> RunReport:
-        """Drive ``project_id`` until done, failed or paused; resumable at any point."""
+        """Drive ``project_id`` until done, failed or paused; resumable at any point.
+
+        A stop request (``ProjectStore.request_stop``, D126) is honoured between
+        steps: the project is paused with reason ``user``. Whatever way the run
+        ends, the request is removed, so it never stops a later run.
+        """
+        try:
+            return self._run(project_id)
+        finally:
+            try:
+                self._store.clear_stop_request(project_id)
+            except Exception:  # noqa: BLE001, S110 - keep the run's own outcome
+                pass
+
+    def _stop_wanted(self, project_id: str) -> bool:
+        try:
+            return self._store.stop_requested(project_id)
+        except Exception:  # noqa: BLE001 - cannot tell: stopping is the safe side
+            return True
+
+    def _user_stop(self, task_id: str) -> _Stop:
+        return _Stop(
+            StopReason.USER,
+            "stopped on request after the current step; resume with automa run",
+            task_id,
+        )
+
+    def _run(self, project_id: str) -> RunReport:
         store = self._store
         store.load(project_id)  # ProjectNotFound if missing
         if not store.has_plan(project_id):
@@ -341,6 +369,8 @@ class Orchestrator:
                 task = self._next_task(plan, states)
                 if task is None:
                     return self._finish(project_id, plan, states, attempts_run)
+                if self._stop_wanted(project_id):
+                    raise self._user_stop(task.id)
                 attempts_run += self._step(project_id, plan, task, states[task.id])
             raise OrchestratorError("orchestrator made no progress (iteration cap reached)")
         except _Stop as stop:
@@ -377,7 +407,15 @@ class Orchestrator:
                     states = store.task_states(project_id)
                     busy = set(running.values())
                     taken = {tid: declared_paths(plan.task(tid)) for tid in busy}
-                    for task in self._ready_tasks(plan, states, busy):
+                    ready = self._ready_tasks(plan, states, busy)
+                    if (running or ready) and self._stop_wanted(project_id):
+                        # Stop scheduling; running tasks end after their current step.
+                        halt.set()
+                        first_stop = self._user_stop(
+                            next(iter(running.values()), None) or ready[0].id
+                        )
+                        ready = []
+                    for task in ready:
                         if len(running) >= self._settings.max_parallel:
                             break
                         other = _path_conflict(declared_paths(task), taken)
@@ -394,7 +432,7 @@ class Orchestrator:
                         running[fut] = task.id
                         taken[task.id] = declared_paths(task)
                         self._emit(project_id, "orchestrator.scheduled", {"task": task.id})
-                    if not running:
+                    if not running and first_stop is None:
                         return self._finish(project_id, plan, states, attempts_run)
                 if not running:
                     break
@@ -444,8 +482,8 @@ class Orchestrator:
         try:
             # Each step stores a result, a verdict or a terminal state (as in ``run``).
             for _ in range(2 * self._settings.max_attempts + 2):
-                if halt.is_set():
-                    return attempts
+                if halt.is_set() or self._stop_wanted(project_id):
+                    return attempts  # the scheduler turns a stop request into a pause
                 state = self._store.task_states(project_id)[task.id]
                 if state.status not in _UNFINISHED:
                     return attempts

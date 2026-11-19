@@ -75,9 +75,11 @@ from automa.webui.render import (
 )
 from automa.webui.runs import (
     START_FIELDS,
+    STOP_FIELDS,
     BackgroundRuns,
     RunPreflight,
     parse_start_path,
+    parse_stop_path,
 )
 from automa.webui.views import build_overview, build_project_view
 
@@ -281,6 +283,9 @@ class WebApp:
         start_pid = parse_start_path(parts.path) if not parts.query else None
         if self._runs is not None and start_pid is not None:
             return self._post_start(start_pid, headers, body)
+        stop_pid = parse_stop_path(parts.path) if not parts.query else None
+        if self._runs is not None and stop_pid is not None:
+            return self._post_stop(stop_pid, headers, body)
         action = parse_action_path(parts.path) if not parts.query else None
         if action is None:
             return self.error(404, "Not found")
@@ -331,6 +336,22 @@ class WebApp:
             return self.error(e.status, "Refused", e.message)
         return self._redirect(f"/projects/{quote(pid, safe='')}")
 
+    def _post_stop(self, pid: str, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
+        """``POST /projects/<pid>/stop`` (D126), after the same checks."""
+        if self._actions is None or self._runs is None:  # never reached
+            return self.error(404, "Not found")
+        lowered = self._single_headers(headers)
+        if isinstance(lowered, Response):
+            return lowered
+        try:
+            check_same_origin(lowered, self._actions)
+            form = parse_form(lowered, body, fields=STOP_FIELDS)
+            check_token(form, self._actions)
+            self._runs.stop(pid, form)
+        except ActionRefused as e:
+            return self.error(e.status, "Refused", e.message)
+        return self._redirect(f"/projects/{quote(pid, safe='')}")
+
     def _run_panel(self, pid: str) -> RunPanel | None:
         """The start button and last background run of a project page (D125)."""
         if self._runs is None:
@@ -343,6 +364,7 @@ class WebApp:
         return RunPanel(
             can_start=can_start,
             needs_confirm=needs,
+            can_stop=self._runs.can_stop(pid),
             state=state.summary,
             running=state.running,
             started_at=state.started_at,

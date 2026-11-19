@@ -61,6 +61,7 @@ PROJECT_FILE = "project.json"
 PLAN_FILE = "plan.json"
 CLARIFICATIONS_FILE = "clarifications.json"
 QUESTIONS_FILE = "questions.json"
+STOP_REQUEST_FILE = "stop-request.json"
 EVENTS_FILE = "events.jsonl"
 TASKS_DIR = "tasks"
 TASK_STATE_FILE = "state.json"
@@ -554,6 +555,44 @@ class ProjectStore:
             return list(PendingQuestions.model_validate(raw).questions)
         except ValidationError as e:
             raise ProjectStoreError(f"{path}: invalid questions file") from e
+
+    # -- stop request (web UI "Stop", D126) ---------------------------------
+
+    def stop_request_file(self, project_id: str) -> Path:
+        return self.project_dir(project_id) / STOP_REQUEST_FILE
+
+    def request_stop(self, project_id: str, *, via: str) -> bool:
+        """Ask a running ``automa run`` to pause after its current step (D126).
+
+        Writes ``stop-request.json`` (never through a symlink). Returns ``False``
+        when a request is already there. Only the Orchestrator acts on it, between
+        steps: no model call is ever interrupted.
+        """
+        self._require(project_id)
+        path = self.stop_request_file(project_id)
+        with self._lock:
+            if os.path.lexists(path):
+                return False
+            try:
+                _write_json_exclusive(path, {"requested_at": self._now().isoformat(), "via": via})
+            except ProjectConflict:  # another process was faster: one request is enough
+                return False
+        return True
+
+    def stop_requested(self, project_id: str) -> bool:
+        """Whether a stop was requested. Any entry counts, even a symlink or an
+        unreadable file: stopping is always the safe direction."""
+        return os.path.lexists(self.stop_request_file(project_id))
+
+    def clear_stop_request(self, project_id: str) -> bool:
+        """Remove the stop request (the link itself, never its target)."""
+        path = self.stop_request_file(project_id)
+        with self._lock:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                return False
+        return True
 
     # -- tasks (attempt history and state) ---------------------------------
 

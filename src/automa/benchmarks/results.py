@@ -55,6 +55,7 @@ class BenchmarkStop(StrEnum):
     VERIFICATION = "verification"
     TOOL_LAYER = "tool_layer"
     CONFIG = "config"
+    USER = "user"  # stopped on request (D126)
     PLANNING = "planning"  # the Executive gave no valid plan
 
 

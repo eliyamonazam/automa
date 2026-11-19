@@ -249,6 +249,7 @@ class RunPanel:
 
     can_start: bool
     needs_confirm: bool
+    can_stop: bool = False
     state: str | None = None
     running: bool = False
     started_at: datetime | None = None
@@ -268,6 +269,14 @@ def _run_panel(project_id: str, run: RunPanel, forms: ActionForms) -> str:
             parts.append("<pre>" + text("\n".join(run.tail)) + "</pre>")
         if run.running:
             parts.append("<p>Reload this page to see progress.</p>")
+        if run.can_stop:
+            stop = text(_project_href(project_id) + "/stop")
+            parts.append(
+                f'<form method="post" action="{stop}">{_hidden("csrf", forms.csrf_token)}'
+                '<p><button type="submit">Stop</button> pauses the run after its current '
+                "step (no model call is cut off); the start button or "
+                f"<code>automa run {text(project_id)}</code> resumes it.</p></form>"
+            )
     if run.can_start:
         action = text(_project_href(project_id) + "/start")
         confirm = (
