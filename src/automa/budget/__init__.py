@@ -1,5 +1,16 @@
 """Financial layer: cost ledger and budget guard. See docs/ARCHITECTURE.md."""
 
+from automa.budget.brake import (
+    BRAKE_CONTINUED,
+    BRAKE_STOP,
+    BrakeError,
+    TaskBrake,
+    TaskBrakeStop,
+    brake_continues,
+    brake_steps,
+    continue_task,
+    pending_brake,
+)
 from automa.budget.guard import (
     WARNING_THRESHOLDS_PCT,
     BudgetError,
@@ -18,6 +29,15 @@ from automa.budget.ledger import (
 )
 
 __all__ = [
+    "BRAKE_CONTINUED",
+    "BRAKE_STOP",
+    "BrakeError",
+    "TaskBrake",
+    "TaskBrakeStop",
+    "brake_continues",
+    "brake_steps",
+    "continue_task",
+    "pending_brake",
     "WARNING_THRESHOLDS_PCT",
     "NANO_PER_USD",
     "BudgetError",

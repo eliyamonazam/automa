@@ -516,4 +516,50 @@ def test_budget_guard_is_the_only_production_guard() -> None:
                 methods = {n.name for n in node.body if isinstance(n, ast.FunctionDef)}
                 if "authorize" in methods:
                     guards.append(f"{path.relative_to(SRC).as_posix()}:{node.name}")
-    assert guards == ["budget/guard.py:BudgetGuard"]
+    # The task brake (D153) is the only other one: a wrapper that can refuse more
+    # and always hands the call on to the BudgetGuard (checked below).
+    assert guards == ["budget/brake.py:TaskBrake", "budget/guard.py:BudgetGuard"]
+
+
+def _method(cls: ast.ClassDef, name: str) -> ast.FunctionDef:
+    return next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == name)
+
+
+def _calls_inner(stmt: ast.stmt, method: str) -> bool:
+    """``stmt`` is ``[return] self._inner.<method>(...)``."""
+    value = stmt.value if isinstance(stmt, (ast.Expr, ast.Return)) else None
+    return (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Attribute)
+        and value.func.attr == method
+        and isinstance(value.func.value, ast.Attribute)
+        and value.func.value.attr == "_inner"
+        and isinstance(value.func.value.value, ast.Name)
+        and value.func.value.value.id == "self"
+    )
+
+
+def test_task_brake_always_defers_to_the_inner_guard() -> None:
+    tree = ast.parse((SRC / "budget" / "brake.py").read_text(encoding="utf-8"))
+    cls = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "TaskBrake")
+    authorize = _method(cls, "authorize")
+    # No early return: the only way out without the inner guard is an exception.
+    assert not any(isinstance(n, ast.Return) for n in ast.walk(authorize))
+    assert _calls_inner(authorize.body[-1], "authorize")
+    for name in ("record", "release"):
+        body = _method(cls, name).body
+        assert len(body) == 1 and _calls_inner(body[0], name)
+
+
+def test_cli_run_wraps_a_budget_guard_in_the_brake() -> None:
+    tree = ast.parse((SRC / "cli.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "run")
+    calls = [
+        n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    ]
+    assert "BudgetGuard" in calls and "_task_brake" in calls
+    helper = next(
+        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_task_brake"
+    )
+    ann = next(a.annotation for a in helper.args.args if a.arg == "inner")
+    assert isinstance(ann, ast.Name) and ann.id == "BudgetGuard"

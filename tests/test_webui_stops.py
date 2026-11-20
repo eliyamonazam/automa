@@ -213,6 +213,7 @@ def test_daily_without_reset_is_generic_budget() -> None:
         ("verification", True, "bad", "دوباره امتحان"),
         ("tool_layer", True, "bad", "لایهٔ ابزارها"),
         ("config", False, "bad", "automa.toml"),
+        ("task_brake", False, "bad", "ترمز خرج"),
         ("other", False, "bad", "گزارش رو ببین"),
     ],
 )

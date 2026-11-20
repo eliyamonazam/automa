@@ -44,6 +44,7 @@ StopKind = Literal[
     "verification",
     "tool_layer",
     "config",
+    "task_brake",
     "other",
 ]
 StopTone = Literal["info", "bad"]
@@ -63,6 +64,7 @@ _REASON_KIND: Mapping[str, StopKind] = MappingProxyType(
         "verification": "verification",
         "tool_layer": "tool_layer",
         "config": "config",
+        "task_brake": "task_brake",
     }
 )
 # Matched against the lower-cased recorded provider error, never shown.
@@ -209,6 +211,13 @@ _RAW: dict[str, dict[Language, str]] = {
         "of task). Check automa.toml.",
         "fa": "متوقف شد: تنظیمات کامل نیست (مثلاً برای این نوع کار مدلی تعریف نشده)؛ "
         "automa.toml رو بررسی کن.",
+    },
+    "stop.task_brake": {
+        "en": "Paused by the spending brake: one step cost far more than estimated. "
+        "To allow one more step of the same size, run in the terminal: "
+        "automa brake continue <project> <task>",
+        "fa": "ترمز خرج متوقفش کرد: یک مرحله خیلی بیشتر از پیش‌بینی خرج کرد. اگه ادامه "
+        "می‌ارزه، در ترمینال بزن: automa brake continue <project> <task>",
     },
     "stop.other": {
         "en": "Paused (see the log).",

@@ -256,11 +256,17 @@ class CostLedger:
             ).fetchall()
         return [_row_to_entry(r) for r in rows]
 
-    def spent_nusd(self, *, project_id: str | None = None, day: date | None = None) -> int:
+    def spent_nusd(
+        self,
+        *,
+        project_id: str | None = None,
+        day: date | None = None,
+        task_id: str | None = None,
+    ) -> int:
         """Exact total spending in nano-USD for the given filters."""
         if self._empty:
             return 0
-        where, params = _filters(project_id, day)
+        where, params = _filters(project_id, day, task_id)
         with self._lock:
             (total,) = self._conn.execute(
                 f"SELECT COALESCE(SUM(cost_nusd), 0) FROM calls{where}",  # noqa: S608
@@ -279,9 +285,14 @@ class CostLedger:
         return nusd_to_usd(self.spent_nusd(day=day or self.today()))
 
 
-def _filters(project_id: str | None, day: date | None) -> tuple[str, tuple[str, ...]]:
+def _filters(
+    project_id: str | None, day: date | None, task_id: str | None = None
+) -> tuple[str, tuple[str, ...]]:
     clauses: list[str] = []
     params: list[str] = []
+    if task_id is not None:
+        clauses.append("task_id = ?")
+        params.append(task_id)
     if project_id is not None:
         clauses.append("project_id = ?")
         params.append(project_id)

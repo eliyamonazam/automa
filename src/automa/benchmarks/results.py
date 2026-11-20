@@ -56,6 +56,7 @@ class BenchmarkStop(StrEnum):
     TOOL_LAYER = "tool_layer"
     CONFIG = "config"
     USER = "user"  # stopped on request (D126)
+    TASK_BRAKE = "task_brake"  # task spending brake (D153)
     PLANNING = "planning"  # the Executive gave no valid plan
 
 

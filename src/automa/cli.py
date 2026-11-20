@@ -130,6 +130,14 @@ from automa.benchmarks import (
     scan_results,
     write_result,
 )
+from automa.budget.brake import (
+    BrakeError,
+    TaskBrake,
+    brake_continues,
+    brake_steps,
+    continue_task,
+    pending_brake,
+)
 from automa.budget.guard import BudgetError, BudgetExceeded, BudgetGuard, cap_to_nusd
 from automa.budget.ledger import (
     NANO_PER_USD,
@@ -331,6 +339,7 @@ RUN_EXIT_CODES: dict[StopReason, int] = {
     StopReason.VERIFICATION: EXIT_PAUSED,
     StopReason.TOOL_LAYER: EXIT_PAUSED,
     StopReason.USER: EXIT_STOPPED,
+    StopReason.TASK_BRAKE: EXIT_PAUSED,
 }
 
 LEDGER_FILENAME = "ledger.sqlite3"
@@ -346,6 +355,11 @@ _ALLOWED_FORMAT_CHARS = frozenset({"\u200c", "\u200d"})
 app = typer.Typer(help="Automa command-line interface.", no_args_is_help=True)
 bench_app = typer.Typer(help="Benchmark suite: list and run sample goals.", no_args_is_help=True)
 app.add_typer(bench_app, name="bench")
+brake_app = typer.Typer(
+    help="Task spending brake: go on after a task cost far more than estimated (D153).",
+    no_args_is_help=True,
+)
+app.add_typer(brake_app, name="brake")
 workflow_app = typer.Typer(
     help="Workflow templates: plans of finished projects, saved for reuse.",
     no_args_is_help=True,
@@ -1044,7 +1058,21 @@ def run(
         # Before the guard, the gateway and any model call (D121).
         _confirm_spend(config, events, pid, est.high_nusd, yes=yes)
         marks = _RunMarks.take(ledger, quality, pid)
-        guard = BudgetGuard(config.limits, ledger, events=events)
+        budget_guard = BudgetGuard(config.limits, ledger, events=events)
+        # The task spending brake (D153) only refuses more than the BudgetGuard.
+        guard = _task_brake(
+            config,
+            store,
+            pid,
+            roles,
+            settings,
+            stats,
+            router,
+            budget_guard,
+            ledger,
+            _quality_costs(quality) if stats is not None else None,
+        )
+        typer.echo(f"spending brake: {_describe_brake(guard, config)}")
         gateway = LLMGateway(config, provider, guard=guard)
         orchestrator = Orchestrator(
             store,
@@ -1082,6 +1110,103 @@ def run(
     for line in _report_lines(report):
         typer.echo(line)
     raise typer.Exit(RUN_EXIT_CODES[report.reason])
+
+
+def _task_brake(
+    config: AutomaConfig,
+    store: ProjectStore,
+    pid: str,
+    roles: RoleRegistry,
+    run_settings: OrchestratorSettings,
+    stats: list[QualityStats] | None,
+    router: Router | None,
+    inner: BudgetGuard,
+    ledger: CostLedger,
+    costs: dict[tuple[str, str], list[int]] | None,
+) -> TaskBrake:
+    """The task spending brake of ``automa run`` (D153).
+
+    Each task's step comes from a *fresh* estimate of the whole plan (as if no task
+    had run yet), so a resumed run brakes at the same place; when no estimate can
+    be made every task gets ``[limits] task_brake_min_usd`` (the brake never turns
+    off). Continues granted earlier are read from the project's events.
+    """
+    plan = store.load_plan(pid)
+    highs: dict[str, int] | None = None
+    if stats is not None:
+        try:
+            fresh = estimate_plan(
+                plan,
+                config,
+                roles,
+                stats,
+                settings=EstimateSettings.from_settings(run_settings),
+                router=router,
+                costs=costs,
+            )
+            highs = {t.task_id: t.range_high_nusd for t in fresh.tasks}
+        except (ConfigError, ValueError, KeyError):
+            highs = None
+    events = store.events(pid)
+    try:
+        recorded = events.read()
+    except (OSError, ValueError):
+        recorded = []
+    return TaskBrake(
+        inner,
+        ledger,
+        pid,
+        brake_steps([t.id for t in plan.tasks], config.limits, highs),
+        default_step_nusd=cap_to_nusd(config.limits.task_brake_min_usd),
+        continues=brake_continues(recorded),
+        events=events,
+    )
+
+
+def _describe_brake(brake: TaskBrake, config: AutomaConfig) -> str:
+    """The ``spending brake:`` line of ``automa run`` (D153)."""
+    lim = config.limits
+    return (
+        f"a task pauses once it costs more than max({lim.task_brake_factor:g} x the high "
+        f"end of its range, {_usd(cap_to_nusd(lim.task_brake_min_usd))}); allow one more "
+        "step with: automa brake continue <project> <task>"
+    )
+
+
+@brake_app.command("continue")
+def brake_continue(
+    project_id: Annotated[str, typer.Argument(help="Project paused by the brake.")],
+    task_id: Annotated[str, typer.Argument(help="Task the brake stopped.")],
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Allow a braked task one more step of spending of the same size (D153).
+
+    Only accepted while the task's latest brake stop has not been continued yet;
+    the BudgetGuard caps still apply. Then resume with: automa run <project>.
+    """
+    config = _load(config_path)
+    store = ProjectStore.for_workspace(config.workspace)
+    try:
+        project = store.load(project_id)
+        events = store.events(project.id)
+        recorded = events.read()
+    except ProjectStoreError as e:
+        raise _fail(str(e), EXIT_USER) from None
+    except (OSError, ValueError) as e:
+        raise _fail(f"cannot read the events of {project.id}: {_safe(str(e))}", EXIT_USER) from None
+    stop = pending_brake(recorded, task_id)
+    try:
+        event = continue_task(recorded, events, project.id, task_id, via="cli")
+    except BrakeError as e:
+        raise _fail(str(e), EXIT_USER) from None
+    step = stop.data.get("step_nusd") if stop is not None else None
+    size = f" of {_usd(step)}" if isinstance(step, int) else ""
+    typer.echo(
+        f"task {task_id}: one more step{size} allowed (now {event.data['steps']} step(s)); "
+        f"resume with: automa run {project.id}"
+    )
 
 
 def _describe_images(config: AutomaConfig) -> str:
@@ -1547,6 +1672,13 @@ def _report_lines(report: RunReport) -> list[str]:
                 f"next: automa approvals {report.project_id}, then "
                 f"automa approve {report.project_id} {report.approval_id} (or: automa reject "
                 f"{report.project_id} {report.approval_id}), then: automa run {report.project_id}"
+            )
+            return lines
+        if report.reason is StopReason.TASK_BRAKE and report.task_id:
+            lines.append(
+                f"next: if going on is worth it, allow one more step of the same size with: "
+                f"automa brake continue {report.project_id} {report.task_id}, then: "
+                f"automa run {report.project_id}"
             )
             return lines
         hint = _REASON_HINTS.get(report.reason)
