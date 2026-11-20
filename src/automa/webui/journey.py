@@ -78,6 +78,12 @@ _RAW: dict[str, dict[Language, str]] = {
         "en": "Paused after {done} of {total} steps. Press Start to continue.",
         "fa": "بعد از {done} مرحله از {total} متوقف شد. برای ادامه «شروع» رو بزن.",
     },
+    "now.budget": {
+        "en": "Paused: the project reached its spending cap. Raise project_usd in "
+        "automa.toml, then press Start to finish.",
+        "fa": "متوقف شد: خرج پروژه به سقفش رسید. در automa.toml مقدار project_usd رو "
+        "بیشتر کن و بعد «شروع» رو بزن تا تموم بشه.",
+    },
     "now.done": {
         "en": "Done! The result is in Files.",
         "fa": "تموم شد! نتیجه توی «فایل‌ها»ست.",
@@ -147,6 +153,7 @@ def build_journey(
     lang: Language = "en",
     questions_waiting: bool = False,
     running: bool = False,
+    budget_stop: bool = False,
 ) -> Journey:
     """The steps, percentage and "now" sentence of ``view``.
 
@@ -169,6 +176,10 @@ def build_journey(
         )
         steps[1] = Step(steps[1].name, "done")
     tasks = [Step(r.title or r.id, _task_state(r.state), r.id) for r in view.tasks]
+    if not running and status != "running":
+        # Nothing is working on it: a task left "running"/"verifying" by a stop is
+        # waiting, not in progress (seen live after a budget stop).
+        tasks = [Step(t.name, "todo", t.task_id) if t.state == "now" else t for t in tasks]
     if running and tasks and not any(s.state in ("now", "fail") for s in tasks):
         first = next((i for i, s in enumerate(tasks) if s.state == "todo"), None)
         if first is not None:
@@ -197,6 +208,8 @@ def build_journey(
             else jt("now.failed_plain", lang)
         )
         tone = "bad"
+    elif budget_stop:
+        now, tone = jt("now.budget", lang), "bad"
     elif not has_plan:
         now, tone = jt("now.planning", lang), "busy"
     elif current is not None and (running or status == "running"):

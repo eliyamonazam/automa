@@ -469,6 +469,7 @@ class WebApp:
             started_at=state.started_at,
             log_name=state.log_path.name,
             tail=state.tail,
+            exit_code=state.exit_code,
         )
 
     def _single_headers(self, headers: Sequence[tuple[str, str]]) -> dict[str, str] | Response:

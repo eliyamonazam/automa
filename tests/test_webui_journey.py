@@ -183,3 +183,20 @@ def test_events_are_folded_into_technical_details() -> None:
     ev = (pg.EventLine(ts=T0, type="plan.saved", summary=""),)
     doc = rd.render_project(_view(), progress=pg.ProgressView(events=ev))
     assert doc.index("<details><summary>Technical details</summary>") < doc.index("plan.saved")
+
+
+def test_budget_stop_says_why_and_what_to_do() -> None:
+    view = _view("paused", states=("verifying",))
+    j = jy.build_journey(view, lang="fa", budget_stop=True)
+    assert j.tone == "bad" and "سقف" in j.now and "project_usd" in j.now
+    assert _states(j)[3] == "todo"  # stopped, so not shown as in progress
+
+
+def test_budget_stop_from_run_exit_code() -> None:
+    from automa.webui.render import RunPanel
+
+    run = RunPanel(can_start=True, needs_confirm=False, state="ended", exit_code=3)
+    doc = rd.render_project(_view("paused", states=("verifying",)), run=run)
+    assert "reached its spending cap" in doc
+    other = RunPanel(can_start=True, needs_confirm=False, state="ended", exit_code=12)
+    assert "spending cap" not in rd.render_project(_view("paused", states=(None,)), run=other)

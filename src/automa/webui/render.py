@@ -421,7 +421,13 @@ def render_project(
     events and, while running, a self-refresh of the page; ``rate`` (toman per USD)
     shows every amount first in rounded toman with dollars in parentheses (D133)."""
     running = run is not None and run.running
-    journey = build_journey(view, lang=lang, questions_waiting=questions_waiting, running=running)
+    journey = build_journey(
+        view,
+        lang=lang,
+        questions_waiting=questions_waiting,
+        running=running,
+        budget_stop=run is not None and not running and run.exit_code == 3,
+    )
     back = text(jt("nav.back", lang))
     parts = [f'<p><a href="/">{back}</a></p>']
     if notice:
@@ -644,6 +650,7 @@ class RunPanel:
     started_at: datetime | None = None
     log_name: str | None = None
     tail: tuple[str, ...] = ()
+    exit_code: int | None = None
 
 
 def _run_panel(project_id: str, run: RunPanel, forms: ActionForms) -> str:
