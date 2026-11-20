@@ -13,6 +13,7 @@ from __future__ import annotations
 import html
 import json
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from urllib.parse import quote
@@ -28,7 +29,15 @@ from automa.plan.models import MAX_ANSWER_CHARS
 from automa.project.store import MAX_GOAL_CHARS
 from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.webui.files import FileContent, FileListing, FilesRoute, files_href
-from automa.webui.i18n import MESSAGES, WELCOME_EXAMPLE_KEYS, status_label, t
+from automa.webui.i18n import (
+    MESSAGES,
+    WELCOME_EXAMPLE_KEYS,
+    exit_label,
+    localize_number,
+    status_label,
+    t,
+    task_state_label,
+)
 from automa.webui.ideas import ASK_VALUE
 from automa.webui.journey import MESSAGES as JOURNEY_MESSAGES
 from automa.webui.journey import Journey, build_journey, jt
@@ -362,39 +371,62 @@ def _hidden(name: str, value: str) -> str:
     return f'<input type="hidden" name="{name}" value="{text(value)}">'
 
 
-def _decision_forms(project_id: str, a: ApprovalView, forms: ActionForms) -> str:
+def _decision_forms(
+    project_id: str, a: ApprovalView, forms: ActionForms, lang: Language = "en"
+) -> str:
     def action(kind: str) -> str:
         path = f"/projects/{quote(project_id, safe='')}/approvals/{quote(a.id, safe='')}/{kind}"
         return text(path)
 
     common = _hidden("csrf", forms.csrf_token) + _hidden("fingerprint", a.fingerprint)
-    note = f'<label>note <input name="note" maxlength="{MAX_NOTE_CHARS}" dir="auto"></label> '
+    label = text(t("approval.note", lang))
+    note = f'<label>{label} <input name="note" maxlength="{MAX_NOTE_CHARS}" dir="auto"></label> '
+    confirm = text(t("approval.confirm", lang, tool=a.tool))
     return (
         f'<form method="post" action="{action("approve")}">{common}'
         '<p><label><input type="checkbox" name="confirm" value="yes" required> '
-        f"I reviewed the full arguments above: run {text(a.tool)} once with exactly "
-        "these arguments</label></p>"
-        f'<p>{note}<button type="submit">Approve</button></p></form>'
+        f"{confirm}</label></p>"
+        f'<p>{note}<button type="submit">{text(t("approval.approve", lang))}</button></p></form>'
         f'<form method="post" action="{action("reject")}">{common}'
-        f'<p>{note}<button type="submit">Reject</button></p></form>'
+        f'<p>{note}<button type="submit">{text(t("approval.reject", lang))}</button></p></form>'
     )
 
 
-def _approval(project_id: str, a: ApprovalView, forms: ActionForms | None) -> str:
+When = Callable[[datetime], str]
+
+
+def _when_fn(lang: Language, tz: tzinfo | None, now: datetime | None) -> When:
+    """Plain time text (escaped by the caller): a relative local time when ``now`` is
+    given (D144), else the recorded ISO time."""
+    return lambda value: _when(value, lang, tz, now)
+
+
+def _iso(value: datetime) -> str:
+    return value.isoformat(timespec="seconds")
+
+
+def _approval(
+    project_id: str,
+    a: ApprovalView,
+    forms: ActionForms | None,
+    lang: Language = "en",
+    when: When = _iso,
+) -> str:
     args = json.dumps(a.arguments, ensure_ascii=False, indent=2, sort_keys=True, default=str)
     lines = "".join(f'<li dir="auto">{text(line)}</li>' for line in a.request_lines)
     warns = "".join(f'<li class="warn" dir="auto">{text(w)}</li>' for w in a.warnings)
     target = f"<ul>{lines}{warns}</ul>" if lines or warns else ""
     if forms is None:
-        decide = "<p>This page is read-only: decide in the terminal.</p>"
+        decide = f"<p>{text(t('approval.readonly', lang))}</p>"
     else:
-        decide = _decision_forms(project_id, a, forms)
+        decide = _decision_forms(project_id, a, forms, lang)
+    meta = text(t("approval.task", lang, task=a.task_id or "-", when=when(a.created_at)))
     return (
         f'<article class="card"><h3>{text(a.id)} — {text(a.tool)} '
         f'<span class="badge">{text(a.risk)}</span></h3>'
-        f"<p>task: {text(a.task_id or '-')} · requested {_time(a.created_at)}</p>"
-        f'<p>reason: <span dir="auto">{text(a.reason)}</span></p>{target}'
-        f'<pre dir="ltr">{text(args)}</pre>{decide}'
+        f"<p>{meta}</p>"
+        f'<p>{text(t("approval.reason", lang))} <span dir="auto">{text(a.reason)}</span></p>'
+        f'{target}<pre dir="ltr">{text(args)}</pre>{decide}'
         "</article>"
     )
 
@@ -411,6 +443,8 @@ def render_project(
     rate: float | None = None,
     task_costs: dict[str, float] | None = None,
     lang: Language = "en",
+    tz: tzinfo | None = None,
+    now: datetime | None = None,
 ) -> str:
     """One project page. ``forms`` (action mode only) adds approve/reject forms;
     ``notice`` is a one-line result of the last decision, shown at the top;
@@ -419,7 +453,10 @@ def render_project(
     background runs, D125) adds the start button and the last background run;
     ``progress`` (D127) adds tasks passed, cost so far against the range, the latest
     events and, while running, a self-refresh of the page; ``rate`` (toman per USD)
-    shows every amount first in rounded toman with dollars in parentheses (D133)."""
+    shows every amount first in rounded toman with dollars in parentheses (D133);
+    ``lang`` translates the whole page and, with ``now``, times are relative local
+    times in ``tz`` (D144)."""
+    when = _when_fn(lang, tz, now)
     running = run is not None and run.running
     journey = build_journey(
         view,
@@ -433,43 +470,49 @@ def render_project(
     if notice:
         parts.append(f'<p class="badge" dir="auto">{text(notice)}</p>')
     parts.append(_hero_and_journey(view, journey, lang))
+    times = t("project.times", lang, created=when(view.created_at), updated=when(view.updated_at))
     parts += [
         '<section class="card">',
-        '<p class="meta"><strong>Goal:</strong></p>',
+        f'<p class="meta"><strong>{text(t("project.goal", lang))}</strong></p>',
         f'<p class="goal" dir="auto">{text(view.goal)}</p>',
-        f'<p class="meta">status: <span class="badge">{text(view.status)}</span> · '
-        f"created {_time(view.created_at)} · updated {_time(view.updated_at)}</p>",
+        f'<p class="meta">{text(t("project.status", lang))} '
+        f'<span class="badge">{text(status_label(view.status, lang))}</span> · '
+        f"{text(times)}</p>",
         _cost_card(view, progress, task_costs or {}, rate, lang),
-        f'<p><a href="{text(_project_href(view.id) + "/files")}">Files</a></p>',
+        f'<p><a href="{text(_project_href(view.id) + "/files")}">'
+        f"{text(t('project.files', lang))}</a></p>",
     ]
     if questions_waiting and forms is not None:
         href = text(_project_href(view.id) + "/clarify")
         parts.append(
-            f'<p class="warn">The Executive has questions: <a href="{href}">answer them</a> '
-            "to make the plan.</p>"
+            f'<p class="warn">{text(t("project.questions.before", lang))} '
+            f'<a href="{href}">{text(t("project.questions.link", lang))}</a> '
+            f"{text(t('project.questions.after', lang))}</p>"
         )
     if cost_range is not None:
-        parts.append(f"<p><strong>Cost range:</strong> {text(cost_range)}</p>")
+        parts.append(
+            f"<p><strong>{text(t('project.cost_range', lang))}</strong> "
+            f'<span dir="auto">{text(cost_range)}</span></p>'
+        )
     parts.append("</section>")
     if progress is not None:
-        parts.append(_progress(progress, rate))
+        parts.append(_progress(progress, rate, lang, when))
     if run is not None and forms is not None:
-        parts.append(_run_panel(view.id, run, forms))
-    parts.append(f"<h2>Pending approvals ({len(view.pending)})</h2>")
+        parts.append(_run_panel(view.id, run, forms, lang, when))
+    count = len(view.pending)
+    parts.append(f"<h2>{text(t('approvals.heading', lang, count=count))}</h2>")
     if view.pending:
-        parts.append("".join(_approval(view.id, a, forms) for a in view.pending))
+        parts.append("".join(_approval(view.id, a, forms, lang, when) for a in view.pending))
     else:
-        parts.append("<p>None.</p>")
+        parts.append(f"<p>{text(t('approvals.none', lang))}</p>")
     if view.plan_version is None:
-        parts.append("<h2>Plan</h2><p>No plan.</p>")
+        parts.append(f"<h2>{text(t('plan.heading', lang))}</h2><p>{text(t('plan.none', lang))}</p>")
     else:
-        cards = "".join(_task_card(t) for t in view.tasks)
-        parts.append(
-            f"<h2>Plan v{view.plan_version} ({len(view.tasks)} tasks)</h2>"
-            f'<div class="cards">{cards}</div>'
-        )
+        cards = "".join(_task_card(task, lang) for task in view.tasks)
+        heading = t("plan.version", lang, version=view.plan_version, count=len(view.tasks))
+        parts.append(f'<h2>{text(heading)}</h2><div class="cards">{cards}</div>')
     errors = view.errors + (progress.errors if progress is not None else ())
-    parts.append(_errors(errors))
+    parts.append(_errors(errors, lang))
     refresh = REFRESH_SECONDS if progress is not None and progress.live else None
     title = f"Automa — {project_title(view.goal) or view.id}"
     return page(title, "".join(parts), actions=forms is not None, refresh=refresh, lang=lang)
@@ -522,21 +565,26 @@ def _state_class(state: str | None) -> str:
     return state if state in _STATE_CLASSES else "none"
 
 
-def _task_card(t: TaskRow) -> str:
+def _task_card(task: TaskRow, lang: Language = "en") -> str:
     """One task of the plan as a card (D129): the title in its own direction, the
-    state as a fixed class and the rest as labelled chips."""
-    state = _state_class(t.state)
+    state as a fixed class and the rest as labelled chips (translated, D144)."""
+    state = _state_class(task.state)
+    order = localize_digits(str(task.order), lang)
+    after = ", ".join(task.depends_on) or "-"
+    # The latest attempt's status uses the task-state words (unknown: as recorded).
+    last = task_state_label(task.last_result, lang) if task.last_result else "-"
     return (
         f'<article class="card task t-{state}">'
-        f'<h3><span class="badge">#{t.order}</span> <code>{text(t.id)}</code> '
-        f'<span class="badge st-{state}">{text(t.state or "not started")}</span></h3>'
-        f'<p class="goal" dir="auto">{text(t.title)}</p>'
+        f'<h3><span class="badge">#{text(order)}</span> <code>{text(task.id)}</code> '
+        f'<span class="badge st-{state}">{text(task_state_label(task.state, lang))}</span></h3>'
+        f'<p class="goal" dir="auto">{text(task.title)}</p>'
         '<p class="chips">'
-        f"<span>Role: {text(t.role)}</span>"
-        f"<span>After: {text(', '.join(t.depends_on) or '-')}</span>"
-        f"<span>Attempts: {t.attempts}</span>"
-        f'<span>Last result: <span dir="auto">{text(t.last_result or "-")}</span></span>'
-        f"<span>Model: {text(t.model or '-')}</span></p></article>"
+        f"<span>{text(t('task.role', lang, role=task.role))}</span>"
+        f'<span dir="auto">{text(t("task.after", lang, after=after))}</span>'
+        f"<span>{text(t('task.attempts', lang, count=task.attempts))}</span>"
+        f"<span>{text(t('task.last', lang))} "
+        f'<span dir="auto">{text(last)}</span></span>'
+        f"<span>{text(t('task.model', lang, model=task.model or '-'))}</span></p></article>"
     )
 
 
@@ -585,45 +633,54 @@ def _cost_card(
     return "".join(parts)
 
 
-def _progress(p: ProgressView, rate: float | None = None) -> str:
+def _progress(
+    p: ProgressView, rate: float | None = None, lang: Language = "en", when: When = _iso
+) -> str:
     """Tasks passed, the latest run's cost against its range and the latest events (D127)."""
+    passed = localize_digits(f"{p.passed} / {p.total}", lang)
     parts = [
-        '<section class="card"><h2>Progress</h2>',
-        f"<p>tasks passed: <strong>{p.passed} / {p.total}</strong>",
+        f'<section class="card"><h2>{text(t("progress.heading", lang))}</h2>',
+        f"<p>{text(t('progress.passed', lang))} <strong>{text(passed)}</strong>",
     ]
     if p.total:
         parts.append(f' <meter min="0" max="{p.total}" value="{p.passed}"></meter>')
     parts.append("</p>")
     if p.unusual is not None:
-        parts.append(_unusual_line(p.unusual, rate))
+        parts.append(_unusual_line(p.unusual, rate, lang))
     if p.live:
-        parts.append(f'<p class="badge">running: this page refreshes every {REFRESH_SECONDS} s</p>')
+        live = t("progress.live", lang, seconds=REFRESH_SECONDS)
+        parts.append(f'<p class="badge">{text(live)}</p>')
     if p.events:
         rows = "".join(
-            f"<tr><td>{_time(e.ts)}</td><td>{text(e.type)}</td>"
+            f"<tr><td>{text(when(e.ts))}</td><td>{text(e.type)}</td>"
             f'<td dir="auto">{text(e.summary or "-")}</td></tr>'
             for e in p.events
         )
+        events = t("tech.events", lang, count=len(p.events))
         parts.append(
-            "<details><summary>Technical details</summary>"
-            f"<h3>Latest events ({len(p.events)}, newest first)</h3>"
-            '<div class="scroll"><table><thead><tr><th>Time</th><th>Event</th>'
-            f"<th>Details</th></tr></thead><tbody>{rows}</tbody></table></div></details>"
+            f"<details><summary>{text(t('tech.summary', lang))}</summary>"
+            f"<h3>{text(events)}</h3>"
+            f'<div class="scroll"><table><thead><tr><th>{text(t("tech.time", lang))}</th>'
+            f"<th>{text(t('tech.event', lang))}</th><th>{text(t('tech.details', lang))}</th>"
+            f"</tr></thead><tbody>{rows}</tbody></table></div></details>"
         )
     parts.append("</section>")
     return "".join(parts)
 
 
-def _unusual_line(u: UnusualSpending, rate: float | None = None) -> str:
+def _unusual_line(u: UnusualSpending, rate: float | None = None, lang: Language = "en") -> str:
     """At most one line about unusual spending (D132): how many and the largest."""
     # A flagged sample is a model call or a judged attempt: both are "steps" here.
-    what = "1 step cost" if u.count == 1 else f"{u.count} steps cost"
-    times = f", {u.ratio:.1f}× the usual cost" if u.ratio is not None else ""
-    return (
-        f'<p class="warn">Unusual spending: {what} much more than usual this run '
-        f"(largest {text(money(u.largest_usd, rate))}{times}). "
-        "Advisory only: nothing was stopped.</p>"
+    what = t("unusual.one", lang) if u.count == 1 else t("unusual.many", lang, count=u.count)
+    times = (
+        t("unusual.times", lang, ratio=localize_number(f"{u.ratio:.1f}", lang))
+        if u.ratio is not None
+        else ""
     )
+    line = t(
+        "unusual.line", lang, what=what, amount=money(u.largest_usd, rate, lang=lang), times=times
+    )
+    return f'<p class="warn">{text(line)}</p>'
 
 
 def _range_meter(c: CostProgress) -> str:
@@ -651,52 +708,80 @@ class RunPanel:
     log_name: str | None = None
     tail: tuple[str, ...] = ()
     exit_code: int | None = None
+    stopping: bool = False
 
 
-def _run_panel(project_id: str, run: RunPanel, forms: ActionForms) -> str:
-    parts = ['<section class="card"><h2>Run</h2>']
+def _run_state(run: RunPanel, lang: Language) -> str:
+    """The background run's state line: as recorded in English, translated from its
+    structured fields otherwise (D144)."""
+    if lang == "en" or run.state is None:
+        return run.state or ""
+    if run.running:
+        return t("run.state.stopping" if run.stopping else "run.state.running", lang)
+    if run.exit_code is None:
+        return run.state
+    meaning = exit_label(run.exit_code, lang)
+    return t("run.state.ended", lang, code=run.exit_code, meaning=meaning)
+
+
+def _run_panel(
+    project_id: str,
+    run: RunPanel,
+    forms: ActionForms,
+    lang: Language = "en",
+    when: When = _iso,
+) -> str:
+    parts = [f'<section class="card"><h2>{text(t("run.heading", lang))}</h2>']
     if run.state is not None:
-        when = f" (started {_time(run.started_at)})" if run.started_at is not None else ""
+        started = (
+            " " + text(t("run.started", lang, when=when(run.started_at)))
+            if run.started_at is not None
+            else ""
+        )
         cls = "badge warn" if run.running else "badge"
-        parts.append(f'<p>Background run{when}: <span class="{cls}">{text(run.state)}</span></p>')
+        parts.append(
+            f"<p>{text(t('run.label', lang))}{started}: "
+            f'<span class="{cls}" dir="auto">{text(_run_state(run, lang))}</span></p>'
+        )
         if run.log_name or run.tail:
-            parts.append(_technical_log(run))
+            parts.append(_technical_log(run, lang))
         if run.running:
-            parts.append("<p>The page refreshes itself while the run is going.</p>")
+            parts.append(f"<p>{text(t('run.refreshing', lang))}</p>")
         if run.can_stop:
             stop = text(_project_href(project_id) + "/stop")
             parts.append(
                 f'<form method="post" action="{stop}">{_hidden("csrf", forms.csrf_token)}'
-                '<p><button type="submit">Stop</button> pauses the run after its current '
-                "step (no model call is cut off); the start button resumes it.</p></form>"
+                f'<p><button type="submit">{text(t("run.stop.button", lang))}</button> '
+                f"{text(t('run.stop.help', lang))}</p></form>"
             )
     if run.can_start:
         action = text(_project_href(project_id) + "/start")
         confirm = (
             '<p><label><input type="checkbox" name="confirm" value="yes" required> '
-            "I saw the cost range above and accept it (it is above confirm_above_usd)"
-            "</label></p>"
+            f"{text(t('run.confirm', lang))}</label></p>"
             if run.needs_confirm
             else ""
         )
         parts.append(
             f'<form method="post" action="{action}">{_hidden("csrf", forms.csrf_token)}'
-            f'{confirm}<p><button type="submit">Start run</button> runs the plan in the '
-            "background with the same budget guard and caps; every model call is "
-            "counted.</p></form>"
+            f'{confirm}<p><button type="submit">{text(t("run.start.button", lang))}</button> '
+            f"{text(t('run.start.help', lang))}</p></form>"
         )
     elif run.state is None:
-        parts.append("<p>Not startable now (no plan, already running or done).</p>")
+        parts.append(f"<p>{text(t('run.not_startable', lang))}</p>")
     parts.append("</section>")
     return "".join(parts)
 
 
-def _technical_log(run: RunPanel) -> str:
+def _technical_log(run: RunPanel, lang: Language = "en") -> str:
     """The raw run log, folded away (D131): it is the terminal output of the run (with
     its command hints), useful only when something went wrong."""
-    parts = ['<details class="tech"><summary>Technical details (run log)</summary>']
+    parts = [f'<details class="tech"><summary>{text(t("run.log.summary", lang))}</summary>']
     if run.log_name:
-        parts.append(f"<p>log file: <code>web-runs/{text(run.log_name)}</code></p>")
+        parts.append(
+            f"<p>{text(t('run.log.file', lang))} "
+            f'<code dir="ltr">web-runs/{text(run.log_name)}</code></p>'
+        )
     if run.tail:
         parts.append('<pre dir="auto">' + text("\n".join(run.tail)) + "</pre>")
     parts.append("</details>")

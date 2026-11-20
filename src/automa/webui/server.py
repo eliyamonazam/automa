@@ -470,6 +470,7 @@ class WebApp:
             log_name=state.log_path.name,
             tail=state.tail,
             exit_code=state.exit_code,
+            stopping=state.stop_requested,
         )
 
     def _single_headers(self, headers: Sequence[tuple[str, str]]) -> dict[str, str] | Response:
@@ -675,6 +676,8 @@ class WebApp:
                 rate=self._rate,
                 task_costs=_task_costs(own),
                 lang=self._lang,
+                tz=self._tz,
+                now=self._clock(),
             )
             return _html(200, document, security=self._security)
         return self.error(404, "Not found")
