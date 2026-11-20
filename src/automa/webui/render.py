@@ -788,60 +788,67 @@ def _technical_log(run: RunPanel, lang: Language = "en") -> str:
     return "".join(parts)
 
 
-def render_new_idea(forms: ActionForms) -> str:
+def render_new_idea(forms: ActionForms, lang: Language = "en") -> str:
     """The "New idea" form (D124): the goal and whether to ask questions first."""
     body = (
-        '<p><a href="/">← all projects</a></p><h1>New idea</h1>'
-        "<p>The Executive may ask a few questions, then makes a plan with a cost range. "
-        "Nothing is run yet. Each step is a model call through the budget guard and may "
-        "take a minute.</p>"
+        f'<p><a href="/">{text(jt("nav.back", lang))}</a></p>'
+        f"<h1>{text(t('idea.heading', lang))}</h1>"
+        f"<p>{text(t('idea.intro', lang))}</p>"
         f'<form class="card" method="post" action="/new">{_hidden("csrf", forms.csrf_token)}'
         f'<p><textarea name="goal" rows="8" cols="80" maxlength="{MAX_GOAL_CHARS}" '
-        'dir="auto" required placeholder="What should the project achieve?"></textarea></p>'
+        f'dir="auto" required placeholder="{text(t("idea.placeholder", lang))}"></textarea></p>'
         f'<p><label><input type="checkbox" name="ask" value="{ASK_VALUE}" checked> '
-        "Ask clarifying questions first</label></p>"
-        '<p><button type="submit">Create plan</button></p></form>'
+        f"{text(t('idea.ask', lang))}</label></p>"
+        f'<p><button type="submit">{text(t("idea.submit", lang))}</button></p></form>'
     )
-    return page("Automa — new idea", body, actions=True)
+    return page(t("idea.title", lang), body, actions=True, lang=lang)
 
 
-def render_thinking(project_id: str, phase: str, elapsed_s: int) -> str:
+def _project_id_html(project_id: str, lang: Language) -> str:
+    """A project id inside Persian text is recorded Latin data: kept left-to-right."""
+    return text(project_id) if lang == "en" else f'<code dir="ltr">{text(project_id)}</code>'
+
+
+def render_thinking(project_id: str, phase: str, elapsed_s: int, lang: Language = "en") -> str:
     """The self-refreshing page shown while the Executive works (D137)."""
-    what = (
-        "is reading your idea and deciding whether to ask a few questions"
-        if phase == "questions"
-        else "is making the plan and the cost estimate"
-    )
+    what = "thinking.questions" if phase == "questions" else "thinking.plan"
+    elapsed = t("thinking.elapsed", lang, seconds=max(0, elapsed_s))
     body = (
-        '<p><a href="/">← all projects</a></p>'
-        '<div class="card"><h1>⏳ Thinking…</h1>'
-        f"<p>The Executive {text(what)}. This usually takes under a minute; this page "
-        "refreshes by itself and moves on when it is done.</p>"
-        f'<p class="muted">{text(str(max(0, elapsed_s)))} s so far · project '
-        f"{text(project_id)}</p></div>"
+        f'<p><a href="/">{text(jt("nav.back", lang))}</a></p>'
+        f'<div class="card"><h1>{text(t("thinking.heading", lang))}</h1>'
+        f"<p>{text(t(what, lang))}</p>"
+        f'<p class="muted">{text(elapsed)} {_project_id_html(project_id, lang)}</p></div>'
     )
-    return page("Automa — thinking", body, actions=True, refresh=3)
+    return page(t("thinking.title", lang), body, actions=True, refresh=3, lang=lang)
 
 
-def render_clarify(project_id: str, goal: str, questions: list[str], forms: ActionForms) -> str:
+def render_clarify(
+    project_id: str,
+    goal: str,
+    questions: list[str],
+    forms: ActionForms,
+    lang: Language = "en",
+) -> str:
     """One answer field per stored question (questions are model output: escaped)."""
     fields = "".join(
-        f'<p dir="auto"><label>{i + 1}. {text(q)}<br>'
+        f'<p dir="auto"><label>{text(localize_digits(str(i + 1), lang))}. {text(q)}<br>'
         f'<textarea name="a{i}" rows="3" cols="80" maxlength="{MAX_ANSWER_CHARS}" '
         'dir="auto"></textarea></label></p>'
         for i, q in enumerate(questions)
     )
     action = text(_project_href(project_id) + "/clarify")
+    pid = _project_id_html(project_id, lang)
+    back = f"← {pid}" if lang == "en" else f"→ {pid}"
     body = (
-        f'<p><a href="{text(_project_href(project_id))}">← {text(project_id)}</a></p>'
-        f"<h1>Questions for {text(project_id)}</h1>"
-        '<p class="meta"><strong>Goal:</strong></p>'
+        f'<p><a href="{text(_project_href(project_id))}">{back}</a></p>'
+        f"<h1>{text(t('clarify.heading', lang))} {pid}</h1>"
+        f'<p class="meta"><strong>{text(t("clarify.goal", lang))}</strong></p>'
         f'<p class="goal" dir="auto">{text(goal)}</p>'
-        "<p>Leave an answer empty to skip it. The plan is made after you send.</p>"
+        f"<p>{text(t('clarify.intro', lang))}</p>"
         f'<form class="card" method="post" action="{action}">{_hidden("csrf", forms.csrf_token)}'
-        f'{fields}<p><button type="submit">Send answers and make the plan</button></p></form>'
+        f'{fields}<p><button type="submit">{text(t("clarify.submit", lang))}</button></p></form>'
     )
-    return page(f"Automa — {project_id} questions", body, actions=True)
+    return page(t("clarify.title", lang, project=project_id), body, actions=True, lang=lang)
 
 
 def _size_text(size: int) -> str:

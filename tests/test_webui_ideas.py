@@ -96,7 +96,9 @@ class FakePlanner:
 
 
 class Env:
-    def __init__(self, root: Path, *, planner: bool = True, actions: bool = True) -> None:
+    def __init__(
+        self, root: Path, *, planner: bool = True, actions: bool = True, language: str = "en"
+    ) -> None:
         self.root = root
         self.store = ProjectStore.for_workspace(root)
         self.planner = FakePlanner(self.store)
@@ -107,6 +109,7 @@ class Env:
             hosts,
             actions=_settings() if actions else None,
             planner=self.planner if planner else None,
+            language=language,  # type: ignore[arg-type]
         )
 
     def get(self, path: str) -> ws.Response:

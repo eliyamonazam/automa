@@ -577,7 +577,7 @@ class WebApp:
         if job.done:
             return self.error(409, "The Executive could not finish", job.error or "unknown error")
         elapsed = int(time.monotonic() - job.started)
-        document = render_thinking(pid, job.phase, elapsed)
+        document = render_thinking(pid, job.phase, elapsed, self._lang)
         return _html(200, document, security=self._security)
 
     def _preview(self, pid: str, path: str) -> Response:
@@ -629,7 +629,7 @@ class WebApp:
             if thinking_pid is not None:
                 return self._thinking(thinking_pid)
             if path == NEW_PATH:
-                return _html(200, render_new_idea(forms), security=self._security)
+                return _html(200, render_new_idea(forms, self._lang), security=self._security)
             clarify_pid = parse_clarify_path(path)
             if clarify_pid is not None:
                 try:
@@ -639,7 +639,7 @@ class WebApp:
                     return self.error(e.status, "Not available", e.message)
                 except ProjectStoreError as e:
                     return self.error(500, "Project unreadable", str(e))
-                document = render_clarify(clarify_pid, goal, questions, forms)
+                document = render_clarify(clarify_pid, goal, questions, forms, self._lang)
                 return _html(200, document, security=self._security)
         if path.startswith(_PROJECT_PREFIX):
             raw = unquote(path[len(_PROJECT_PREFIX) :])

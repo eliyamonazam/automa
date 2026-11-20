@@ -254,6 +254,69 @@ _RAW: dict[str, dict[Language, str]] = {
         "en": "interrupted: the project is paused; start again to resume",
         "fa": "قطع شد: پروژه متوقفه؛ برای ادامه دوباره شروع کن",
     },
+    # New idea form, thinking page and questions form (D145)
+    "idea.title": {"en": "Automa — new idea", "fa": "Automa — ایدهٔ جدید"},
+    "idea.heading": {"en": "New idea", "fa": "ایدهٔ جدید"},
+    "idea.intro": {
+        "en": (
+            "The Executive may ask a few questions, then makes a plan with a cost range. "
+            "Nothing is run yet. Each step is a model call through the budget guard and may "
+            "take a minute."
+        ),
+        "fa": (
+            "مدیر پروژه ممکنه چند سؤال بپرسه، بعد یک برنامه با بازهٔ هزینه می‌سازه. "
+            "هنوز هیچ کاری اجرا نمی‌شه. هر مرحله یک درخواست به مدل از مسیر محافظ بودجه‌ست "
+            "و ممکنه یک دقیقه طول بکشه."
+        ),
+    },
+    "idea.placeholder": {
+        "en": "What should the project achieve?",
+        "fa": "پروژه قراره چه کاری انجام بده؟",
+    },
+    "idea.ask": {"en": "Ask clarifying questions first", "fa": "اول چند سؤال روشن‌کننده بپرس"},
+    "idea.submit": {"en": "Create plan", "fa": "ساختن برنامه"},
+    "thinking.title": {"en": "Automa — thinking", "fa": "Automa — در حال فکر کردن"},
+    "thinking.heading": {"en": "⏳ Thinking…", "fa": "⏳ در حال فکر کردن…"},
+    "thinking.questions": {
+        "en": (
+            "The Executive is reading your idea and deciding whether to ask a few questions."
+            " This usually takes under a minute; this page refreshes by itself and moves on"
+            " when it is done."
+        ),
+        "fa": (
+            "مدیر پروژه داره ایده‌ات رو می‌خونه و تصمیم می‌گیره چند سؤال بپرسه یا نه. "
+            "معمولاً کمتر از یک دقیقه طول می‌کشه؛ این صفحه خودش تازه می‌شه و وقتی تموم شد "
+            "می‌ره مرحلهٔ بعد."
+        ),
+    },
+    "thinking.plan": {
+        "en": (
+            "The Executive is making the plan and the cost estimate. This usually takes"
+            " under a minute; this page refreshes by itself and moves on when it is done."
+        ),
+        "fa": (
+            "مدیر پروژه داره برنامه و پیش‌بینی هزینه رو می‌سازه. معمولاً کمتر از یک دقیقه "
+            "طول می‌کشه؛ این صفحه خودش تازه می‌شه و وقتی تموم شد می‌ره مرحلهٔ بعد."
+        ),
+    },
+    "thinking.elapsed": {
+        "en": "{seconds} s so far · project",
+        "fa": "{seconds} ثانیه گذشته · پروژهٔ",
+    },
+    "clarify.title": {
+        "en": "Automa — {project} questions",
+        "fa": "Automa — سؤال‌های {project}",
+    },
+    "clarify.heading": {"en": "Questions for", "fa": "سؤال‌های پروژهٔ"},
+    "clarify.goal": {"en": "Goal:", "fa": "هدف:"},
+    "clarify.intro": {
+        "en": "Leave an answer empty to skip it. The plan is made after you send.",
+        "fa": "اگه نخواستی به سؤالی جواب بدی، خالی بذارش. برنامه بعد از فرستادن ساخته می‌شه.",
+    },
+    "clarify.submit": {
+        "en": "Send answers and make the plan",
+        "fa": "فرستادن جواب‌ها و ساختن برنامه",
+    },
 }
 
 WELCOME_EXAMPLE_KEYS = ("welcome.example.1", "welcome.example.2", "welcome.example.3")
