@@ -432,8 +432,8 @@ def test_render_task_state_columns(store: ProjectStore) -> None:
     _state(store, "a", TaskStatus.PASSED, model="m-<b>")
     doc = rd.render_project(_view(store))
     assert '<article class="card task t-passed">' in doc and "Model: " in doc
-    assert '<span class="badge st-passed">passed</span>' in doc
-    assert '<span class="badge st-none">not started</span>' in doc
+    assert '<span class="ico" aria-hidden="true">✅</span> passed</span>' in doc
+    assert '<span class="ico" aria-hidden="true">🕒</span> not started</span>' in doc
     assert "m-&lt;b&gt;" in doc
 
 

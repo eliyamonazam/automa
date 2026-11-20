@@ -164,7 +164,7 @@ def test_persian_home_page() -> None:
     assert "<title>پروژه‌های Automa</title>" in doc and "<h1>پروژه‌های Automa</h1>" in doc
     assert "+ ایدهٔ جدید" in doc
     assert "۴ آزمون پنهان شده" in doc and 'href="/?tests=1">نمایش آزمون‌ها<' in doc
-    assert '<span class="badge ps-done">تموم شد</span>' in doc
+    assert '<span class="ico" aria-hidden="true">✅</span> تموم شد</span>' in doc
     assert "۳ منتظر تأیید" in doc
     assert "هزینه: حدود ۱۴۵ هزار تومان (۰٫۴۵ دلار)" in doc
     assert "ساخته‌شده ۵ دقیقه پیش" in doc
@@ -215,7 +215,7 @@ def test_english_home_page_is_unchanged_without_a_clock() -> None:
     assert '<html lang="en">' in doc and "Automa projects" in doc
     assert (
         "created 2026-11-19T18:05:00+00:00" in doc
-        and '<span class="badge ps-done">done</span>' in doc
+        and '<span class="ico" aria-hidden="true">✅</span> done</span>' in doc
     )
     assert "approvals: 0" in doc and "cost: $0.45" in doc
 

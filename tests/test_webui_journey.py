@@ -128,7 +128,7 @@ def test_project_page_shows_hero_now_bar_and_steps() -> None:
     doc = rd.render_project(view, lang="fa")
     assert '<html lang="fa" dir="rtl">' in doc
     assert '<header class="hero"><h1 dir="auto">Build a &lt;tool&gt;' in doc
-    assert '<span class="badge ps-running">در حال کار</span>' in doc
+    assert '<span class="ico" aria-hidden="true">⏳</span> در حال کار</span>' in doc
     assert '<p class="now info" dir="auto">' in doc
     assert 'class="fill" style="width:' in doc and "٪ انجام شده" in doc
     assert doc.count('<li class="s-done">') == 4  # idea, questions, plan, task 0
@@ -149,7 +149,7 @@ def test_running_run_marks_step_now() -> None:
 
 def test_unknown_status_class_is_fixed() -> None:
     doc = rd.render_project(_view('"><x>'))
-    assert 'class="badge ps-none"' in doc and "<x>" not in doc
+    assert 'class="badge ps-none tone-none"' in doc and "<x>" not in doc
 
 
 def _cost(spent: float, verdict: str) -> pg.CostProgress:

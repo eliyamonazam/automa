@@ -40,7 +40,6 @@ from automa.webui.i18n import (
     WELCOME_EXAMPLE_KEYS,
     exit_label,
     localize_number,
-    status_label,
     t,
     task_state_label,
 )
@@ -50,6 +49,7 @@ from automa.webui.journey import Journey, build_journey, jt
 from automa.webui.money import money, money_range
 from automa.webui.preview import is_previewable, preview_href
 from automa.webui.progress import REFRESH_SECONDS, CostProgress, ProgressView, UnusualSpending
+from automa.webui.status import Chip, project_chip, task_chip
 from automa.webui.views import ApprovalView, Overview, ProjectView, TaskRow, project_title
 
 # Joiners needed by Persian text; every other Cf character (incl. bidi controls) is escaped.
@@ -131,6 +131,8 @@ font-size:.85em;font-weight:600;vertical-align:middle}
 .st-failed,.st-blocked,.badge.ps-failed{background:var(--bad);color:var(--badfg)}
 .st-running,.st-verifying,.badge.ps-running{background:var(--busy);color:var(--busyfg)}
 .badge.ps-planning,.badge.ps-new{background:var(--info);color:var(--infofg)}
+.badge.tone-paused{background:#d0d5dd;color:#1d2939}
+.hint{color:var(--muted);font-size:.9em;margin:.2em 0}
 .task{border-inline-start:5px solid var(--line)}.t-passed{border-inline-start-color:#12b76a}
 .t-failed,.t-blocked{border-inline-start-color:#f04438}
 .t-running,.t-verifying{border-inline-start-color:#f79009}
@@ -340,10 +342,10 @@ def render_overview(
             cards.append(
                 f'<article class="card project ps-{_ps_class(p.status)}">'
                 f'<h2 dir="auto"><a href="{text(_project_href(p.id))}">{text(p.title or p.id)}</a> '
-                f'<span class="badge ps-{_ps_class(p.status)}">'
-                f"{text(status_label(p.status, lang))}</span></h2>"
+                f"{_chip_html(project_chip(p.status, lang), f'ps-{_ps_class(p.status)}')}</h2>"
                 f'<p class="muted"><code>{text(p.id)}</code></p>'
                 f'<p class="goal" dir="auto">{text(p.goal_preview)}</p>'
+                f"{_hint_html(project_chip(p.status, lang))}"
                 f'<p class="chips"><span>{text(cost)}</span>'
                 f"<span>{waiting}</span>"
                 f"<span>{text(created)}</span></p></article>"
@@ -482,7 +484,7 @@ def render_project(
         f'<p class="meta"><strong>{text(t("project.goal", lang))}</strong></p>',
         f'<p class="goal" dir="auto">{text(view.goal)}</p>',
         f'<p class="meta">{text(t("project.status", lang))} '
-        f'<span class="badge">{text(status_label(view.status, lang))}</span> · '
+        f"{_chip_html(project_chip(view.status, lang), f'ps-{_ps_class(view.status)}')} · "
         f"{text(times)}</p>",
         _cost_card(view, progress, task_costs or {}, rate, lang),
         f'<p><a href="{text(_project_href(view.id) + "/files")}">'
@@ -544,7 +546,7 @@ def _hero_and_journey(view: ProjectView, j: Journey, lang: Language) -> str:
     return (
         '<header class="hero">'
         f'<h1 dir="auto">{text(title)} '
-        f'<span class="badge ps-{status}">{text(status_label(view.status, lang))}</span></h1>'
+        f"{_chip_html(project_chip(view.status, lang), f'ps-{status}')}</h1>"
         f'<p class="muted"><code>{text(view.id)}</code></p></header>'
         '<section class="card journey">'
         f'<p class="now {j.tone}" dir="auto">{text(j.now)}</p>'
@@ -553,6 +555,22 @@ def _hero_and_journey(view: ProjectView, j: Journey, lang: Language) -> str:
         f'<p class="meta">{text(jt("progress.percent", lang, percent=percent))}</p>'
         f'<ol class="steps">{"".join(steps)}</ol></section>'
     )
+
+
+def _chip_html(chip: Chip, cls: str) -> str:
+    """A status chip: icon (hidden from screen readers), label and, as a tooltip, the
+    plain sentence. ``cls`` and the tone are fixed values; the label is escaped."""
+    title = f' title="{text(chip.hint)}"' if chip.hint else ""
+    return (
+        f'<span class="badge {cls} tone-{chip.tone}"{title}>'
+        f'<span class="ico" aria-hidden="true">{text(chip.icon)}</span> '
+        f"{text(chip.label)}</span>"
+    )
+
+
+def _hint_html(chip: Chip) -> str:
+    """The chip's plain sentence as a muted line ("" for an unknown status)."""
+    return f'<p class="hint">{text(chip.hint)}</p>' if chip.hint else ""
 
 
 _PROJECT_STATUSES = frozenset({"new", "planning", "running", "paused", "done", "failed"})
@@ -575,6 +593,7 @@ def _task_card(task: TaskRow, lang: Language = "en") -> str:
     """One task of the plan as a card (D129): the title in its own direction, the
     state as a fixed class and the rest as labelled chips (translated, D144)."""
     state = _state_class(task.state)
+    chip = task_chip(task.state, lang)
     order = localize_digits(str(task.order), lang)
     after = ", ".join(task.depends_on) or "-"
     # The latest attempt's status uses the task-state words (unknown: as recorded).
@@ -582,9 +601,10 @@ def _task_card(task: TaskRow, lang: Language = "en") -> str:
     return (
         f'<article class="card task t-{state}">'
         f'<h3><span class="badge">#{text(order)}</span> <code>{text(task.id)}</code> '
-        f'<span class="badge st-{state}">{text(task_state_label(task.state, lang))}</span></h3>'
+        f"{_chip_html(chip, f'st-{state}')}</h3>"
         f'<p class="goal" dir="auto">{text(task.title)}</p>'
-        '<p class="chips">'
+        + _hint_html(chip)
+        + '<p class="chips">'
         f"<span>{text(t('task.role', lang, role=task.role))}</span>"
         f'<span dir="auto">{text(t("task.after", lang, after=after))}</span>'
         f"<span>{text(t('task.attempts', lang, count=task.attempts))}</span>"

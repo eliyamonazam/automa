@@ -48,7 +48,7 @@ _RAW: dict[str, dict[Language, str]] = {
     "status.new": {"en": "new", "fa": "تازه"},
     "status.planning": {"en": "planning", "fa": "در حال برنامه‌ریزی"},
     "status.running": {"en": "running", "fa": "در حال کار"},
-    "status.paused": {"en": "paused", "fa": "متوقف"},
+    "status.paused": {"en": "paused", "fa": "متوقف شد"},
     "status.done": {"en": "done", "fa": "تموم شد"},
     "status.failed": {"en": "failed", "fa": "ناموفق"},
     # Welcome (empty home page, D138)
