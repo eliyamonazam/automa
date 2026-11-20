@@ -77,6 +77,7 @@ from automa.webui.files import (
     parse_path_query,
     read_file,
 )
+from automa.webui.i18n import t
 from automa.webui.ideas import (
     ANSWER_FIELDS,
     IDEA_FIELDS,
@@ -531,8 +532,8 @@ class WebApp:
         if not req.decided:
             return None
         if req.status.value == "approved":
-            return f"{req.id}: approved; the call runs at most once, when the run continues"
-        return f"{req.id}: rejected; the model is told when the run continues"
+            return t("decided.approved", self._lang, id=req.id)
+        return t("decided.rejected", self._lang, id=req.id)
 
     def _files(self, pid: str, route: FilesRoute, query: str, host: str) -> Response:
         """The read-only browser of ``files/`` (D128)."""
@@ -541,11 +542,12 @@ class WebApp:
             path = parse_path_query(query, allow_root=route is FilesRoute.LIST)
             if route is FilesRoute.LIST:
                 listing = build_listing(self._store, pid, path)
-                return _html(200, render_files(listing, actions=actions), security=self._security)
+                document = render_files(listing, actions=actions, lang=self._lang)
+                return _html(200, document, security=self._security)
             if route is FilesRoute.VIEW:
                 content = read_file(self._store, pid, path)
                 img_src = image_source(host, pid) if content.kind == "image" else None
-                document = render_file(content, actions=actions, img_src=img_src)
+                document = render_file(content, actions=actions, img_src=img_src, lang=self._lang)
                 security = self._security
                 if img_src is not None:
                     csp = page_csp(actions=actions, img_src=img_src) + "; frame-ancestors 'none'"
@@ -657,6 +659,7 @@ class WebApp:
                     pid,
                     sum(e.cost_nusd for e in own),
                     planning_nusd=sum(e.cost_nusd for e in own if e.task_id is None),
+                    lang=self._lang,
                 )
             except (ProjectStoreError, ApprovalError) as e:
                 return self.error(500, "Project unreadable", str(e))

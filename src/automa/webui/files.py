@@ -95,6 +95,9 @@ class FileContent(_View):
     width: int | None = None
     height: int | None = None
     note: str | None = None
+    # Why a file is not shown (D146): "too_large" | "not_image" | "not_text"; the
+    # page translates it, ``note`` keeps the English text.
+    note_code: str | None = None
 
 
 def parse_files_path(path: str) -> tuple[str, FilesRoute] | None:
@@ -263,7 +266,7 @@ def read_file(store: ProjectStore, project_id: str, path: str) -> FileContent:
     if image_format_for(path) is not None:
         if size > MAX_IMAGE_BYTES:
             note = f"image larger than {MAX_IMAGE_BYTES // (1024 * 1024)} MiB: download it"
-            return FileContent(kind="binary", note=note, **base)
+            return FileContent(kind="binary", note=note, note_code="too_large", **base)
         try:
             data, _ = ws.read_bytes(path, max_bytes=MAX_IMAGE_BYTES)
         except WorkspaceError as e:
@@ -273,14 +276,16 @@ def read_file(store: ProjectStore, project_id: str, path: str) -> FileContent:
             fmt, width, height = info
             return FileContent(kind="image", image_format=fmt, width=width, height=height, **base)
         note = "the extension says image but the content is not that image type"
-        return FileContent(kind="binary", note=note, **base)
+        return FileContent(kind="binary", note=note, note_code="not_image", **base)
     try:
         data, truncated = ws.read_bytes(path, max_bytes=MAX_TEXT_BYTES, truncate=True)
     except WorkspaceError as e:
         raise _refused(e) from None
     decoded = decode_text(data, truncated)
     if decoded is None:
-        return FileContent(kind="binary", note="not a UTF-8 text file", **base)
+        return FileContent(
+            kind="binary", note="not a UTF-8 text file", note_code="not_text", **base
+        )
     return FileContent(kind="text", text=decoded, truncated=truncated, **base)
 
 

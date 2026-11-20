@@ -28,7 +28,13 @@ from automa.l10n import (
 from automa.plan.models import MAX_ANSWER_CHARS
 from automa.project.store import MAX_GOAL_CHARS
 from automa.tools.approvals import MAX_NOTE_CHARS
-from automa.webui.files import FileContent, FileListing, FilesRoute, files_href
+from automa.webui.files import (
+    MAX_IMAGE_BYTES,
+    FileContent,
+    FileListing,
+    FilesRoute,
+    files_href,
+)
 from automa.webui.i18n import (
     MESSAGES,
     WELCOME_EXAMPLE_KEYS,
@@ -851,17 +857,18 @@ def render_clarify(
     return page(t("clarify.title", lang, project=project_id), body, actions=True, lang=lang)
 
 
-def _size_text(size: int) -> str:
+def _size_text(size: int, lang: Language = "en") -> str:
     if size < 1024:
-        return f"{size} B"
+        return t("size.b", lang, size=size)
     if size < 1024 * 1024:
-        return f"{size / 1024:.1f} KiB"
-    return f"{size / (1024 * 1024):.1f} MiB"
+        return t("size.kib", lang, size=localize_number(f"{size / 1024:.1f}", lang))
+    return t("size.mib", lang, size=localize_number(f"{size / (1024 * 1024):.1f}", lang))
 
 
-def _crumbs(project_id: str, path: str) -> str:
+def _crumbs(project_id: str, path: str, lang: Language = "en") -> str:
     """``files / a / b`` with a link per directory."""
-    links = [f'<a href="{text(files_href(project_id, FilesRoute.LIST))}">files</a>']
+    root = text(t("files.root", lang))
+    links = [f'<a href="{text(files_href(project_id, FilesRoute.LIST))}">{root}</a>']
     parts = path.split("/") if path else []
     for i, part in enumerate(parts):
         sub = "/".join(parts[: i + 1])
@@ -870,24 +877,27 @@ def _crumbs(project_id: str, path: str) -> str:
     return " / ".join(links)
 
 
-def render_files(listing: FileListing, *, actions: bool = False) -> str:
+def render_files(listing: FileListing, *, actions: bool = False, lang: Language = "en") -> str:
     """One directory of a project's ``files/`` (D128). Symlinks and special files
-    are listed but never linked."""
+    are listed but never linked. Interface text in ``lang`` (D146); file names as
+    recorded."""
     pid = listing.project_id
+    title = t("files.title", lang, project=pid)
     parts = [
         f'<p><a href="{text(_project_href(pid))}">← {text(pid)}</a></p>',
-        f"<h1>Files of {text(pid)}</h1>",
-        f"<p>{_crumbs(pid, listing.dir)}</p>",
+        f"<h1>{text(t('files.heading', lang, project=pid))}</h1>",
+        f"<p>{_crumbs(pid, listing.dir, lang)}</p>",
     ]
     if listing.missing:
-        parts.append("<p>No files yet.</p>")
-        return page(f"Automa — {pid} files", "".join(parts), actions=actions)
+        parts.append(f"<p>{text(t('files.none', lang))}</p>")
+        return page(title, "".join(parts), actions=actions, lang=lang)
     if listing.parent is not None:
         up = text(files_href(pid, FilesRoute.LIST, listing.parent))
-        parts.append(f'<p><a href="{up}">↑ up</a></p>')
+        parts.append(f'<p><a href="{up}">{text(t("files.up", lang))}</a></p>')
     if not listing.entries:
-        parts.append("<p>Empty directory.</p>")
+        parts.append(f"<p>{text(t('files.empty', lang))}</p>")
     else:
+        download, open_ = text(t("files.download", lang)), text(t("files.open", lang))
         rows = []
         for e in listing.entries:
             name = text(e.name)
@@ -898,60 +908,82 @@ def render_files(listing: FileListing, *, actions: bool = False) -> str:
                 view = text(files_href(pid, FilesRoute.VIEW, e.path))
                 down = text(files_href(pid, FilesRoute.DOWNLOAD, e.path))
                 cell = f'<a href="{view}" dir="auto">{name}</a>'
-                size, extra = _size_text(e.size), f'<a href="{down}">download</a>'
+                size, extra = _size_text(e.size, lang), f'<a href="{down}">{download}</a>'
                 if is_previewable(e.path):
                     show = text(preview_href(pid, e.path))
                     extra += (
-                        f' · <a href="{show}" target="_blank" rel="noopener noreferrer">▶ open</a>'
+                        f' · <a href="{show}" target="_blank" rel="noopener noreferrer">{open_}</a>'
                     )
             else:
-                label = "symlink, not followed" if e.kind == "symlink" else "not a regular file"
+                key = "files.symlink" if e.kind == "symlink" else "files.special"
+                label = text(t(key, lang))
                 cell = f'<span dir="auto">{name}</span> <span class="warn">({label})</span>'
                 size, extra = "-", ""
             rows.append(f"<tr><td>{cell}</td><td>{text(size)}</td><td>{extra}</td></tr>")
+        name_h, size_h = text(t("files.col.name", lang)), text(t("files.col.size", lang))
         parts.append(
-            '<div class="card scroll"><table><thead><tr><th>Name</th><th>Size</th><th></th>'
-            f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+            f'<div class="card scroll"><table><thead><tr><th>{name_h}</th><th>{size_h}</th>'
+            f"<th></th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
         )
         if listing.total > len(listing.entries):
-            parts.append(f"<p>Showing {len(listing.entries)} of {listing.total} entries.</p>")
-    return page(f"Automa — {pid} files", "".join(parts), actions=actions)
+            shown = t("files.showing", lang, shown=len(listing.entries), total=listing.total)
+            parts.append(f"<p>{text(shown)}</p>")
+    return page(title, "".join(parts), actions=actions, lang=lang)
 
 
-def render_file(content: FileContent, *, actions: bool = False, img_src: str | None = None) -> str:
+def _file_note(content: FileContent, lang: Language) -> str:
+    """Why a file is not shown, in ``lang`` (D146)."""
+    code = content.note_code
+    if code == "too_large":
+        return t("file.note.too_large", lang, mib=MAX_IMAGE_BYTES // (1024 * 1024))
+    if code in ("not_image", "not_text"):
+        return t(f"file.note.{code}", lang)
+    if content.note is not None and lang == "en":
+        return content.note
+    return t("file.note.binary", lang)
+
+
+def render_file(
+    content: FileContent,
+    *,
+    actions: bool = False,
+    img_src: str | None = None,
+    lang: Language = "en",
+) -> str:
     """The view page of one file (D128): escaped text, a checked image (loaded only
-    from ``img_src``) or a download line."""
+    from ``img_src``) or a download line. Interface text in ``lang`` (D146)."""
     pid, path = content.project_id, content.path
     parent = path.rsplit("/", 1)[0] if "/" in path else ""
     down = text(files_href(pid, FilesRoute.DOWNLOAD, path))
+    download = text(t("files.download", lang))
     parts = [
-        f'<p><a href="{text(_project_href(pid))}">← {text(pid)}</a> · {_crumbs(pid, parent)}</p>',
+        f'<p><a href="{text(_project_href(pid))}">← {text(pid)}</a> · '
+        f"{_crumbs(pid, parent, lang)}</p>",
         f'<h1 dir="auto">{text(path.rsplit("/", 1)[-1])}</h1>',
-        f'<p>{text(_size_text(content.size))} · <a href="{down}">download</a></p>',
+        f'<p>{text(_size_text(content.size, lang))} · <a href="{down}">{download}</a></p>',
     ]
     if is_previewable(path):
         show = text(preview_href(pid, path))
         parts.append(
             f'<p><a class="button" href="{show}" target="_blank" rel="noopener noreferrer">'
-            "▶ open the page (runs isolated: no network, no access to Automa)</a></p>"
+            f"{text(t('file.open_page', lang))}</a></p>"
         )
     use_img = None
     if content.kind == "text" and content.text is not None:
         if content.truncated:
-            parts.append(
-                f'<p class="warn">Only the first {text(_size_text(len(content.text.encode())))} '
-                "are shown; download the file for all of it.</p>"
-            )
+            shown = _size_text(len(content.text.encode()), lang)
+            parts.append(f'<p class="warn">{text(t("file.truncated", lang, size=shown))}</p>')
         parts.append(f'<pre dir="auto">{text(content.text)}</pre>')
     elif content.kind == "image" and img_src is not None:
         src = text(files_href(pid, FilesRoute.RAW, path))
+        dims = localize_digits(f"{content.width}×{content.height}", lang)
         parts.append(
-            f"<p>{text(content.image_format or '')} {content.width}×{content.height}</p>"
+            f"<p>{text(content.image_format or '')} {text(dims)}</p>"
             f'<p><img src="{src}" alt="{text(path)}" width="{content.width}" '
             f'height="{content.height}" style="max-width:100%;height:auto"></p>'
         )
         use_img = img_src
     else:
-        note = content.note or "binary file"
-        parts.append(f'<p class="warn">{text(note)}: not shown here.</p>')
-    return page(f"Automa — {path}", "".join(parts), actions=actions, img_src=use_img)
+        note = text(t("file.not_shown", lang, note=_file_note(content, lang)))
+        parts.append(f'<p class="warn">{note}</p>')
+    return page(f"Automa — {path}", "".join(parts), actions=actions, img_src=use_img, lang=lang)

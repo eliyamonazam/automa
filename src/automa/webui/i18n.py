@@ -317,6 +317,70 @@ _RAW: dict[str, dict[Language, str]] = {
         "en": "Send answers and make the plan",
         "fa": "فرستادن جواب‌ها و ساختن برنامه",
     },
+    # File browser (D146)
+    "files.title": {"en": "Automa — {project} files", "fa": "Automa — فایل‌های {project}"},
+    "files.heading": {"en": "Files of {project}", "fa": "فایل‌های پروژهٔ {project}"},
+    "files.root": {"en": "files", "fa": "فایل‌ها"},
+    "files.none": {"en": "No files yet.", "fa": "هنوز فایلی ساخته نشده."},
+    "files.up": {"en": "↑ up", "fa": "↑ پوشهٔ بالاتر"},
+    "files.empty": {"en": "Empty directory.", "fa": "این پوشه خالیه."},
+    "files.col.name": {"en": "Name", "fa": "نام"},
+    "files.col.size": {"en": "Size", "fa": "اندازه"},
+    "files.download": {"en": "download", "fa": "دانلود"},
+    "files.open": {"en": "▶ open", "fa": "▶ باز کردن"},
+    "files.symlink": {"en": "symlink, not followed", "fa": "میان‌بر؛ دنبالش نمی‌کنیم"},
+    "files.special": {"en": "not a regular file", "fa": "فایل معمولی نیست"},
+    "files.showing": {
+        "en": "Showing {shown} of {total} entries.",
+        "fa": "{shown} مورد از {total} مورد نشون داده شده.",
+    },
+    "size.b": {"en": "{size} B", "fa": "{size} بایت"},
+    "size.kib": {"en": "{size} KiB", "fa": "{size} کیلوبایت"},
+    "size.mib": {"en": "{size} MiB", "fa": "{size} مگابایت"},
+    "file.open_page": {
+        "en": "▶ open the page (runs isolated: no network, no access to Automa)",
+        "fa": "▶ باز کردن صفحه (جدا اجرا می‌شه: بدون اینترنت و بدون دسترسی به Automa)",
+    },
+    "file.truncated": {
+        "en": "Only the first {size} are shown; download the file for all of it.",
+        "fa": "فقط {size} اول نشون داده شده؛ برای دیدن همهٔ فایل دانلودش کن.",
+    },
+    "file.not_shown": {"en": "{note}: not shown here.", "fa": "{note}؛ اینجا نشون داده نمی‌شه."},
+    "file.note.binary": {"en": "binary file", "fa": "فایل غیرمتنی"},
+    "file.note.too_large": {
+        "en": "image larger than {mib} MiB: download it",
+        "fa": "عکس بزرگ‌تر از {mib} مگابایته؛ دانلودش کن",
+    },
+    "file.note.not_image": {
+        "en": "the extension says image but the content is not that image type",
+        "fa": "پسوند فایل می‌گه عکسه، ولی محتواش اون نوع عکس نیست",
+    },
+    "file.note.not_text": {"en": "not a UTF-8 text file", "fa": "متن سادهٔ قابل‌خوندن نیست"},
+    # Result of a decision made from the project page (D146)
+    "decided.approved": {
+        "en": "{id}: approved; the call runs at most once, when the run continues",
+        "fa": "{id}: تأیید شد؛ وقتی اجرا ادامه پیدا کنه، این کار حداکثر یک بار انجام می‌شه",
+    },
+    "decided.rejected": {
+        "en": "{id}: rejected; the model is told when the run continues",
+        "fa": "{id}: رد شد؛ وقتی اجرا ادامه پیدا کنه، به مدل گفته می‌شه",
+    },
+    # Target lines of a fetch_url / github_read request (D146)
+    "target.host": {"en": "host: {value}", "fa": "میزبان: {value}"},
+    "target.port": {"en": "port: {value}", "fa": "درگاه (پورت): {value}"},
+    "target.path": {"en": "path: {value}", "fa": "مسیر: {value}"},
+    "target.query": {"en": "query parameters: {value}", "fa": "پارامترهای نشانی: {value}"},
+    "target.bad_url": {
+        "en": "invalid URL ({error}); the tool will refuse it",
+        "fa": "نشانی نامعتبر ({error})؛ ابزار ردش می‌کنه",
+    },
+    "target.api_url": {"en": "api url: {value}", "fa": "نشانی API: {value}"},
+    "target.kind": {"en": "kind: {value}", "fa": "نوع: {value}"},
+    "target.repo": {"en": "repo: {value}", "fa": "مخزن: {value}"},
+    "target.bad_request": {
+        "en": "invalid request ({error}); the tool will refuse it",
+        "fa": "درخواست نامعتبر ({error})؛ ابزار ردش می‌کنه",
+    },
 }
 
 WELCOME_EXAMPLE_KEYS = ("welcome.example.1", "welcome.example.2", "welcome.example.3")

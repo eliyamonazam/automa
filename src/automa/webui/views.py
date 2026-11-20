@@ -13,11 +13,13 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 from automa.budget import nusd_to_usd
+from automa.l10n import Language
 from automa.plan import Plan
 from automa.project.store import Project, ProjectStore, ProjectStoreError
 from automa.tools.approvals import ApprovalError, ApprovalRequest, ApprovalStatus
 from automa.tools.github import GitHubRead, describe_github_request
 from automa.tools.web import FetchUrl, describe_fetch_request
+from automa.webui.i18n import t
 
 GOAL_PREVIEW_CHARS = 120
 _READ_ERRORS = (ProjectStoreError, ApprovalError)
@@ -103,25 +105,36 @@ def _preview(text: str, limit: int = GOAL_PREVIEW_CHARS) -> str:
     return one_line if len(one_line) <= limit else one_line[: limit - 1] + "…"
 
 
-def approval_view(req: ApprovalRequest) -> ApprovalView:
-    """The readable view of one request, with the same target views as the CLI (D73, D76)."""
+def approval_view(req: ApprovalRequest, lang: Language = "en") -> ApprovalView:
+    """The readable view of one request, with the same target views as the CLI (D73, D76).
+
+    The target lines' labels are in ``lang`` (D146); the values (host, path, repo...)
+    and the tools' warnings are shown exactly as the tools describe them."""
     lines: list[str] = []
     warnings: tuple[str, ...] = ()
     if req.tool == FetchUrl.name:
         fv = describe_fetch_request(req.arguments.get("url"))
         if fv.valid:
-            lines = [f"host: {fv.host}", f"port: {fv.port}", f"path: {fv.path}"]
+            lines = [
+                t("target.host", lang, value=str(fv.host)),
+                t("target.port", lang, value=str(fv.port)),
+                t("target.path", lang, value=str(fv.path)),
+            ]
             if fv.query_parameters:
-                lines.append(f"query parameters: {fv.query_parameters}")
+                lines.append(t("target.query", lang, value=fv.query_parameters))
         else:
-            lines = [f"invalid URL ({fv.error or ''}); the tool will refuse it"]
+            lines = [t("target.bad_url", lang, error=fv.error or "")]
         warnings = fv.warnings
     elif req.tool == GitHubRead.name:
         gv = describe_github_request(req.arguments)
         if gv.valid:
-            lines = [f"api url: {gv.api_url}", f"kind: {gv.kind}", f"repo: {gv.repo}"]
+            lines = [
+                t("target.api_url", lang, value=str(gv.api_url)),
+                t("target.kind", lang, value=str(gv.kind)),
+                t("target.repo", lang, value=str(gv.repo)),
+            ]
         else:
-            lines = [f"invalid request ({gv.error or ''}); the tool will refuse it"]
+            lines = [t("target.bad_request", lang, error=gv.error or "")]
         warnings = gv.warnings
     return ApprovalView(
         id=req.id,
@@ -217,13 +230,19 @@ def build_overview(
 
 
 def build_project_view(
-    store: ProjectStore, project_id: str, spent_nusd: int, *, planning_nusd: int = 0
+    store: ProjectStore,
+    project_id: str,
+    spent_nusd: int,
+    *,
+    planning_nusd: int = 0,
+    lang: Language = "en",
 ) -> ProjectView:
     """One project. Raises ``ProjectStoreError`` if the project itself is missing/corrupt;
     an unreadable plan, task result or approvals directory becomes an error line.
 
     ``planning_nusd`` is the part of ``spent_nusd`` on calls without a task (D133);
-    it is clamped to ``[0, spent_nusd]`` so the split never reads more than the total."""
+    it is clamped to ``[0, spent_nusd]`` so the split never reads more than the total.
+    ``lang`` is the language of the approval target lines (D146)."""
     project = store.load(project_id)
     errors: list[str] = []
     plan_version = None
@@ -237,7 +256,7 @@ def build_project_view(
             errors.append(f"plan: {e}")
     pending: list[ApprovalView] = []
     try:
-        pending = [approval_view(r) for r in _pending(store, project_id)]
+        pending = [approval_view(r, lang) for r in _pending(store, project_id)]
     except _READ_ERRORS as e:
         errors.append(f"approvals: {e}")
     return ProjectView(
