@@ -154,11 +154,14 @@ def build_journey(
     questions_waiting: bool = False,
     running: bool = False,
     budget_stop: bool = False,
+    stop_now: tuple[str, Tone] | None = None,
 ) -> Journey:
     """The steps, percentage and "now" sentence of ``view``.
 
     ``questions_waiting``: the Executive asked questions not yet answered;
-    ``running``: a background run of this project is alive."""
+    ``running``: a background run of this project is alive; ``stop_now``: the
+    plain reason and tone of the latest pause (D151), shown instead of the generic
+    "paused" sentence (an approval waiting, questions, done or failed come first)."""
     has_plan = view.plan_version is not None
     status = view.status
     steps: list[Step] = [Step(jt("step.idea", lang), "done")]
@@ -208,6 +211,8 @@ def build_journey(
             else jt("now.failed_plain", lang)
         )
         tone = "bad"
+    elif stop_now is not None and not running:
+        now, tone = stop_now
     elif budget_stop:
         now, tone = jt("now.budget", lang), "bad"
     elif not has_plan:

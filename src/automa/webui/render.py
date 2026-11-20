@@ -15,7 +15,7 @@ import json
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, tzinfo
+from datetime import UTC, datetime, tzinfo
 from urllib.parse import quote
 
 from automa.l10n import (
@@ -50,6 +50,8 @@ from automa.webui.money import money, money_range
 from automa.webui.preview import is_previewable, preview_href
 from automa.webui.progress import REFRESH_SECONDS, CostProgress, ProgressView, UnusualSpending
 from automa.webui.status import Chip, project_chip, task_chip
+from automa.webui.stops import StopLine, describe_stop
+from automa.webui.stops import st as stop_text
 from automa.webui.views import ApprovalView, Overview, ProjectView, TaskRow, project_title
 
 # Joiners needed by Persian text; every other Cf character (incl. bidi controls) is escaped.
@@ -466,18 +468,31 @@ def render_project(
     times in ``tz`` (D144)."""
     when = _when_fn(lang, tz, now)
     running = run is not None and run.running
+    stop = _stop_line(view, progress, running, lang, tz, now)
     journey = build_journey(
         view,
         lang=lang,
         questions_waiting=questions_waiting,
         running=running,
         budget_stop=run is not None and not running and run.exit_code == 3,
+        stop_now=(stop.text, stop.tone) if stop is not None else None,
+    )
+    resume = (
+        stop is not None
+        and stop.resume
+        and journey.now == stop.text
+        and not view.pending
+        and forms is not None
+        and run is not None
+        and run.can_start
     )
     back = text(jt("nav.back", lang))
     parts = [f'<p><a href="/">{back}</a></p>']
     if notice:
         parts.append(f'<p class="badge" dir="auto">{text(notice)}</p>')
     parts.append(_hero_and_journey(view, journey, lang))
+    if resume and forms is not None and run is not None:
+        parts.append(_start_form(view.id, run, forms, lang, stop_text("stop.continue", lang), ""))
     times = t("project.times", lang, created=when(view.created_at), updated=when(view.updated_at))
     parts += [
         '<section class="card">',
@@ -721,6 +736,45 @@ def _range_meter(c: CostProgress) -> str:
     )
 
 
+def _stop_line(
+    view: ProjectView,
+    progress: ProgressView | None,
+    running: bool,
+    lang: Language,
+    tz: tzinfo | None,
+    now: datetime | None,
+) -> StopLine | None:
+    """The plain reason of the latest pause (D151), only for a paused project that
+    nothing is running."""
+    if progress is None or progress.stop is None or running or view.status != "paused":
+        return None
+    return describe_stop(
+        progress.stop,
+        lang=lang,
+        tz=tz or resolve_timezone(DEFAULT_TIMEZONE),
+        now=now or datetime.now(UTC),
+    )
+
+
+def _start_form(
+    project_id: str, run: RunPanel, forms: ActionForms, lang: Language, label: str, help_: str
+) -> str:
+    """The start form (D125): the run panel's "Start" and the "Continue" of a pause
+    (D151) post the same fields to the same checked endpoint."""
+    action = text(_project_href(project_id) + "/start")
+    confirm = (
+        '<p><label><input type="checkbox" name="confirm" value="yes" required> '
+        f"{text(t('run.confirm', lang))}</label></p>"
+        if run.needs_confirm
+        else ""
+    )
+    after = f" {text(help_)}" if help_ else ""
+    return (
+        f'<form method="post" action="{action}">{_hidden("csrf", forms.csrf_token)}'
+        f'{confirm}<p><button type="submit">{text(label)}</button>{after}</p></form>'
+    )
+
+
 @dataclass(frozen=True)
 class RunPanel:
     """The background-run part of a project page (D125)."""
@@ -781,17 +835,10 @@ def _run_panel(
                 f"{text(t('run.stop.help', lang))}</p></form>"
             )
     if run.can_start:
-        action = text(_project_href(project_id) + "/start")
-        confirm = (
-            '<p><label><input type="checkbox" name="confirm" value="yes" required> '
-            f"{text(t('run.confirm', lang))}</label></p>"
-            if run.needs_confirm
-            else ""
-        )
         parts.append(
-            f'<form method="post" action="{action}">{_hidden("csrf", forms.csrf_token)}'
-            f'{confirm}<p><button type="submit">{text(t("run.start.button", lang))}</button> '
-            f"{text(t('run.start.help', lang))}</p></form>"
+            _start_form(
+                project_id, run, forms, lang, t("run.start.button", lang), t("run.start.help", lang)
+            )
         )
     elif run.state is None:
         parts.append(f"<p>{text(t('run.not_startable', lang))}</p>")

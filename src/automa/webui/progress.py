@@ -10,6 +10,7 @@ the Ledger entries the caller read. It gives the project page:
 * the latest events, newest first, with only short scalar fields (never
   ``detail``, error text or model output); ``finance.anomaly`` events are left
   out of that list and become at most one summary line (D132),
+* why the latest run paused, as a structured reason (:mod:`automa.webui.stops`),
 * whether the page should refresh itself (a simple ``<meta http-equiv="refresh">``,
   no script, D127).
 
@@ -34,6 +35,7 @@ from automa.events import Event
 from automa.finance.anomaly import ANOMALY_EVENT, AnomalySettings
 from automa.finance.compare import ESTIMATE_EVENT, check_range, compare_estimate
 from automa.project.store import EVENTS_FILE, ProjectStore
+from automa.webui.stops import StopInfo, latest_stop
 
 MAX_EVENTS_BYTES = 16 * 1024 * 1024  # a larger event log is reported, not read
 RECENT_EVENTS = 15
@@ -94,6 +96,7 @@ class ProgressView(_View):
     cost: CostProgress | None = None
     unusual: UnusualSpending | None = None
     events: tuple[EventLine, ...] = ()
+    stop: StopInfo | None = None  # why the latest run paused (D151)
     errors: tuple[str, ...] = ()
 
 
@@ -270,5 +273,6 @@ def build_progress(
         cost=cost,
         unusual=unusual_spending(events, anomaly),
         events=recent_events(events),
+        stop=latest_stop(events),
         errors=tuple(errors),
     )
