@@ -42,7 +42,7 @@ def _body(r: ws.Response) -> str:
 def _interface(doc: str) -> str:
     """Interface text only: technical details (``<code dir="ltr">``) and data removed."""
     doc = re.sub(r"<title>.*?</title>", "", doc, flags=re.S)
-    doc = re.sub(r"<code[^>]*>.*?</code>", "", doc, flags=re.S)
+    doc = re.sub(r"<(code|bdi)[^>]*>.*?</\1>", "", doc, flags=re.S)
     return _strip_data(doc)
 
 
@@ -143,7 +143,7 @@ def test_persian_not_found_pages(tmp_path: Path) -> None:
     _assert_persian(_body(r))
     pid = "p-20261120-101010-abcdef"
     r = app.handle("GET", f"/projects/{pid}", HOST)
-    assert f"پروژهٔ {pid} وجود نداره" in _body(r)
+    assert f'پروژهٔ <bdi dir="ltr">{pid}</bdi> وجود نداره' in _body(r)
     _assert_persian(_body(r).replace(pid, ""))
 
 
@@ -181,7 +181,8 @@ def test_persian_duplicate_header(tmp_path: Path) -> None:
     headers = [("Content-Type", FORM), ("Origin", ORIGIN), ("Origin", ORIGIN)]
     r = _app(tmp_path).handle("POST", f"/projects/{pid}/approvals/r-1/reject", HOST, headers, b"")
     assert r.status == 400 and "سرآیند تکراری" in _body(r)
-    _assert_persian(_body(r).replace("(origin)", ""))
+    assert '(<bdi dir="ltr">origin</bdi>)' in _body(r)
+    _assert_persian(_body(r))
 
 
 def test_persian_start_without_plan_is_refused_with_a_sentence(tmp_path: Path) -> None:
@@ -205,7 +206,7 @@ def test_persian_start_without_plan_is_refused_with_a_sentence(tmp_path: Path) -
     )
     r = _post(app, f"/projects/{pid}/start", f"csrf={TOKEN}".encode())
     assert r.status == 409
-    assert f"پروژهٔ {pid} هنوز برنامه نداره" in _body(r)
+    assert f'پروژهٔ <bdi dir="ltr">{pid}</bdi> هنوز برنامه نداره' in _body(r)
     _assert_persian(_body(r).replace(pid, ""))
 
 

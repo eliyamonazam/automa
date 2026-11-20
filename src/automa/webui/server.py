@@ -39,11 +39,18 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from string import Formatter
 from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
 from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError, nusd_to_usd
 from automa.finance.anomaly import AnomalySettings
-from automa.l10n import DEFAULT_TIMEZONE, LANGUAGES, Language, resolve_timezone
+from automa.l10n import (
+    DEFAULT_TIMEZONE,
+    LANGUAGES,
+    Language,
+    localize_digits,
+    resolve_timezone,
+)
 from automa.project.store import (
     ProjectStatus,
     ProjectStore,
@@ -77,7 +84,7 @@ from automa.webui.files import (
     parse_path_query,
     read_file,
 )
-from automa.webui.i18n import t
+from automa.webui.i18n import MESSAGES, t
 from automa.webui.ideas import (
     ANSWER_FIELDS,
     IDEA_FIELDS,
@@ -212,6 +219,30 @@ def _html(
     return Response(status=status, body=document.encode("utf-8"), headers=headers)
 
 
+def _coded_sentence(key: str, lang: Language, params: Mapping[str, str | int]) -> str:
+    """The HTML of a translated refusal sentence (D149).
+
+    English is the escaped sentence exactly as before. In Persian every text
+    parameter (an id, a path, a recorded status) is recorded data in Latin letters:
+    it is shown in ``<bdi dir="ltr">`` so it neither scrambles the right-to-left
+    sentence nor reads as untranslated interface text. Numbers stay in the sentence
+    (with Persian digits)."""
+    sentence = t(key, lang, **params)  # validates the key and the parameters
+    if lang == "en":
+        return text(sentence)
+    out: list[str] = []
+    for literal, name, _spec, _conv in Formatter().parse(MESSAGES[key][lang]):
+        out.append(text(literal))
+        if name is None:
+            continue
+        value = params[name]
+        if isinstance(value, str):
+            out.append(f'<bdi dir="ltr">{text(value)}</bdi>')
+        else:
+            out.append(text(localize_digits(str(value), lang)))
+    return "".join(out)
+
+
 def _error_detail(
     lang: Language,
     detail: str,
@@ -225,8 +256,7 @@ def _error_detail(
     sentence of ``code``; a message without a code (an underlying error) gets a
     Persian lead and stays visible, left-to-right, as a technical detail."""
     if code is not None:
-        sentence = t(refusal_key(code), lang, **params)
-        return f'<p class="err">{text(sentence)}</p>'
+        return f'<p class="err">{_coded_sentence(refusal_key(code), lang, params)}</p>'
     if not detail:
         return ""
     if lang == "en":
