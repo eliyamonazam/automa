@@ -107,7 +107,7 @@ def preview_response(store: ProjectStore, project_id: str, path: str) -> tuple[b
             raise _refused(e) from None
         info = checked_image(path, data)
         if info is None:
-            raise FilesRefused(415, "not a valid image of its extension's type")
+            raise FilesRefused.coded(415, "preview_bad_image")
         return data, IMAGE_TYPES[info[0]], PREVIEW_ASSET_CSP
     if lower.endswith(HTML_SUFFIXES):
         mime, csp = "text/html; charset=utf-8", PREVIEW_PAGE_CSP
@@ -115,7 +115,7 @@ def preview_response(store: ProjectStore, project_id: str, path: str) -> tuple[b
         mime = next(t for s, t in _TEXT_TYPES.items() if lower.endswith(s))
         csp = PREVIEW_ASSET_CSP
     else:
-        raise FilesRefused(415, "only HTML pages and their CSS, scripts and images are previewed")
+        raise FilesRefused.coded(415, "preview_types")
     try:
         data, _ = ws.read_bytes(path, max_bytes=MAX_PREVIEW_BYTES)
     except WorkspaceError as e:

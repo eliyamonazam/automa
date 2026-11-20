@@ -34,7 +34,7 @@ import socket
 import sys
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -92,6 +92,7 @@ from automa.webui.ideas import (
 )
 from automa.webui.preview import PREVIEW_HEADERS, parse_preview_path, preview_response
 from automa.webui.progress import ProgressView, build_progress
+from automa.webui.refusal import Refusal, refusal_key
 from automa.webui.render import (
     ACTION_CONTENT_SECURITY_POLICY,
     CONTENT_SECURITY_POLICY,
@@ -211,19 +212,50 @@ def _html(
     return Response(status=status, body=document.encode("utf-8"), headers=headers)
 
 
+def _error_detail(
+    lang: Language,
+    detail: str,
+    code: str | None,
+    params: Mapping[str, str | int],
+    lead: str | None,
+) -> str:
+    """The detail paragraph(s) of an error page (D147).
+
+    English shows the message exactly as before. Persian shows the translated
+    sentence of ``code``; a message without a code (an underlying error) gets a
+    Persian lead and stays visible, left-to-right, as a technical detail."""
+    if code is not None:
+        sentence = t(refusal_key(code), lang, **params)
+        return f'<p class="err">{text(sentence)}</p>'
+    if not detail:
+        return ""
+    if lang == "en":
+        return f'<p class="err">{text(detail)}</p>'
+    lead_text = t(refusal_key(lead) if lead else "error.lead.generic", lang)
+    return (
+        f'<p class="err">{text(lead_text)}</p>'
+        f'<p class="muted">{text(t("error.technical", lang))} '
+        f'<code dir="ltr">{text(detail)}</code></p>'
+    )
+
+
 def _error_page(
     status: int,
-    title: str,
+    title_key: str,
     detail: str = "",
     *,
     security: tuple[tuple[str, str], ...] = SECURITY_HEADERS,
+    lang: Language = "en",
+    code: str | None = None,
+    params: Mapping[str, str | int] | None = None,
+    lead: str | None = None,
 ) -> Response:
+    title = t(title_key, lang)
     body = f"<h1>{text(title)}</h1>"
-    if detail:
-        body += f'<p class="err">{text(detail)}</p>'
-    body += '<p><a href="/">← all projects</a></p>'
+    body += _error_detail(lang, detail, code, params or {}, lead)
+    body += f'<p><a href="/">{text(t("error.back", lang))}</a></p>'
     actions = security is not SECURITY_HEADERS
-    return _html(status, page(title, body, actions=actions), security=security)
+    return _html(status, page(title, body, actions=actions, lang=lang), security=security)
 
 
 class WebApp:
@@ -294,9 +326,34 @@ class WebApp:
             return MAX_IDEA_FORM_BYTES
         return MAX_FORM_BYTES
 
-    def error(self, status: int, title: str, detail: str = "") -> Response:
-        """An error page with this app's security headers."""
-        return _error_page(status, title, detail, security=self._security)
+    def error(
+        self,
+        status: int,
+        title_key: str,
+        detail: str = "",
+        *,
+        code: str | None = None,
+        params: Mapping[str, str | int] | None = None,
+        lead: str | None = None,
+    ) -> Response:
+        """An error page with this app's security headers, in this app's language.
+
+        ``title_key`` is an ``error.title.*`` key; ``code`` (a ``refusal.*`` code)
+        translates the detail, else ``detail`` is shown as is (technical in ``fa``)."""
+        return _error_page(
+            status,
+            title_key,
+            detail,
+            security=self._security,
+            lang=self._lang,
+            code=code,
+            params=params,
+            lead=lead,
+        )
+
+    def refused(self, e: Refusal, title_key: str = "error.title.refused") -> Response:
+        """The error page of a :class:`Refusal` (its translated or technical detail)."""
+        return self.error(e.status, title_key, e.message, code=e.code, params=e.params, lead=e.lead)
 
     def _entries(self) -> tuple[list[LedgerEntry], str | None]:
         """All Ledger entries, read-only; never creates a Ledger."""
@@ -358,17 +415,11 @@ class WebApp:
         body: bytes = b"",
     ) -> Response:
         if method not in self._methods:
-            detail = (
-                "Only the forms of these pages are accepted."
-                if self._actions is not None
-                else "This interface is read-only."
-            )
-            refused = self.error(405, "Method not allowed", detail)
+            code = "forms_only" if self._actions is not None else "read_only"
+            refused = self.error(405, "error.title.method_not_allowed", code=code)
             return refused.with_headers(("Allow", ", ".join(self._methods)))
         if host is None or host.strip().lower() not in self._allowed:
-            return self.error(
-                421, "Unexpected Host header", "Open the address printed by automa web."
-            )
+            return self.error(421, "error.title.unexpected_host", code="open_printed_address")
         if method == "POST":
             return self._post(target, headers, body)
         # HEAD gets the same status and headers; the handler omits the body.
@@ -376,7 +427,7 @@ class WebApp:
 
     def _post(self, target: str, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
         if self._actions is None:  # POST is only allowed in action mode (never reached)
-            return self.error(405, "Method not allowed", "This interface is read-only.")
+            return self.error(405, "error.title.method_not_allowed", code="read_only")
         parts = urlsplit(target)
         if self._ideas is not None and not parts.query and is_idea_path(parts.path):
             return self._post_idea(parts.path, headers, body)
@@ -388,16 +439,17 @@ class WebApp:
             return self._post_stop(stop_pid, headers, body)
         action = parse_action_path(parts.path) if not parts.query else None
         if action is None:
-            return self.error(404, "Not found")
+            return self.error(404, "error.title.not_found")
         lowered = self._single_headers(headers)
         if isinstance(lowered, Response):
             return lowered
         return self._decide(action, lowered, body)
 
-    def _redirect(self, location: str) -> Response:
+    def _redirect(self, location: str, title_key: str = "redirect.done") -> Response:
+        link = f'<p><a href="{text(location)}">{text(t("redirect.continue", self._lang))}</a></p>'
         return _html(
             303,
-            page("Done", f'<p><a href="{text(location)}">continue</a></p>', actions=True),
+            page(t(title_key, self._lang), link, actions=True, lang=self._lang),
             (("Location", location),),
             security=self._security,
         )
@@ -405,7 +457,7 @@ class WebApp:
     def _post_idea(self, path: str, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
         """``POST /new`` or ``/projects/<pid>/clarify`` (D124), after the same checks."""
         if self._actions is None or self._ideas is None:  # never reached
-            return self.error(404, "Not found")
+            return self.error(404, "error.title.not_found")
         lowered = self._single_headers(headers)
         if isinstance(lowered, Response):
             return lowered
@@ -417,13 +469,13 @@ class WebApp:
             check_token(form, self._actions)
             location = self._ideas.start(form) if pid is None else self._ideas.answer(pid, form)
         except ActionRefused as e:
-            return self.error(e.status, "Refused", e.message)
+            return self.refused(e)
         return self._redirect(location)
 
     def _post_start(self, pid: str, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
         """``POST /projects/<pid>/start`` (D125), after the same checks."""
         if self._actions is None or self._runs is None:  # never reached
-            return self.error(404, "Not found")
+            return self.error(404, "error.title.not_found")
         lowered = self._single_headers(headers)
         if isinstance(lowered, Response):
             return lowered
@@ -433,13 +485,13 @@ class WebApp:
             check_token(form, self._actions)
             self._runs.start(pid, form)
         except ActionRefused as e:
-            return self.error(e.status, "Refused", e.message)
+            return self.refused(e)
         return self._redirect(f"/projects/{quote(pid, safe='')}")
 
     def _post_stop(self, pid: str, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
         """``POST /projects/<pid>/stop`` (D126), after the same checks."""
         if self._actions is None or self._runs is None:  # never reached
-            return self.error(404, "Not found")
+            return self.error(404, "error.title.not_found")
         lowered = self._single_headers(headers)
         if isinstance(lowered, Response):
             return lowered
@@ -449,7 +501,7 @@ class WebApp:
             check_token(form, self._actions)
             self._runs.stop(pid, form)
         except ActionRefused as e:
-            return self.error(e.status, "Refused", e.message)
+            return self.refused(e)
         return self._redirect(f"/projects/{quote(pid, safe='')}")
 
     def _run_panel(self, pid: str) -> RunPanel | None:
@@ -479,13 +531,15 @@ class WebApp:
         for name, value in headers:
             key = name.lower()
             if key in lowered and key in _SINGLE_HEADERS:
-                return self.error(400, "Refused", f"duplicate {key} header")
+                return self.error(
+                    400, "error.title.refused", code="duplicate_header", params={"name": key}
+                )
             lowered.setdefault(key, value)
         return lowered
 
     def _decide(self, action: ActionTarget, lowered: dict[str, str], body: bytes) -> Response:
         if self._actions is None:  # never reached
-            return self.error(405, "Method not allowed", "This interface is read-only.")
+            return self.error(405, "error.title.method_not_allowed", code="read_only")
         try:
             check_same_origin(lowered, self._actions)
             form = parse_form(lowered, body)
@@ -493,17 +547,11 @@ class WebApp:
             with self._decide_lock:
                 decided = decide_from_form(self._store, action, form)
         except ActionRefused as e:
-            return self.error(e.status, "Refused", e.message)
+            return self.refused(e)
         location = (
             f"/projects/{quote(action.project_id, safe='')}?decided={quote(decided.id, safe='')}"
         )
-        done = _html(
-            303,
-            page("Recorded", f'<p><a href="{text(location)}">continue</a></p>', actions=True),
-            (("Location", location),),
-            security=self._security,
-        )
-        return done
+        return self._redirect(location, "redirect.recorded")
 
     def _idea_lines(self, pid: str, planned: bool) -> tuple[str | None, bool]:
         """Cost range of a planned project and whether questions wait (D124)."""
@@ -560,7 +608,7 @@ class WebApp:
                 data, mime = download_bytes(self._store, pid, path), "application/octet-stream"
                 disposition = content_disposition(path, attachment=True)
         except FilesRefused as e:
-            return self.error(e.status, "Not available", e.message)
+            return self.refused(e, "error.title.not_available")
         headers = (
             ("Content-Type", mime),
             ("Content-Disposition", disposition),
@@ -577,7 +625,7 @@ class WebApp:
         if job.done and job.next_path is not None:
             return self._redirect(job.next_path)
         if job.done:
-            return self.error(409, "The Executive could not finish", job.error or "unknown error")
+            return self.error(409, "error.title.executive_failed", job.error or "unknown error")
         elapsed = int(time.monotonic() - job.started)
         document = render_thinking(pid, job.phase, elapsed, self._lang)
         return _html(200, document, security=self._security)
@@ -587,7 +635,7 @@ class WebApp:
         try:
             data, mime, csp = preview_response(self._store, pid, path)
         except FilesRefused as e:
-            return self.error(e.status, "Not available", e.message)
+            return self.refused(e, "error.title.not_available")
         headers = (
             ("Content-Type", mime),
             ("Content-Security-Policy", csp),
@@ -638,9 +686,11 @@ class WebApp:
                     questions = self._ideas.pending_questions(clarify_pid)
                     goal = self._store.load(clarify_pid).goal
                 except ActionRefused as e:
-                    return self.error(e.status, "Not available", e.message)
+                    return self.refused(e, "error.title.not_available")
                 except ProjectStoreError as e:
-                    return self.error(500, "Project unreadable", str(e))
+                    return self.error(
+                        500, "error.title.project_unreadable", str(e), lead="lead.store"
+                    )
                 document = render_clarify(clarify_pid, goal, questions, forms, self._lang)
                 return _html(200, document, security=self._security)
         if path.startswith(_PROJECT_PREFIX):
@@ -648,9 +698,11 @@ class WebApp:
             try:
                 pid = validate_project_id(raw)
             except ProjectStoreError:
-                return self.error(404, "Not found")
+                return self.error(404, "error.title.not_found")
             if pid not in self._store.list_ids():
-                return self.error(404, "Not found", f"no project {pid}")
+                return self.error(
+                    404, "error.title.not_found", code="no_project", params={"id": pid}
+                )
             entries, err = self._entries()
             own = [e for e in entries if e.project_id == pid]
             try:
@@ -662,7 +714,7 @@ class WebApp:
                     lang=self._lang,
                 )
             except (ProjectStoreError, ApprovalError) as e:
-                return self.error(500, "Project unreadable", str(e))
+                return self.error(500, "error.title.project_unreadable", str(e), lead="lead.store")
             if err:
                 pview = pview.model_copy(update={"errors": (*pview.errors, err)})
             forms = ActionForms(self._actions.csrf_token) if self._actions is not None else None
@@ -683,7 +735,7 @@ class WebApp:
                 now=self._clock(),
             )
             return _html(200, document, security=self._security)
-        return self.error(404, "Not found")
+        return self.error(404, "error.title.not_found")
 
 
 def _task_costs(entries: Sequence[LedgerEntry]) -> dict[str, float]:
@@ -707,13 +759,13 @@ def make_handler(
         def _read_body(self) -> bytes | Response:
             """The body of an action-mode POST, or the refusal to send instead."""
             if self.headers.get("Transfer-Encoding") is not None:
-                return app.error(400, "Refused", "chunked bodies are not accepted")
+                return app.error(400, "error.title.refused", code="chunked")
             lengths = self.headers.get_all("Content-Length") or []
             if len(lengths) != 1 or not lengths[0].strip().isdigit():
-                return app.error(411, "Length required")
+                return app.error(411, "error.title.length_required")
             length = int(lengths[0].strip())
             if length > app.max_body_bytes(self.path):
-                return app.error(413, "Refused", "form is too large")
+                return app.error(413, "error.title.refused", code="form_too_large")
             return self.rfile.read(length) if length else b""
 
         def _serve(self) -> None:

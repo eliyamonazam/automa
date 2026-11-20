@@ -381,6 +381,249 @@ _RAW: dict[str, dict[Language, str]] = {
         "en": "invalid request ({error}); the tool will refuse it",
         "fa": "درخواست نامعتبر ({error})؛ ابزار ردش می‌کنه",
     },
+    # Error pages (D147): titles, the back link and redirect pages
+    "error.title.not_found": {"en": "Not found", "fa": "پیدا نشد"},
+    "error.title.method_not_allowed": {"en": "Method not allowed", "fa": "این کار مجاز نیست"},
+    "error.title.unexpected_host": {
+        "en": "Unexpected Host header",
+        "fa": "نشانی صفحه درست نیست",
+    },
+    "error.title.refused": {"en": "Refused", "fa": "انجام نشد"},
+    "error.title.not_available": {"en": "Not available", "fa": "در دسترس نیست"},
+    "error.title.project_unreadable": {
+        "en": "Project unreadable",
+        "fa": "پروژه خونده نشد",
+    },
+    "error.title.executive_failed": {
+        "en": "The Executive could not finish",
+        "fa": "برنامه‌ریزی تموم نشد",
+    },
+    "error.title.length_required": {"en": "Length required", "fa": "درخواست ناقصه"},
+    "error.back": {"en": "← all projects", "fa": "→ همهٔ پروژه‌ها"},
+    "error.technical": {"en": "Technical details:", "fa": "جزئیات فنی:"},
+    "error.lead.generic": {
+        "en": "Something went wrong.",
+        "fa": "مشکلی پیش اومد؛ جزئیات فنی پایین‌تره.",
+    },
+    "redirect.done": {"en": "Done", "fa": "انجام شد"},
+    "redirect.recorded": {"en": "Recorded", "fa": "ثبت شد"},
+    "redirect.continue": {"en": "continue", "fa": "ادامه"},
+    # Refusals (D147): the English text is exactly the message the code raised before
+    "refusal.read_only": {
+        "en": "This interface is read-only.",
+        "fa": "این صفحه فقط برای دیدنه؛ از اینجا چیزی تغییر نمی‌کنه.",
+    },
+    "refusal.forms_only": {
+        "en": "Only the forms of these pages are accepted.",
+        "fa": "فقط فرم‌های همین صفحه‌ها پذیرفته می‌شن.",
+    },
+    "refusal.open_printed_address": {
+        "en": "Open the address printed by automa web.",
+        "fa": "همون نشانی‌ای رو باز کن که automa web در ترمینال نوشته.",
+    },
+    "refusal.duplicate_header": {
+        "en": "duplicate {name} header",
+        "fa": "درخواست سرآیند تکراری داره ({name})",
+    },
+    "refusal.chunked": {
+        "en": "chunked bodies are not accepted",
+        "fa": "این شکل فرستادن پذیرفته نمی‌شه",
+    },
+    "refusal.cross_site": {
+        "en": "cross-site request refused",
+        "fa": "درخواست از یک سایت دیگه اومده بود و رد شد",
+    },
+    "refusal.other_origin": {
+        "en": "request from another origin refused",
+        "fa": "درخواست از صفحه‌ای غیر از همین رابط اومده بود و رد شد",
+    },
+    "refusal.no_origin": {
+        "en": "request without Origin or Referer refused",
+        "fa": "معلوم نبود درخواست از کدوم صفحه اومده، پس رد شد",
+    },
+    "refusal.form_only": {
+        "en": "only HTML form submissions are accepted",
+        "fa": "فقط فرم‌های همین صفحه‌ها پذیرفته می‌شن",
+    },
+    "refusal.form_too_large": {"en": "form is too large", "fa": "فرم خیلی بزرگه"},
+    "refusal.malformed_form": {
+        "en": "malformed form",
+        "fa": "فرم ناقص یا خرابه؛ صفحه رو دوباره باز کن",
+    },
+    "refusal.unexpected_field": {
+        "en": "unexpected form field",
+        "fa": "فرم یک بخش ناشناخته داره؛ صفحه رو دوباره باز کن",
+    },
+    "refusal.bad_token": {
+        "en": "missing or wrong form token; reload the page",
+        "fa": "کد امنیتی فرم درست نیست (مثلاً بعد از راه‌اندازی دوبارهٔ رابط)؛ صفحه رو دوباره باز کن",
+    },
+    "refusal.no_such_project": {"en": "no such project", "fa": "چنین پروژه‌ای نیست"},
+    "refusal.no_project": {"en": "no project {id}", "fa": "پروژهٔ {id} وجود نداره"},
+    "refusal.no_such_request": {
+        "en": "no such approval request",
+        "fa": "چنین درخواست تأییدی نیست",
+    },
+    "refusal.already_decided": {
+        "en": "request {id} is already {status}",
+        "fa": "درخواست {id} قبلاً بررسی شده (وضعیت: {status})",
+    },
+    "refusal.request_changed": {
+        "en": "the request differs from the page you saw; reload it",
+        "fa": "درخواست با چیزی که دیدی فرق کرده؛ صفحه رو دوباره باز کن",
+    },
+    "refusal.confirm_arguments": {
+        "en": "tick the box to confirm you reviewed the full arguments",
+        "fa": "اول تیک تأیید رو بزن تا معلوم باشه جزئیات کامل درخواست رو دیدی",
+    },
+    "refusal.note_too_long": {
+        "en": "note is longer than {max} characters",
+        "fa": "یادداشت از {max} نویسه بیشتره",
+    },
+    "refusal.goal_missing": {
+        "en": "write the idea (goal) first",
+        "fa": "اول ایده رو بنویس",
+    },
+    "refusal.goal_too_long": {
+        "en": "the goal is longer than {max} characters",
+        "fa": "متن ایده از {max} نویسه بیشتره",
+    },
+    "refusal.questions_changed": {
+        "en": "the questions differ from the page you saw; reload it",
+        "fa": "سؤال‌ها با چیزی که دیدی فرق کردن؛ صفحه رو دوباره باز کن",
+    },
+    "refusal.answer_too_long": {
+        "en": "answer {n} is longer than {max} characters",
+        "fa": "جواب {n} از {max} نویسه بیشتره",
+    },
+    "refusal.executive_busy": {
+        "en": "the Executive is already working on an idea; wait for it",
+        "fa": "Automa الان داره روی یک ایدهٔ دیگه فکر می‌کنه؛ کمی صبر کن",
+    },
+    "refusal.has_plan": {
+        "en": "project {id} already has a plan",
+        "fa": "پروژهٔ {id} از قبل برنامه داره",
+    },
+    "refusal.already_answered": {
+        "en": "project {id} was already answered",
+        "fa": "به سؤال‌های پروژهٔ {id} قبلاً جواب داده شده",
+    },
+    "refusal.no_questions": {
+        "en": "project {id} has no questions waiting",
+        "fa": "پروژهٔ {id} سؤالی منتظر جواب نداره",
+    },
+    "refusal.not_running_here": {
+        "en": (
+            "no background run of project {id} is running here "
+            "(a run started in a terminal is stopped there with Ctrl+C)"
+        ),
+        "fa": (
+            "پروژهٔ {id} از این صفحه در حال اجرا نیست "
+            "(اجرایی که در ترمینال شروع شده، همون‌جا با Ctrl+C متوقف می‌شه)"
+        ),
+    },
+    "refusal.stop_failed": {
+        "en": "could not request the stop: {reason}",
+        "fa": "درخواست توقف ثبت نشد: {reason}",
+    },
+    "refusal.already_running": {
+        "en": "project {id} is already running here",
+        "fa": "پروژهٔ {id} همین الان در حال اجراست",
+    },
+    "refusal.no_plan": {
+        "en": "project {id} has no plan yet",
+        "fa": "پروژهٔ {id} هنوز برنامه نداره",
+    },
+    "refusal.marked_running": {
+        "en": (
+            "project {id} is marked running (maybe in a terminal); "
+            "wait for it to finish (after a crash, resume it from the terminal)"
+        ),
+        "fa": (
+            "پروژهٔ {id} در حال اجرا ثبت شده (شاید در ترمینال)؛ صبر کن تموم بشه "
+            "(اگه برنامه بسته شده بود، از ترمینال ادامه‌اش بده)"
+        ),
+    },
+    "refusal.already_done": {
+        "en": "project {id} is already done",
+        "fa": "پروژهٔ {id} قبلاً تموم شده",
+    },
+    "refusal.confirm_cost": {
+        "en": (
+            "the cost range is above confirm_above_usd: tick the box to confirm "
+            "it, then start (nothing was run)"
+        ),
+        "fa": (
+            "بازهٔ هزینه از حد تأیید (confirm_above_usd) بالاتره: تیک تأیید هزینه رو بزن "
+            "و دوباره «شروع» رو بزن (چیزی اجرا نشد)"
+        ),
+    },
+    "refusal.start_failed": {
+        "en": "could not start the run: {reason}",
+        "fa": "اجرا شروع نشد: {reason}",
+    },
+    "refusal.address_too_long": {
+        "en": "the address is too long",
+        "fa": "نشانی صفحه خیلی بلنده",
+    },
+    "refusal.missing_path": {"en": "missing ?path=", "fa": "نشانی فایل مشخص نشده"},
+    "refusal.invalid_query": {
+        "en": "invalid query string",
+        "fa": "نشانی صفحه خرابه",
+    },
+    "refusal.only_path": {
+        "en": "only ?path= is accepted",
+        "fa": "نشانی صفحه بخش ناشناخته داره",
+    },
+    "refusal.no_files": {
+        "en": "this project has no files yet",
+        "fa": "این پروژه هنوز فایلی نداره",
+    },
+    "refusal.image_types": {
+        "en": "only .png, .jpg and .jpeg files are shown as images",
+        "fa": "فقط فایل‌های .png، .jpg و .jpeg به‌شکل تصویر نشون داده می‌شن",
+    },
+    "refusal.bad_image": {
+        "en": "the file is not a valid image of its extension's type",
+        "fa": "این فایل با پسوندش جور نیست و تصویر سالمی نیست",
+    },
+    "refusal.preview_bad_image": {
+        "en": "not a valid image of its extension's type",
+        "fa": "این فایل با پسوندش جور نیست و تصویر سالمی نیست",
+    },
+    "refusal.preview_types": {
+        "en": "only HTML pages and their CSS, scripts and images are previewed",
+        "fa": "فقط صفحه‌های HTML و CSS، اسکریپت و تصویرهاشون پیش‌نمایش دارن",
+    },
+    # Leads in front of an untranslated technical message (D147)
+    "refusal.idea.config": {
+        "en": "The settings are not ready for planning.",
+        "fa": "تنظیمات برای برنامه‌ریزی آماده نیست (مثلاً کلید یا مدل‌ها در automa.toml).",
+    },
+    "refusal.idea.budget": {
+        "en": "A spending cap stopped the planning.",
+        "fa": "سقف هزینه جلوی برنامه‌ریزی رو گرفت؛ سقف رو در automa.toml بیشتر کن یا صبر کن.",
+    },
+    "refusal.idea.planning": {
+        "en": "The Executive could not make a usable plan.",
+        "fa": "مدل نتونست برنامهٔ درستی بسازه؛ ایده رو روشن‌تر بنویس و دوباره امتحان کن.",
+    },
+    "refusal.idea.provider": {
+        "en": "The model gateway did not answer properly.",
+        "fa": "درگاه مدل درست جواب نداد؛ کمی بعد دوباره امتحان کن یا موجودی حساب رو ببین.",
+    },
+    "refusal.lead.store": {
+        "en": "The project's data could not be read or written.",
+        "fa": "داده‌های پروژه خونده یا نوشته نشد.",
+    },
+    "refusal.lead.files": {
+        "en": "The file could not be read.",
+        "fa": "فایل خونده نشد.",
+    },
+    "refusal.lead.run": {
+        "en": "The run could not be prepared.",
+        "fa": "اجرا آماده نشد.",
+    },
 }
 
 WELCOME_EXAMPLE_KEYS = ("welcome.example.1", "welcome.example.2", "welcome.example.3")

@@ -271,21 +271,17 @@ class BackgroundRuns:
         the project. Asking twice is harmless (the second time changes nothing).
         """
         if project_id not in self._store.list_ids():
-            raise ActionRefused(404, "no such project")
+            raise ActionRefused.coded(404, "no_such_project")
         with self._lock:
             run = self._active(project_id)
             if run is None:
-                raise ActionRefused(
-                    409,
-                    f"no background run of project {project_id} is running here "
-                    "(a run started in a terminal is stopped there with Ctrl+C)",
-                )
+                raise ActionRefused.coded(409, "not_running_here", id=project_id)
             if run.stop_requested:
                 return
             try:
                 self._store.request_stop(project_id, via="web")
             except (OSError, ProjectStoreError) as e:
-                raise ActionRefused(500, f"could not request the stop: {e}") from None
+                raise ActionRefused.coded(500, "stop_failed", reason=str(e)) from None
             run.stop_requested = True
         self._emit(project_id, STOP_EVENT, {"log": run.log_path.name})
 
@@ -306,33 +302,25 @@ class BackgroundRuns:
         """Start ``automa run`` in the background, or raise :class:`ActionRefused`."""
         confirm = form.get("confirm")
         if confirm is not None and confirm != CONFIRM_VALUE:
-            raise ActionRefused(400, "malformed form")
+            raise ActionRefused.coded(400, "malformed_form")
         if project_id not in self._store.list_ids():
-            raise ActionRefused(404, "no such project")
+            raise ActionRefused.coded(404, "no_such_project")
         with self._lock:
             if self._active(project_id) is not None:
-                raise ActionRefused(409, f"project {project_id} is already running here")
+                raise ActionRefused.coded(409, "already_running", id=project_id)
             try:
                 if not self._store.has_plan(project_id):
-                    raise ActionRefused(409, f"project {project_id} has no plan yet")
+                    raise ActionRefused.coded(409, "no_plan", id=project_id)
                 status = self._store.load(project_id).status
             except ProjectStoreError as e:
-                raise ActionRefused(500, str(e)) from None
+                raise ActionRefused(500, str(e), lead="lead.store") from None
             if status is ProjectStatus.RUNNING:
-                raise ActionRefused(
-                    409,
-                    f"project {project_id} is marked running (maybe in a terminal); "
-                    "wait for it to finish (after a crash, resume it from the terminal)",
-                )
+                raise ActionRefused.coded(409, "marked_running", id=project_id)
             if status is ProjectStatus.DONE:
-                raise ActionRefused(409, f"project {project_id} is already done")
+                raise ActionRefused.coded(409, "already_done", id=project_id)
             needs = self._preflight.needs_confirm(project_id)
             if needs and confirm != CONFIRM_VALUE:
-                raise ActionRefused(
-                    409,
-                    "the cost range is above confirm_above_usd: tick the box to confirm "
-                    "it, then start (nothing was run)",
-                )
+                raise ActionRefused.coded(409, "confirm_cost")
             yes = needs and confirm == CONFIRM_VALUE
             argv = self._preflight.command(project_id, yes=yes)
             started = self._clock()
@@ -341,7 +329,7 @@ class BackgroundRuns:
                 process = self._spawn(argv, log_path)
             except (OSError, ValueError) as e:
                 reason = e.strerror if isinstance(e, OSError) and e.strerror else str(e)
-                raise ActionRefused(500, f"could not start the run: {reason}") from None
+                raise ActionRefused.coded(500, "start_failed", reason=reason) from None
             run = _Run(process, started, log_path, yes)
             self._runs[project_id] = run
         self._emit(project_id, STARTED_EVENT, {"confirmed": yes, "log": log_path.name})
@@ -355,10 +343,12 @@ class BackgroundRuns:
             base = self._store.project_dir(project_id)
             runs = base / RUNS_DIR
             if runs.is_symlink():
-                raise ActionRefused(500, f"{RUNS_DIR} of project {project_id} is a symlink")
+                raise ActionRefused(
+                    500, f"{RUNS_DIR} of project {project_id} is a symlink", lead="lead.run"
+                )
             runs.mkdir(mode=0o700, exist_ok=True)
         except (OSError, ProjectStoreError) as e:
-            raise ActionRefused(500, f"cannot prepare the run log: {e}") from None
+            raise ActionRefused(500, f"cannot prepare the run log: {e}", lead="lead.run") from None
         stamp = started.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         return runs / f"run-{stamp}.log"
 

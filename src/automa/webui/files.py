@@ -37,6 +37,7 @@ from automa.tools.workspace import (
     WorkspaceError,
     normalize,
 )
+from automa.webui.refusal import Refusal
 
 MAX_TEXT_BYTES = 256 * 1024
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -55,13 +56,9 @@ class FilesRoute(StrEnum):
     DOWNLOAD = "download"
 
 
-class FilesRefused(Exception):
-    """A files request that is answered with an error page."""
-
-    def __init__(self, status: int, message: str) -> None:
-        super().__init__(message)
-        self.status = status
-        self.message = message
+class FilesRefused(Refusal):
+    """A files request that is answered with an error page (D147: a ``code``
+    translates it)."""
 
 
 class _View(BaseModel):
@@ -123,26 +120,26 @@ def parse_files_path(path: str) -> tuple[str, FilesRoute] | None:
 def parse_path_query(query: str, *, allow_root: bool) -> str:
     """The normalized ``path`` of the query string (``""`` = root, lists only)."""
     if len(query) > MAX_QUERY_CHARS:
-        raise FilesRefused(414, "the address is too long")
+        raise FilesRefused.coded(414, "address_too_long")
     if not query:
         if allow_root:
             return ""
-        raise FilesRefused(400, "missing ?path=")
+        raise FilesRefused.coded(400, "missing_path")
     try:
         pairs = parse_qsl(
             query, keep_blank_values=True, strict_parsing=True, max_num_fields=1, errors="strict"
         )
     except (ValueError, UnicodeDecodeError):
-        raise FilesRefused(400, "invalid query string") from None
+        raise FilesRefused.coded(400, "invalid_query") from None
     if len(pairs) != 1 or pairs[0][0] != "path":
-        raise FilesRefused(400, "only ?path= is accepted")
+        raise FilesRefused.coded(400, "only_path")
     raw = pairs[0][1]
     if raw in ("", ".") and allow_root:
         return ""
     try:
         return normalize(raw)
     except WorkspaceError as e:
-        raise FilesRefused(400, str(e)) from None
+        raise FilesRefused(400, str(e), lead="lead.files") from None
 
 
 def files_href(project_id: str, route: FilesRoute, path: str = "") -> str:
@@ -165,31 +162,33 @@ def image_source(host: str, project_id: str) -> str:
 def _workspace(store: ProjectStore, project_id: str) -> Workspace | None:
     """The project's ``files/`` workspace; ``None`` when it does not exist yet."""
     if project_id not in store.list_ids():
-        raise FilesRefused(404, f"no project {project_id}")
+        raise FilesRefused.coded(404, "no_project", id=project_id)
     root = store.files_dir(project_id)
     try:
         os.lstat(root)
     except FileNotFoundError:
         return None
     except OSError as e:
-        raise FilesRefused(500, f"files/ is not accessible: {e.strerror}") from None
+        raise FilesRefused(
+            500, f"files/ is not accessible: {e.strerror}", lead="lead.files"
+        ) from None
     try:
         return Workspace(root)
     except WorkspaceError as e:
-        raise FilesRefused(500, str(e)) from None
+        raise FilesRefused(500, str(e), lead="lead.files") from None
 
 
 def _require(store: ProjectStore, project_id: str) -> Workspace:
     ws = _workspace(store, project_id)
     if ws is None:
-        raise FilesRefused(404, "this project has no files yet")
+        raise FilesRefused.coded(404, "no_files")
     return ws
 
 
 def _refused(e: WorkspaceError) -> FilesRefused:
     if isinstance(e, FileTooLarge):
-        return FilesRefused(413, str(e))
-    return FilesRefused(404, str(e))
+        return FilesRefused(413, str(e), lead="lead.files")
+    return FilesRefused(404, str(e), lead="lead.files")
 
 
 def build_listing(store: ProjectStore, project_id: str, directory: str = "") -> FileListing:
@@ -200,7 +199,7 @@ def build_listing(store: ProjectStore, project_id: str, directory: str = "") -> 
         parent = directory.rsplit("/", 1)[0] if "/" in directory else ""
     if ws is None:
         if directory:
-            raise FilesRefused(404, "this project has no files yet")
+            raise FilesRefused.coded(404, "no_files")
         return FileListing(
             project_id=project_id, dir="", parent=None, entries=(), total=0, missing=True
         )
@@ -209,7 +208,9 @@ def build_listing(store: ProjectStore, project_id: str, directory: str = "") -> 
     except WorkspaceError as e:
         raise _refused(e) from None
     except OSError as e:
-        raise FilesRefused(404, f"cannot list {directory or 'files/'}: {e.strerror}") from None
+        raise FilesRefused(
+            404, f"cannot list {directory or 'files/'}: {e.strerror}", lead="lead.files"
+        ) from None
     prefix = directory + "/" if directory else ""
     return FileListing(
         project_id=project_id,
@@ -293,14 +294,14 @@ def image_bytes(store: ProjectStore, project_id: str, path: str) -> tuple[bytes,
     """``(bytes, content type)`` of a checked PNG/JPEG image, else ``FilesRefused``."""
     ws = _require(store, project_id)
     if image_format_for(path) is None:
-        raise FilesRefused(415, "only .png, .jpg and .jpeg files are shown as images")
+        raise FilesRefused.coded(415, "image_types")
     try:
         data, _ = ws.read_bytes(path, max_bytes=MAX_IMAGE_BYTES)
     except WorkspaceError as e:
         raise _refused(e) from None
     info = checked_image(path, data)
     if info is None:
-        raise FilesRefused(415, "the file is not a valid image of its extension's type")
+        raise FilesRefused.coded(415, "bad_image")
     return data, IMAGE_TYPES[info[0]]
 
 

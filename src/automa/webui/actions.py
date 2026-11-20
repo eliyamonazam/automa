@@ -31,6 +31,7 @@ from urllib.parse import parse_qsl, urlsplit
 from automa.project.store import ProjectStore, ProjectStoreError, validate_project_id
 from automa.tools.approval_decisions import record_decision
 from automa.tools.approvals import MAX_NOTE_CHARS, ApprovalError, ApprovalRequest
+from automa.webui.refusal import Refusal
 
 MAX_FORM_BYTES = 8_192
 FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
@@ -39,13 +40,9 @@ _FORM_FIELDS = frozenset({"csrf", "fingerprint", "confirm", "note"})
 _ACTION_RE = re.compile(r"^/projects/([^/]+)/approvals/([^/]+)/(approve|reject)$")
 
 
-class ActionRefused(Exception):
-    """A refused action, with the HTTP status and a short, safe message."""
-
-    def __init__(self, status: int, message: str) -> None:
-        super().__init__(message)
-        self.status = status
-        self.message = message
+class ActionRefused(Refusal):
+    """A refused action, with the HTTP status and a short, safe message (D147: a
+    ``code`` translates it)."""
 
 
 @dataclass(frozen=True)
@@ -98,17 +95,17 @@ def check_same_origin(headers: Mapping[str, str], settings: ActionSettings) -> N
     """Refuse (403) anything that does not prove it came from this server's own page."""
     site = headers.get("sec-fetch-site")
     if site is not None and site.strip().lower() != "same-origin":
-        raise ActionRefused(403, "cross-site request refused")
+        raise ActionRefused.coded(403, "cross_site")
     origin = headers.get("origin")
     if origin is not None:
         if origin.strip().lower() not in settings.origins:
-            raise ActionRefused(403, "request from another origin refused")
+            raise ActionRefused.coded(403, "other_origin")
         return
     referer = headers.get("referer")
     if referer is None:
-        raise ActionRefused(403, "request without Origin or Referer refused")
+        raise ActionRefused.coded(403, "no_origin")
     if _origin_of(referer.strip()) not in settings.origins:
-        raise ActionRefused(403, "request from another origin refused")
+        raise ActionRefused.coded(403, "other_origin")
 
 
 def parse_form(
@@ -123,9 +120,9 @@ def parse_form(
     ``fields`` are the only accepted names (each at most once)."""
     ctype = headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if ctype != FORM_CONTENT_TYPE:
-        raise ActionRefused(415, "only HTML form submissions are accepted")
+        raise ActionRefused.coded(415, "form_only")
     if len(body) > max_bytes:
-        raise ActionRefused(413, "form is too large")
+        raise ActionRefused.coded(413, "form_too_large")
     try:
         raw = body.decode("ascii")
         pairs = parse_qsl(
@@ -137,11 +134,11 @@ def parse_form(
             max_num_fields=len(fields),
         )
     except (UnicodeDecodeError, ValueError):
-        raise ActionRefused(400, "malformed form") from None
+        raise ActionRefused.coded(400, "malformed_form") from None
     form: dict[str, str] = {}
     for key, value in pairs:
         if key not in fields or key in form:
-            raise ActionRefused(400, "unexpected form field")
+            raise ActionRefused.coded(400, "unexpected_field")
         # A browser sends textarea line breaks as CRLF (HTML spec); store LF (D131).
         form[key] = value.replace("\r\n", "\n").replace("\r", "\n")
     return form
@@ -152,7 +149,7 @@ def check_token(form: Mapping[str, str], settings: ActionSettings) -> None:
     if not token or not hmac.compare_digest(
         token.encode("utf-8"), settings.csrf_token.encode("utf-8")
     ):
-        raise ActionRefused(403, "missing or wrong form token; reload the page")
+        raise ActionRefused.coded(403, "bad_token")
 
 
 def decide_from_form(
@@ -160,20 +157,20 @@ def decide_from_form(
 ) -> ApprovalRequest:
     """Record the decision of an already origin- and token-checked form."""
     if target.project_id not in store.list_ids():
-        raise ActionRefused(404, "no such project")
+        raise ActionRefused.coded(404, "no_such_project")
     try:
         req = store.approvals(target.project_id).get(target.approval_id)
     except ApprovalError:
-        raise ActionRefused(404, "no such approval request") from None
+        raise ActionRefused.coded(404, "no_such_request") from None
     if req.decided:
-        raise ActionRefused(409, f"request {req.id} is already {req.status.value}")
+        raise ActionRefused.coded(409, "already_decided", id=req.id, status=req.status.value)
     if not hmac.compare_digest(form.get("fingerprint", "").encode(), req.fingerprint.encode()):
-        raise ActionRefused(409, "the request differs from the page you saw; reload it")
+        raise ActionRefused.coded(409, "request_changed")
     if target.approve and form.get("confirm") != CONFIRM_VALUE:
-        raise ActionRefused(400, "tick the box to confirm you reviewed the full arguments")
+        raise ActionRefused.coded(400, "confirm_arguments")
     note = form.get("note")
     if note is not None and len(note.strip()) > MAX_NOTE_CHARS:
-        raise ActionRefused(400, f"note is longer than {MAX_NOTE_CHARS} characters")
+        raise ActionRefused.coded(400, "note_too_long", max=MAX_NOTE_CHARS)
     try:
         return record_decision(
             store,
@@ -184,4 +181,4 @@ def decide_from_form(
             via="web",
         )
     except (ApprovalError, ProjectStoreError) as e:
-        raise ActionRefused(409, str(e)) from None
+        raise ActionRefused(409, str(e), lead="lead.store") from None

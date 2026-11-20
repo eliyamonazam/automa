@@ -104,12 +104,12 @@ def parse_idea(form: Mapping[str, str]) -> tuple[str, bool]:
     """``(goal, ask)`` of a checked new-idea form."""
     goal = form.get("goal", "").strip()
     if not goal:
-        raise ActionRefused(400, "write the idea (goal) first")
+        raise ActionRefused.coded(400, "goal_missing")
     if len(goal) > MAX_GOAL_CHARS:
-        raise ActionRefused(400, f"the goal is longer than {MAX_GOAL_CHARS} characters")
+        raise ActionRefused.coded(400, "goal_too_long", max=MAX_GOAL_CHARS)
     ask = form.get("ask")
     if ask is not None and ask != ASK_VALUE:
-        raise ActionRefused(400, "malformed form")
+        raise ActionRefused.coded(400, "malformed_form")
     return goal, ask == ASK_VALUE
 
 
@@ -118,19 +118,19 @@ def parse_answers(form: Mapping[str, str], questions: Sequence[str]) -> list[Cla
     expected = {f"a{i}" for i in range(len(questions))}
     extra = set(form) - {"csrf"} - expected
     if extra:
-        raise ActionRefused(400, "the questions differ from the page you saw; reload it")
+        raise ActionRefused.coded(400, "questions_changed")
     items: list[Clarification] = []
     for i, question in enumerate(questions):
         answer = form.get(f"a{i}", "").strip()
         if len(answer) > MAX_ANSWER_CHARS:
-            raise ActionRefused(400, f"answer {i + 1} is longer than {MAX_ANSWER_CHARS} characters")
+            raise ActionRefused.coded(400, "answer_too_long", n=i + 1, max=MAX_ANSWER_CHARS)
         items.append(Clarification(question=question, answer=answer))
     return items
 
 
 def _refusal(e: IdeaError, project_id: str | None) -> ActionRefused:
     where = f" (project {project_id})" if project_id else " (nothing was created)"
-    return ActionRefused(KIND_STATUS[e.kind], f"{e.message}{where}")
+    return ActionRefused(KIND_STATUS[e.kind], f"{e.message}{where}", lead=f"idea.{e.kind}")
 
 
 def thinking_path(project_id: str) -> str:
@@ -216,7 +216,7 @@ class IdeaFlow:
 
     def _acquire(self) -> None:
         if not self._busy.acquire(blocking=False):
-            raise ActionRefused(409, "the Executive is already working on an idea; wait for it")
+            raise ActionRefused.coded(409, "executive_busy")
 
     def start(self, form: Mapping[str, str]) -> str:
         """Create the project and ask (or plan); returns where the browser goes next."""
@@ -231,7 +231,7 @@ class IdeaFlow:
             try:
                 project = self._store.create(goal)
             except ProjectStoreError as e:
-                raise ActionRefused(400, str(e)) from None
+                raise ActionRefused(400, str(e), lead="lead.store") from None
             pid = project.id
             if self._background:
                 handed_off = True
@@ -264,17 +264,17 @@ class IdeaFlow:
     def pending_questions(self, project_id: str) -> list[str]:
         """The questions still waiting for answers, or ``ActionRefused``."""
         if project_id not in self._store.list_ids():
-            raise ActionRefused(404, "no such project")
+            raise ActionRefused.coded(404, "no_such_project")
         try:
             if self._store.has_plan(project_id):
-                raise ActionRefused(409, f"project {project_id} already has a plan")
+                raise ActionRefused.coded(409, "has_plan", id=project_id)
             if self._store.has_clarifications(project_id):
-                raise ActionRefused(409, f"project {project_id} was already answered")
+                raise ActionRefused.coded(409, "already_answered", id=project_id)
             questions = self._store.load_questions(project_id)
         except ProjectStoreError as e:
-            raise ActionRefused(500, str(e)) from None
+            raise ActionRefused(500, str(e), lead="lead.store") from None
         if not questions:
-            raise ActionRefused(409, f"project {project_id} has no questions waiting")
+            raise ActionRefused.coded(409, "no_questions", id=project_id)
         return questions
 
     def answer(self, project_id: str, form: Mapping[str, str]) -> str:
@@ -291,7 +291,7 @@ class IdeaFlow:
             try:
                 self._store.save_clarifications(project_id, items)
             except ProjectStoreError as e:
-                raise ActionRefused(409, str(e)) from None
+                raise ActionRefused(409, str(e), lead="lead.store") from None
             if self._background:
                 handed_off = True
                 return self._spawn(
