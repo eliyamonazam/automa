@@ -28,6 +28,7 @@ from automa.l10n import (
 from automa.plan.models import MAX_ANSWER_CHARS
 from automa.project.store import MAX_GOAL_CHARS
 from automa.tools.approvals import MAX_NOTE_CHARS
+from automa.tools.missing import install_command
 from automa.webui.files import (
     MAX_IMAGE_BYTES,
     FileContent,
@@ -625,7 +626,20 @@ def _task_card(task: TaskRow, lang: Language = "en") -> str:
         f"<span>{text(t('task.attempts', lang, count=task.attempts))}</span>"
         f"<span>{text(t('task.last', lang))} "
         f'<span dir="auto">{text(last)}</span></span>'
-        f"<span>{text(t('task.model', lang, model=task.model or '-'))}</span></p></article>"
+        f"<span>{text(t('task.model', lang, model=task.model or '-'))}</span></p>"
+        + _missing_program_html(task.missing_program, lang)
+        + "</article>"
+    )
+
+
+def _missing_program_html(program: str | None, lang: Language) -> str:
+    """Plain words and the install command when a program is not installed (D152)."""
+    if program is None:
+        return ""
+    return (
+        f'<p class="hint missing-program">{text(t("task.missing_program", lang))} '
+        f'<code dir="ltr">{text(install_command(program))}</code> '
+        f"{text(t('task.missing_program.then', lang))}</p>"
     )
 
 

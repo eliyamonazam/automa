@@ -128,6 +128,16 @@ _RAW: dict[str, dict[Language, str]] = {
     "task.attempts": {"en": "Attempts: {count}", "fa": "تلاش‌ها: {count}"},
     "task.last": {"en": "Last result:", "fa": "آخرین نتیجه:"},
     "task.model": {"en": "Model: {model}", "fa": "مدل: {model}"},
+    "task.missing_program": {
+        "en": "A program this task needs is not installed on your computer. "
+        "Install it in the Ubuntu (WSL) terminal with:",
+        "fa": "برنامه‌ای که این کار لازم داره روی کامپیوترت نصب نیست. "
+        "در ترمینال Ubuntu (WSL) با این دستور نصبش کن:",
+    },
+    "task.missing_program.then": {
+        "en": "then continue the project.",
+        "fa": "بعد پروژه رو ادامه بده.",
+    },
     # Task states (TaskState values); "none" is a task not started yet
     "task.state.none": {"en": "not started", "fa": "شروع نشده"},
     "task.state.pending": {"en": "pending", "fa": "در صف"},

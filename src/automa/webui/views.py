@@ -15,9 +15,11 @@ from pydantic import BaseModel, ConfigDict
 from automa.budget import nusd_to_usd
 from automa.l10n import Language
 from automa.plan import Plan
+from automa.plan.models import ResultStatus
 from automa.project.store import Project, ProjectStore, ProjectStoreError
 from automa.tools.approvals import ApprovalError, ApprovalRequest, ApprovalStatus
 from automa.tools.github import GitHubRead, describe_github_request
+from automa.tools.missing import missing_program
 from automa.tools.request_warnings import RequestWarning
 from automa.tools.web import FetchUrl, describe_fetch_request
 from automa.webui.i18n import t
@@ -71,6 +73,8 @@ class TaskRow(_View):
     last_result: str | None = None  # status of the latest stored attempt
     state: str | None = None  # tasks/<id>/state.json status; None = not started (D127)
     model: str | None = None  # model of the current/last attempt (D97)
+    # A safe program name when the latest attempt failed on "program not found" (D152).
+    missing_program: str | None = None
 
 
 class ApprovalView(_View):
@@ -157,8 +161,12 @@ def task_rows(store: ProjectStore, project_id: str, plan: Plan) -> list[TaskRow]
     for i, task in enumerate(plan.topological_order(), start=1):
         attempts = store.attempt_count(project_id, task.id)
         last = None
+        missing = None
         if attempts:
-            last = store.load_task_result(project_id, task.id, attempts).status.value
+            result = store.load_task_result(project_id, task.id, attempts)
+            last = result.status.value
+            if result.status is not ResultStatus.COMPLETED:
+                missing = missing_program(result.error)
         try:
             ts = store.load_task_state(project_id, task.id)
         except _READ_ERRORS:  # one unreadable state must not hide the plan
@@ -177,6 +185,7 @@ def task_rows(store: ProjectStore, project_id: str, plan: Plan) -> list[TaskRow]
                 last_result=last,
                 state=state,
                 model=model,
+                missing_program=missing,
             )
         )
     return rows

@@ -8,7 +8,10 @@ The loop (one *step* = one model call through the guarded ``LLMGateway``):
    results as ``tool`` messages; go to 1;
 3. a reply without tool calls is the worker's final summary: the task is
    ``completed`` (it still has to pass the Verifier);
-4. after ``max_steps`` model calls without a final reply the result is ``step_limit``.
+4. after ``max_steps`` model calls without a final reply the result is ``step_limit``;
+5. when the same tool fails with the same error ``stop_after_repeated_errors`` times
+   in a row (no other tool result in between), the attempt stops at once as
+   ``failed`` with a plain reason instead of burning more steps (D152).
 
 What the worker never does:
 
@@ -43,7 +46,9 @@ from automa.memory.store import MemoryContext
 from automa.plan.models import MAX_TEXT_CHARS, Issue, ResultStatus, Task, TaskResult
 from automa.roles.models import Role
 from automa.skills.registry import SkillRegistry
+from automa.tools.base import ToolResult
 from automa.tools.executor import ToolExecutor
+from automa.tools.missing import missing_program
 from automa.tools.workspace import WorkspaceError, normalize
 
 Clock = Callable[[], datetime]
@@ -182,6 +187,36 @@ def compact_tool_results(messages: list[Message], *, keep: int, threshold: int) 
     return shortened
 
 
+NOT_RUN_AFTER_REPEAT = "ERROR: not run: the attempt stopped after a repeated tool error"
+REPEATED_ERROR = "stopped early: the same tool error came back"
+
+
+def repeated_error_reason(tool: str, error: str, times: int) -> str:
+    """The attempt's ``error`` when one tool error repeats ``times`` times in a row."""
+    return f"{REPEATED_ERROR} {times} times in a row from {tool}: {_short(error, 500)}"
+
+
+class _RepeatTracker:
+    """Counts identical consecutive failed tool results (same tool, same error)."""
+
+    def __init__(self, limit: int):
+        self._limit = limit
+        self._key: tuple[str, str] | None = None
+        self._count = 0
+
+    def see(self, result: ToolResult) -> tuple[str, str] | None:
+        """Record one executed tool result; the (tool, error) once the limit is reached."""
+        if result.ok:
+            self._key, self._count = None, 0
+            return None
+        key = (result.tool, result.error or "")
+        if key == self._key:
+            self._count += 1
+        else:
+            self._key, self._count = key, 1
+        return key if self._count >= self._limit else None
+
+
 def _short(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "\n[... truncated]"
 
@@ -205,6 +240,9 @@ class WorkerSettings(BaseModel):
     # stay whole; older ones are shortened to a stub in the conversation (D116).
     keep_full_tool_results: int = Field(default=3, ge=1, le=50)
     compact_tool_result_chars: int = Field(default=1_500, ge=300, le=20_000)
+    # The same tool failing with the same error this many times in a row stops the
+    # attempt (seen live: "program not found: 'g++'" repeated until the step cap, D152).
+    stop_after_repeated_errors: int = Field(default=2, ge=2, le=20)
 
 
 def task_message(task: Task, feedback: Sequence[Issue] = ()) -> str:
@@ -361,6 +399,8 @@ class WorkerAgent:
         summary = ""
         error: str | None = f"step limit reached ({max_steps} steps)"
         step_tokens = s.step_max_tokens
+        repeats = _RepeatTracker(s.stop_after_repeated_errors)
+        repeated: tuple[str, str] | None = None  # (tool, error) that repeated
         while steps < max_steps:
             steps += 1
             compact_tool_results(
@@ -404,7 +444,9 @@ class WorkerAgent:
                     {"task": task.id, "step": steps, "tool_calls": len(calls)},
                 )
                 for i, call in enumerate(calls):
-                    if not intact[i]:
+                    if repeated is not None:
+                        text = NOT_RUN_AFTER_REPEAT
+                    elif not intact[i]:
                         text = CUT_OFF_CALL
                     elif i >= s.max_tool_calls_per_step:
                         text = (
@@ -419,7 +461,30 @@ class WorkerAgent:
                             if path is not None:
                                 files[path] = None
                         text = _short(tool_result.as_text(), s.max_tool_result_chars)
+                        repeated = repeats.see(tool_result)
                     messages.append(Message.tool(call.id, text or "(no output)"))
+                if repeated is not None:
+                    # Every call of this reply got a result (the conversation stays
+                    # valid); no further model call is made for this attempt.
+                    tool_name, tool_error = repeated
+                    status = ResultStatus.FAILED
+                    error = repeated_error_reason(
+                        tool_name, tool_error, s.stop_after_repeated_errors
+                    )
+                    program = missing_program(tool_error)
+                    self._emit(
+                        "worker.repeated_error",
+                        project_id,
+                        {
+                            "task": task.id,
+                            "attempt": attempt,
+                            "step": steps,
+                            "tool": tool_name,
+                            "times": s.stop_after_repeated_errors,
+                        }
+                        | ({"missing_program": program} if program is not None else {}),
+                    )
+                    break
                 continue
 
             text = (reply.content or "").strip()
