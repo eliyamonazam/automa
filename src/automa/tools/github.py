@@ -39,6 +39,7 @@ from pydantic import (
 )
 
 from automa.tools.base import MAX_TOOL_OUTPUT_CHARS, RiskLevel, Tool, ToolArgs, ToolError
+from automa.tools.request_warnings import RequestWarning, warn
 from automa.tools.search import clean_text
 from automa.tools.web import DEFAULT_TIMEOUT_S, MAX_REDIRECTS, Resolver, check_host, system_resolver
 from automa.tools.workspace import Workspace
@@ -430,6 +431,8 @@ class GitHubRequestView(BaseModel):
     ref: str | None = None
     api_url: str | None = None
     warnings: tuple[str, ...] = ()
+    # The same warnings as codes, for a translated web page (D148).
+    warning_codes: tuple[RequestWarning, ...] = ()
 
 
 def _validation_error(e: ValidationError) -> str:
@@ -448,15 +451,12 @@ def describe_github_request(arguments: object) -> GitHubRequestView:
         args = GitHubReadArgs.model_validate(arguments)
     except ValidationError as e:
         return GitHubRequestView(valid=False, error=_validation_error(e))
-    warnings: list[str] = []
+    found: list[RequestWarning] = []
     if args.kind == "file":
         if args.ref is None:
-            warnings.append(
-                "no ref: reads the default branch as it is when the task runs, "
-                "which may differ from now"
-            )
+            found.append(warn("github.no_ref"))
         if args.path == "":
-            warnings.append("path is the repository root: a directory listing")
+            found.append(warn("github.root_path"))
     return GitHubRequestView(
         valid=True,
         kind=args.kind,
@@ -465,5 +465,6 @@ def describe_github_request(arguments: object) -> GitHubRequestView:
         path=args.path,
         ref=args.ref,
         api_url=github_api_url(args),
-        warnings=tuple(warnings),
+        warnings=tuple(w.english() for w in found),
+        warning_codes=tuple(found),
     )

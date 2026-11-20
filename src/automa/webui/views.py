@@ -18,6 +18,7 @@ from automa.plan import Plan
 from automa.project.store import Project, ProjectStore, ProjectStoreError
 from automa.tools.approvals import ApprovalError, ApprovalRequest, ApprovalStatus
 from automa.tools.github import GitHubRead, describe_github_request
+from automa.tools.request_warnings import RequestWarning
 from automa.tools.web import FetchUrl, describe_fetch_request
 from automa.webui.i18n import t
 
@@ -109,9 +110,10 @@ def approval_view(req: ApprovalRequest, lang: Language = "en") -> ApprovalView:
     """The readable view of one request, with the same target views as the CLI (D73, D76).
 
     The target lines' labels are in ``lang`` (D146); the values (host, path, repo...)
-    and the tools' warnings are shown exactly as the tools describe them."""
+    are shown exactly as the tools describe them. The tools' warnings come from their
+    codes, in ``lang`` (D148); in English that is the tools' own text."""
     lines: list[str] = []
-    warnings: tuple[str, ...] = ()
+    codes: tuple[RequestWarning, ...] = ()
     if req.tool == FetchUrl.name:
         fv = describe_fetch_request(req.arguments.get("url"))
         if fv.valid:
@@ -124,7 +126,7 @@ def approval_view(req: ApprovalRequest, lang: Language = "en") -> ApprovalView:
                 lines.append(t("target.query", lang, value=fv.query_parameters))
         else:
             lines = [t("target.bad_url", lang, error=fv.error or "")]
-        warnings = fv.warnings
+        codes = fv.warning_codes
     elif req.tool == GitHubRead.name:
         gv = describe_github_request(req.arguments)
         if gv.valid:
@@ -135,7 +137,7 @@ def approval_view(req: ApprovalRequest, lang: Language = "en") -> ApprovalView:
             ]
         else:
             lines = [t("target.bad_request", lang, error=gv.error or "")]
-        warnings = gv.warnings
+        codes = gv.warning_codes
     return ApprovalView(
         id=req.id,
         task_id=req.task_id,
@@ -146,7 +148,7 @@ def approval_view(req: ApprovalRequest, lang: Language = "en") -> ApprovalView:
         arguments=dict(req.arguments),
         fingerprint=req.fingerprint,
         request_lines=tuple(lines),
-        warnings=tuple(warnings),
+        warnings=tuple(t(f"warn.{w.code}", lang, **w.params) for w in codes),
     )
 
 

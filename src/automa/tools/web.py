@@ -27,6 +27,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from automa.tools.base import MAX_TOOL_OUTPUT_CHARS, RiskLevel, Tool, ToolArgs, ToolError
+from automa.tools.request_warnings import RequestWarning, warn
 from automa.tools.workspace import Workspace
 
 MAX_URL_CHARS = 2048
@@ -360,6 +361,8 @@ class FetchRequestView(BaseModel):
     path: str | None = None
     query_parameters: int = 0
     warnings: tuple[str, ...] = ()
+    # The same warnings as codes, for a translated web page (D148).
+    warning_codes: tuple[RequestWarning, ...] = ()
 
 
 def _ascii_host(host: str) -> str:
@@ -381,28 +384,25 @@ def describe_fetch_request(url: object) -> FetchRequestView:
     parts = urlsplit(url)
     scheme = parts.scheme.lower()
     wire_host = _ascii_host(host)
-    warnings: list[str] = []
+    found: list[RequestWarning] = []
     if scheme == "http":
-        warnings.append("not encrypted (http): anyone on the network can read or change it")
+        found.append(warn("fetch.http"))
     try:
         ipaddress.ip_address(host)
-        warnings.append("the host is an IP address, not a name")
+        found.append(warn("fetch.ip_host"))
     except ValueError:
         pass
     if not host.isascii():
-        warnings.append(f"non-ASCII host name; it is sent as {wire_host}")
+        found.append(warn("fetch.non_ascii_host", wire_host=wire_host))
     elif any(label.startswith("xn--") for label in host.split(".")):
-        warnings.append("punycode host name (xn--): it may look like another name")
+        found.append(warn("fetch.punycode"))
     if parts.port is not None and parts.port != (443 if scheme == "https" else 80):
-        warnings.append(f"non-default port {parts.port}")
+        found.append(warn("fetch.port", port=str(parts.port)))
     params = [p for p in parts.query.split("&") if p] if parts.query else []
     if parts.query:
-        warnings.append(
-            f"the query string ({len(params)} parameter(s)) is sent to {wire_host}: "
-            "check it carries no secrets or project data"
-        )
+        found.append(warn("fetch.query", count=len(params), wire_host=wire_host))
     elif len(parts.path) > 200:
-        warnings.append("very long path: check it carries no project data")
+        found.append(warn("fetch.long_path"))
     return FetchRequestView(
         url=url,
         valid=True,
@@ -411,5 +411,6 @@ def describe_fetch_request(url: object) -> FetchRequestView:
         port=port,
         path=parts.path or "/",
         query_parameters=len(params),
-        warnings=tuple(warnings),
+        warnings=tuple(w.english() for w in found),
+        warning_codes=tuple(found),
     )

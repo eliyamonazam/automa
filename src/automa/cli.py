@@ -3309,11 +3309,14 @@ def _approval_json(store: ProjectStore, req: ApprovalRequest) -> dict[str, Any]:
     data["used"] = req.decided and approvals.is_used(req.id)
     data["path"] = str(approvals.directory / f"{req.id}.json")
     if req.tool == FetchUrl.name:
+        # The CLI's JSON keeps its shape; warning codes are for the web UI (D148).
         data["web_request"] = describe_fetch_request(req.arguments.get("url")).model_dump(
-            mode="json"
+            mode="json", exclude={"warning_codes"}
         )
     if req.tool == GitHubRead.name:
-        data["github_request"] = describe_github_request(req.arguments).model_dump(mode="json")
+        data["github_request"] = describe_github_request(req.arguments).model_dump(
+            mode="json", exclude={"warning_codes"}
+        )
     return data
 
 

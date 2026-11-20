@@ -282,6 +282,7 @@ def test_approvals_json_has_web_request(env: Env) -> None:
     (row,) = json.loads(env.cli("approvals", PID, "--json").output)
     web = row["web_request"]
     assert web["valid"] and web["host"] == "xn--e1afmkfd.xn--p1ai" and web["port"] == 443
+    assert web["warnings"] and "warning_codes" not in web  # CLI JSON shape kept (D148)
     assert row["arguments"] == {"url": "https://пример.рф/"}
 
 

@@ -17,6 +17,7 @@ from string import Formatter
 from types import MappingProxyType
 
 from automa.l10n import LANGUAGES, Language, localize_digits
+from automa.tools.request_warnings import WARNING_TEXT
 
 _RAW: dict[str, dict[Language, str]] = {
     # Page shell
@@ -380,6 +381,46 @@ _RAW: dict[str, dict[Language, str]] = {
     "target.bad_request": {
         "en": "invalid request ({error}); the tool will refuse it",
         "fa": "درخواست نامعتبر ({error})؛ ابزار ردش می‌کنه",
+    },
+    # Tool warnings on an approval card (D148); English from request_warnings
+    "warn.fetch.http": {
+        "en": WARNING_TEXT["fetch.http"],
+        "fa": "رمزنگاری نشده (http): هر کسی در شبکه می‌تونه ببینه یا تغییرش بده",
+    },
+    "warn.fetch.ip_host": {
+        "en": WARNING_TEXT["fetch.ip_host"],
+        "fa": "میزبان یک نشانی IP است، نه یک نام",
+    },
+    "warn.fetch.non_ascii_host": {
+        "en": WARNING_TEXT["fetch.non_ascii_host"],
+        "fa": "نام میزبان حروف غیرلاتین داره؛ به‌شکل {wire_host} فرستاده می‌شه",
+    },
+    "warn.fetch.punycode": {
+        "en": WARNING_TEXT["fetch.punycode"],
+        "fa": "نام میزبان punycode است (xn--): ممکنه شبیه یک نام دیگه به نظر بیاد",
+    },
+    "warn.fetch.port": {"en": WARNING_TEXT["fetch.port"], "fa": "درگاه غیرمعمول {port}"},
+    "warn.fetch.query": {
+        "en": WARNING_TEXT["fetch.query"],
+        "fa": (
+            "بخش پارامترهای نشانی ({count} پارامتر) به {wire_host} فرستاده می‌شه: "
+            "مطمئن شو رمز یا دادهٔ پروژه توش نیست"
+        ),
+    },
+    "warn.fetch.long_path": {
+        "en": WARNING_TEXT["fetch.long_path"],
+        "fa": "مسیر خیلی بلنده: مطمئن شو دادهٔ پروژه توش نیست",
+    },
+    "warn.github.no_ref": {
+        "en": WARNING_TEXT["github.no_ref"],
+        "fa": (
+            "شاخه یا نسخه مشخص نشده: شاخهٔ اصلی همون‌طور که موقع اجرای وظیفه هست "
+            "خونده می‌شه، که ممکنه با الان فرق کنه"
+        ),
+    },
+    "warn.github.root_path": {
+        "en": WARNING_TEXT["github.root_path"],
+        "fa": "مسیر، ریشهٔ مخزنه: فهرست فایل‌ها خونده می‌شه",
     },
     # Error pages (D147): titles, the back link and redirect pages
     "error.title.not_found": {"en": "Not found", "fa": "پیدا نشد"},

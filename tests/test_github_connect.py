@@ -358,6 +358,7 @@ def test_approvals_json_has_github_request(env: Env) -> None:
     assert gh["valid"] and gh["repo"] == "octo/hello" and gh["kind"] == "file"
     assert gh["api_url"] == FILE_URL + "?ref=main" and gh["ref"] == "main"
     assert gh["warnings"] == []
+    assert "warning_codes" not in gh  # the CLI's JSON keeps its shape (D148)
     assert "web_request" not in row
 
 
