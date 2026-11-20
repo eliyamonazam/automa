@@ -16,6 +16,7 @@ import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, tzinfo
+from string import Formatter
 from urllib.parse import quote
 
 from automa.l10n import (
@@ -47,11 +48,12 @@ from automa.webui.i18n import (
 from automa.webui.ideas import ASK_VALUE
 from automa.webui.journey import MESSAGES as JOURNEY_MESSAGES
 from automa.webui.journey import Journey, build_journey, jt
-from automa.webui.money import money, money_range
+from automa.webui.money import money, money_range, nusd_money
 from automa.webui.preview import is_previewable, preview_href
 from automa.webui.progress import REFRESH_SECONDS, CostProgress, ProgressView, UnusualSpending
 from automa.webui.status import Chip, project_chip, task_chip
-from automa.webui.stops import StopLine, describe_stop
+from automa.webui.stops import MESSAGES as STOP_MESSAGES
+from automa.webui.stops import StopInfo, StopLine, describe_stop
 from automa.webui.stops import st as stop_text
 from automa.webui.views import ApprovalView, Overview, ProjectView, TaskRow, project_title
 
@@ -494,6 +496,20 @@ def render_project(
     parts.append(_hero_and_journey(view, journey, lang))
     if resume and forms is not None and run is not None:
         parts.append(_start_form(view.id, run, forms, lang, stop_text("stop.continue", lang), ""))
+    brake = progress.stop if progress is not None else None
+    if (
+        stop is not None
+        and brake is not None
+        and brake.kind == "task_brake"
+        and brake.task is not None
+        and brake.awaiting
+        and journey.now == stop.text
+        and not view.pending
+        and forms is not None
+        and run is not None
+        and run.can_start
+    ):
+        parts.append(_brake_card(view, brake, run, forms, rate, lang))
     times = t("project.times", lang, created=when(view.created_at), updated=when(view.updated_at))
     parts += [
         '<section class="card">',
@@ -768,6 +784,66 @@ def _stop_line(
         tz=tz or resolve_timezone(DEFAULT_TIMEZONE),
         now=now or datetime.now(UTC),
     )
+
+
+def _filled(template: str, values: dict[str, str]) -> str:
+    """HTML of ``template`` with each field's (escaped) value in ``<bdi>``."""
+    out: list[str] = []
+    for literal, name, _spec, _conv in Formatter().parse(template):
+        out.append(text(literal))
+        if name is not None:
+            out.append(f"<bdi>{text(values[name])}</bdi>")
+    return "".join(out)
+
+
+def _brake_card(
+    view: ProjectView,
+    brake: StopInfo,
+    run: RunPanel,
+    forms: ActionForms,
+    rate: float | None,
+    lang: Language,
+) -> str:
+    """The task brake's question "continue?" (D154): "Continue" and "Stop" post to
+    ``/projects/<pid>/brake`` (same CSRF and same-origin checks). "Continue" carries
+    the start form's cost confirmation box; after "Stop" only "Continue" is left."""
+    task = brake.task or ""
+    title = next((r.title for r in view.tasks if r.id == task and r.title.strip()), task)
+    if brake.spent_nusd is not None and brake.limit_nusd is not None:
+        values = {
+            "task": title,
+            "spent": nusd_money(brake.spent_nusd, rate, lang=lang),
+            "limit": nusd_money(brake.limit_nusd, rate, lang=lang),
+        }
+        question = _filled(STOP_MESSAGES["stop.brake.ask"][lang], values)
+    else:
+        question = _filled(STOP_MESSAGES["stop.brake.ask_plain"][lang], {"task": title})
+    action = text(_project_href(view.id) + "/brake")
+    hidden = _hidden("csrf", forms.csrf_token) + _hidden("task", task)
+    confirm = (
+        '<p><label><input type="checkbox" name="confirm" value="yes" required> '
+        f"{text(t('run.confirm', lang))}</label></p>"
+        if run.needs_confirm
+        else ""
+    )
+    go = (
+        f'<form method="post" action="{action}">{hidden}'
+        f"{_hidden('decision', 'continue')}{confirm}"
+        f'<p><button type="submit">{text(stop_text("stop.brake.continue", lang))}</button> '
+        f'<span class="muted">{text(stop_text("stop.brake.help", lang))}</span></p></form>'
+    )
+    halt = (
+        ""
+        if brake.declined
+        else (
+            f'<form method="post" action="{action}">{hidden}'
+            f"{_hidden('decision', 'stop')}"
+            f'<p><button type="submit">{text(stop_text("stop.brake.stop", lang))}</button></p>'
+            "</form>"
+        )
+    )
+    ask = "" if brake.declined else f'<p class="warn" dir="auto">{question}</p>'
+    return f'<section class="card brake">{ask}{go}{halt}</section>'
 
 
 def _start_form(

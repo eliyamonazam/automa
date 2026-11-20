@@ -42,6 +42,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
 
+from automa.budget.brake import BrakeError, continue_task, decline_task
 from automa.events import Event
 from automa.project.store import (
     ProjectStatus,
@@ -54,6 +55,10 @@ from automa.webui.actions import CONFIRM_VALUE, ActionRefused
 
 START_FIELDS = frozenset({"csrf", "confirm"})
 STOP_FIELDS = frozenset({"csrf"})
+BRAKE_FIELDS = frozenset({"csrf", "task", "decision", "confirm"})
+BRAKE_CONTINUE = "continue"
+BRAKE_STOP = "stop"
+MAX_TASK_ID = 200
 RUNS_DIR = "web-runs"
 STARTED_EVENT = "web.run_started"
 FINISHED_EVENT = "web.run_finished"
@@ -62,6 +67,7 @@ LOG_TAIL_BYTES = 8_192
 LOG_TAIL_LINES = 12
 _START_RE = re.compile(r"^/projects/([^/]+)/start$")
 _STOP_RE = re.compile(r"^/projects/([^/]+)/stop$")
+_BRAKE_RE = re.compile(r"^/projects/([^/]+)/brake$")
 
 # Meaning of each ``automa run`` exit code (see the ``automa.cli`` docstring).
 EXIT_MEANINGS: Mapping[int, str] = {
@@ -136,6 +142,17 @@ def stop_path(project_id: str) -> str:
     from urllib.parse import quote
 
     return "/projects/" + quote(project_id, safe="") + "/stop"
+
+
+def brake_path(project_id: str) -> str:
+    from urllib.parse import quote
+
+    return "/projects/" + quote(project_id, safe="") + "/brake"
+
+
+def parse_brake_path(path: str) -> str | None:
+    """The project id of a ``/projects/<pid>/brake`` path, else ``None`` (D154)."""
+    return _parse(_BRAKE_RE, path)
 
 
 def parse_start_path(path: str) -> str | None:
@@ -300,6 +317,60 @@ class BackgroundRuns:
 
     def start(self, project_id: str, form: Mapping[str, str]) -> None:
         """Start ``automa run`` in the background, or raise :class:`ActionRefused`."""
+        self._start(project_id, form)
+
+    def brake(self, project_id: str, form: Mapping[str, str]) -> None:
+        """Answer the task brake's question "continue?" (D154).
+
+        ``decision=stop`` records ``brake.declined`` (allows nothing). ``continue``
+        runs every check of :meth:`start` first (plan, status, one run per project,
+        the cost confirmation box); only then is ``brake.continued`` recorded, exactly
+        as ``automa brake continue`` does, and the very same ``automa run`` child is
+        started, so the BudgetGuard and the brake itself apply unchanged. Either is
+        refused unless the task's latest brake stop is still waiting for a decision.
+        """
+        decision = form.get("decision")
+        task = form.get("task", "")
+        if decision not in (BRAKE_CONTINUE, BRAKE_STOP) or not task or len(task) > MAX_TASK_ID:
+            raise ActionRefused.coded(400, "malformed_form")
+        if decision == BRAKE_STOP:
+            if form.get("confirm") is not None:
+                raise ActionRefused.coded(400, "malformed_form")
+            if project_id not in self._store.list_ids():
+                raise ActionRefused.coded(404, "no_such_project")
+            with self._lock:
+                if self._active(project_id) is not None:
+                    raise ActionRefused.coded(409, "already_running", id=project_id)
+                self._decide_brake(project_id, task, continuing=False)
+            return
+        self._start(
+            project_id,
+            {k: v for k, v in form.items() if k in START_FIELDS},
+            before_spawn=lambda: self._decide_brake(project_id, task, continuing=True),
+        )
+
+    def _decide_brake(self, project_id: str, task: str, *, continuing: bool) -> None:
+        """Record the brake decision (called under the lock)."""
+        try:
+            sink = self._store.events(project_id)
+            recorded = sink.read()
+        except (OSError, ValueError, ProjectStoreError) as e:
+            raise ActionRefused.coded(500, "brake_failed", reason=str(e)) from None
+        record = continue_task if continuing else decline_task
+        try:
+            record(recorded, sink, project_id, task, via="web", now=self._clock())
+        except BrakeError:
+            raise ActionRefused.coded(409, "not_braked", task=task, id=project_id) from None
+        except (OSError, ValueError) as e:
+            raise ActionRefused.coded(500, "brake_failed", reason=str(e)) from None
+
+    def _start(
+        self,
+        project_id: str,
+        form: Mapping[str, str],
+        *,
+        before_spawn: Callable[[], None] | None = None,
+    ) -> None:
         confirm = form.get("confirm")
         if confirm is not None and confirm != CONFIRM_VALUE:
             raise ActionRefused.coded(400, "malformed_form")
@@ -322,6 +393,8 @@ class BackgroundRuns:
             if needs and confirm != CONFIRM_VALUE:
                 raise ActionRefused.coded(409, "confirm_cost")
             yes = needs and confirm == CONFIRM_VALUE
+            if before_spawn is not None:
+                before_spawn()
             argv = self._preflight.command(project_id, yes=yes)
             started = self._clock()
             log_path = self._new_log(project_id, started)

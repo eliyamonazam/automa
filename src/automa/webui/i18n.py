@@ -609,6 +609,14 @@ _RAW: dict[str, dict[Language, str]] = {
             "و دوباره «شروع» رو بزن (چیزی اجرا نشد)"
         ),
     },
+    "refusal.not_braked": {
+        "en": "task {task} of project {id} is not waiting for a spending brake decision",
+        "fa": "مرحلهٔ {task} از پروژهٔ {id} منتظر تصمیم دربارهٔ ترمز خرج نیست",
+    },
+    "refusal.brake_failed": {
+        "en": "could not record the decision: {reason}",
+        "fa": "تصمیم ثبت نشد: {reason}",
+    },
     "refusal.start_failed": {
         "en": "could not start the run: {reason}",
         "fa": "اجرا شروع نشد: {reason}",

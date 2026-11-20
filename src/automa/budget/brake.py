@@ -19,6 +19,10 @@ against an estimated $0.09-0.40). The brake is an *extra* stop for that case:
 that task; it is only accepted while the task's latest brake stop has not been
 continued yet, so the allowance can be raised one step at a time and never ahead
 of time. Each continue lets the task spend one more step of the same size.
+
+"Stop" in the web UI (D154) appends a ``brake.declined`` event: a record of the
+user's decision only. It allows nothing, keeps the stop pending (a later continue is
+still possible) and never changes what the brake or the guard refuse.
 """
 
 from __future__ import annotations
@@ -38,6 +42,7 @@ from automa.llm.types import LLMResult
 
 BRAKE_STOP = "brake.stop"
 BRAKE_CONTINUED = "brake.continued"
+BRAKE_DECLINED = "brake.declined"
 
 
 class TaskBrakeStop(BudgetError):
@@ -136,6 +141,41 @@ def continue_task(
             "spent_nusd": stop.data.get("spent_nusd"),
             "step_nusd": stop.data.get("step_nusd"),
         },
+    )
+    sink.emit(event)
+    return event
+
+
+def declined_brake(events: Sequence[Event], task_id: str) -> bool:
+    """Whether the user said "stop" after the task's pending brake stop (D154)."""
+    for e in reversed(events):
+        if e.data.get("task") != task_id:
+            continue
+        if e.type == BRAKE_DECLINED:
+            return pending_brake(events, task_id) is not None
+        if e.type in (BRAKE_STOP, BRAKE_CONTINUED):
+            return False
+    return False
+
+
+def decline_task(
+    events: Sequence[Event],
+    sink: EventSink,
+    project_id: str,
+    task_id: str,
+    *,
+    via: str,
+    now: datetime | None = None,
+) -> Event:
+    """Record that the user keeps ``task_id`` stopped (D154); allows nothing."""
+    stop = pending_brake(events, task_id)
+    if stop is None:
+        raise BrakeError(f"task {task_id!r} is not stopped by the spending brake")
+    event = Event(
+        ts=now or datetime.now(UTC),
+        type=BRAKE_DECLINED,
+        project_id=project_id,
+        data={"task": task_id, "via": via, "spent_nusd": stop.data.get("spent_nusd")},
     )
     sink.emit(event)
     return event

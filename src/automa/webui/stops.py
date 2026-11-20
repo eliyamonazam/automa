@@ -26,6 +26,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from automa.budget.brake import BRAKE_STOP, declined_brake, pending_brake
 from automa.events import Event
 from automa.l10n import LANGUAGES, Language, absolute_time, localize_digits
 from automa.webui.i18n import check_messages, template_fields
@@ -95,6 +96,14 @@ class StopInfo(BaseModel):
     kind: StopKind
     at: datetime
     reset_at: datetime | None = None  # daily cap: when the next UTC day starts
+    # task brake (D154): the braked task, its recorded cost and brake allowance, and
+    # the decision state: ``awaiting`` (its stop is not continued yet) and
+    # ``declined`` (the user said "stop" to it). Not awaiting = continued already.
+    task: str | None = None
+    spent_nusd: int | None = None
+    limit_nusd: int | None = None
+    awaiting: bool = False
+    declined: bool = False
 
 
 def classify_provider(detail: str) -> StopKind:
@@ -137,7 +146,35 @@ def latest_stop(events: Sequence[Event]) -> StopInfo | None:
         detail = pause.data.get("detail")
         kind = classify_provider(detail if isinstance(detail, str) else "")
         return StopInfo(kind=kind, at=pause.ts)
+    if reason == "task_brake":
+        return _brake_stop(events, run, pause)
     return StopInfo(kind=_REASON_KIND.get(str(reason), "other"), at=pause.ts)
+
+
+def _nusd(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _brake_stop(events: Sequence[Event], run: Sequence[Event], pause: Event) -> StopInfo:
+    """The task brake's pause (D154), with the braked task and its numbers."""
+    task = pause.data.get("task")
+    if not isinstance(task, str) or not task:
+        return StopInfo(kind="task_brake", at=pause.ts)
+    stop = next(
+        (e for e in reversed(run) if e.type == BRAKE_STOP and e.data.get("task") == task), None
+    )
+    if stop is None:  # no recorded brake stop: only the plain sentence
+        return StopInfo(kind="task_brake", at=pause.ts)
+    data = stop.data
+    return StopInfo(
+        kind="task_brake",
+        at=pause.ts,
+        task=task,
+        spent_nusd=_nusd(data.get("spent_nusd")),
+        limit_nusd=_nusd(data.get("limit_nusd")),
+        awaiting=pending_brake(events, task) is not None,
+        declined=declined_brake(events, task),
+    )
 
 
 def _budget_stop(event: Event) -> StopInfo:
@@ -219,6 +256,37 @@ _RAW: dict[str, dict[Language, str]] = {
         "fa": "ترمز خرج متوقفش کرد: یک مرحله خیلی بیشتر از پیش‌بینی خرج کرد. اگه ادامه "
         "می‌ارزه، در ترمینال بزن: automa brake continue <project> <task>",
     },
+    "stop.brake.ask": {
+        "en": "Step {task} has cost {spent}, far more than estimated (its brake was at "
+        "{limit}). Continue?",
+        "fa": "مرحلهٔ {task} {spent} خرج کرده، خیلی بیشتر از پیش‌بینی (ترمزش روی {limit} "
+        "بود)؛ ادامه بدم؟",
+    },
+    "stop.brake.ask_plain": {
+        "en": "Step {task} has cost far more than estimated. Continue?",
+        "fa": "مرحلهٔ {task} خیلی بیشتر از پیش‌بینی خرج کرده؛ ادامه بدم؟",
+    },
+    "stop.brake.continue": {
+        "en": "Continue (once more the same amount)",
+        "fa": "ادامه (یک بار دیگه همین‌قدر)",
+    },
+    "stop.brake.stop": {"en": "Stop", "fa": "توقف"},
+    "stop.brake.help": {
+        "en": "Continue allows this step one more brake step of spending; the "
+        "spending caps still apply.",
+        "fa": "«ادامه» به این مرحله اجازهٔ یک پلهٔ دیگه خرج می‌ده؛ سقف‌های خرج همچنان سر جاشون هستن.",
+    },
+    "stop.task_brake_declined": {
+        "en": "Kept stopped as you chose: one step cost far more than estimated. If you "
+        "change your mind, it can still continue.",
+        "fa": "به انتخاب تو متوقف موند: یک مرحله خیلی بیشتر از پیش‌بینی خرج کرد. اگه "
+        "نظرت عوض شد، هنوز می‌شه ادامه داد.",
+    },
+    "stop.task_brake_continued": {
+        "en": "Paused by the spending brake; one more step of spending is allowed now. "
+        "It can continue.",
+        "fa": "ترمز خرج متوقفش کرده بود؛ یک پلهٔ دیگه خرج اجازه داده شده و الان می‌شه ادامه داد.",
+    },
     "stop.other": {
         "en": "Paused (see the log).",
         "fa": "متوقف شد (گزارش رو ببین).",
@@ -267,6 +335,11 @@ def describe_stop(stop: StopInfo, *, lang: Language, tz: tzinfo, now: datetime) 
             return StopLine(st("stop.daily_ready", lang), "info", True)
         when = _when(stop.reset_at, now, tz, lang)
         return StopLine(st("stop.daily_wait", lang, when=when), "bad", False)
+    if stop.kind == "task_brake" and stop.task is not None:
+        if not stop.awaiting:  # continued (e.g. in the terminal): a plain start goes on
+            return StopLine(st("stop.task_brake_continued", lang), "info", True)
+        if stop.declined:
+            return StopLine(st("stop.task_brake_declined", lang), "info", False)
     kind = "budget" if stop.kind == "daily_cap" else stop.kind
     tone: StopTone = "info" if kind in _INFO_TONE else "bad"
     return StopLine(st(f"stop.{kind}", lang), tone, kind in _RESUMABLE)
