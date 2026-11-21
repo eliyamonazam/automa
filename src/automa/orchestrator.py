@@ -308,6 +308,8 @@ class Orchestrator:
         self._router = router
         self._selector = selector
         self._images = images
+        # Extra attempts per task granted by user retries (D156), read at run start.
+        self._extra: dict[str, int] = {}
         self._make_tools()  # a factory that ignores a required sandbox fails here
 
     @property
@@ -350,6 +352,7 @@ class Orchestrator:
         if not store.has_plan(project_id):
             raise OrchestratorError(f"project {project_id!r} has no plan yet")
         plan = store.load_plan(project_id)
+        self._extra = self._read_retry_grants(project_id)
         self._set_project(project_id, ProjectStatus.RUNNING)
         self._emit(
             project_id,
@@ -363,7 +366,7 @@ class Orchestrator:
         attempts_run = 0
         # Every iteration stores a result, a verdict or a terminal state, so the loop
         # ends; the cap only turns a bug into an error instead of a hang.
-        max_iterations = len(plan.tasks) * (2 * self._settings.max_attempts + 2) + 1
+        max_iterations = sum(2 * self._max_attempts(t.id) + 2 for t in plan.tasks) + 1
         try:
             for _ in range(max_iterations):
                 states = store.task_states(project_id)
@@ -484,7 +487,7 @@ class Orchestrator:
         attempts = 0
         try:
             # Each step stores a result, a verdict or a terminal state (as in ``run``).
-            for _ in range(2 * self._settings.max_attempts + 2):
+            for _ in range(2 * self._max_attempts(task.id) + 2):
                 if halt.is_set() or self._stop_wanted(project_id):
                     return attempts  # the scheduler turns a stop request into a pause
                 state = self._store.task_states(project_id)[task.id]
@@ -552,7 +555,6 @@ class Orchestrator:
     ) -> int:
         """Advance ``task`` by one attempt (or one re-verification). Returns attempts started."""
         store = self._store
-        s = self._settings
         try:
             role = self._roles.get(task.role)
         except RoleError as e:
@@ -566,7 +568,11 @@ class Orchestrator:
             return 0
 
         last_verdict = history[-1][1] if history else None
-        if last_verdict is not None and not last_verdict.passed and len(history) >= s.max_attempts:
+        if (
+            last_verdict is not None
+            and not last_verdict.passed
+            and len(history) >= self._max_attempts(task.id)
+        ):
             self._fail(project_id, plan, task, len(history))
             return 0
         if uses_images(role) and self._images is None:
@@ -718,7 +724,7 @@ class Orchestrator:
         if verdict.passed:
             self._save_state(project_id, plan, task.id, TaskStatus.PASSED, result.tier, None)
             return
-        if attempts >= s.max_attempts:
+        if attempts >= self._max_attempts(task.id):
             self._fail(project_id, plan, task, attempts)
             return
         tier = result.tier
@@ -734,6 +740,18 @@ class Orchestrator:
         self._save_state(project_id, plan, task.id, TaskStatus.PENDING, tier, None)
 
     # -- helpers -----------------------------------------------------------
+
+    def _max_attempts(self, task_id: str) -> int:
+        """``max_attempts`` plus the attempts user retries granted this task (D156)."""
+        return min(self._settings.max_attempts + self._extra.get(task_id, 0), MAX_TASK_ATTEMPTS)
+
+    def _read_retry_grants(self, project_id: str) -> dict[str, int]:
+        from automa.retry import retry_grants  # local: retry imports the store layer
+
+        try:
+            return retry_grants(self._store.events(project_id).read())
+        except (OSError, ValueError):
+            return {}  # unreadable log: no extra attempts (the strict side)
 
     def _record_quality(
         self, project_id: str, task: Task, result: TaskResult, verdict: Verdict

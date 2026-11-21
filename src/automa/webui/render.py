@@ -19,6 +19,7 @@ from datetime import UTC, datetime, tzinfo
 from string import Formatter
 from urllib.parse import quote
 
+from automa.delivery import Delivery, DeliveryFile, DeliveryState, TaskDelivery
 from automa.l10n import (
     DEFAULT_TIMEZONE,
     Language,
@@ -26,10 +27,13 @@ from automa.l10n import (
     relative_time,
     resolve_timezone,
 )
+from automa.plan import TaskStatus
 from automa.plan.models import MAX_ANSWER_CHARS
 from automa.project.store import MAX_GOAL_CHARS
+from automa.retry import RETRY_ATTEMPTS
 from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.tools.missing import install_command
+from automa.webui.bundle import bundle_href
 from automa.webui.files import (
     MAX_IMAGE_BYTES,
     FileContent,
@@ -79,74 +83,100 @@ MONO_STACK = 'ui-monospace,"Cascadia Mono",Consolas,"DejaVu Sans Mono",monospace
 
 _STYLE = (
     """
-:root{color-scheme:light dark;--bg:#f3f5fb;--card:#fff;--fg:#1b1f2a;--muted:#667085;
---line:#e3e7f0;--accent:#5b4be0;--accentb:#0ea5a4;--code:#f1f3f9;--warn:#b54708;
---err:#c01048;--chip:#eef0f7;--ok:#dcfae6;--okfg:#067647;--bad:#fee4e2;--badfg:#b42318;
---busy:#fef0c7;--busyfg:#93370d;--info:#e0eaff;--infofg:#3538cd;--shadow:#1b1f2a14}
-@media (prefers-color-scheme: dark){:root{--bg:#0f1117;--card:#181b24;--fg:#eceef4;
---muted:#9aa3b5;--line:#2a2f3c;--accent:#9b8cff;--accentb:#2dd4bf;--code:#222633;
---warn:#fdb022;--err:#fd6f8e;--chip:#252a37;--ok:#0f3d27;--okfg:#75e0a7;--bad:#4a1a1a;
---badfg:#fda29b;--busy:#4a3410;--busyfg:#fec84b;--info:#1f2550;--infofg:#a4bcfd;
---shadow:#00000066}}
+:root{color-scheme:light dark;--bg:#f5f6fa;--card:#fff;--fg:#151826;--muted:#6b7285;
+--line:#e6e8f0;--soft:#f0f2f8;--accent:#4f46e5;--accent2:#7c3aed;--accentb:#0ea5e9;
+--code:#f2f4f9;--warn:#b54708;--err:#c01048;--chip:#eef0f6;--ok:#dcfae6;--okfg:#067647;
+--okline:#12b76a;--bad:#fee4e2;--badfg:#b42318;--badline:#f04438;--busy:#fef0c7;
+--busyfg:#93370d;--busyline:#f79009;--info:#e8edff;--infofg:#3538cd;--shadow:#1a1f3612;
+--radius:16px}
+@media (prefers-color-scheme: dark){:root{--bg:#0d0f16;--card:#161925;--fg:#eceef5;
+--muted:#9aa2b6;--line:#262b3a;--soft:#1c2030;--accent:#8b85ff;--accent2:#b18cff;
+--accentb:#38bdf8;--code:#1f2333;--warn:#fdb022;--err:#fd6f8e;--chip:#232838;--ok:#0f3d27;
+--okfg:#75e0a7;--bad:#4a1a1a;--badfg:#fda29b;--busy:#4a3410;--busyfg:#fec84b;
+--info:#1e2450;--infofg:#a4bcfd;--shadow:#00000066;--okline:#17b26a;--badline:#f97066;
+--busyline:#fdb022;--radius:16px}}
 *{box-sizing:border-box}
+html{background:var(--bg)}
 body{font-family:"""
     + FONT_STACK
-    + """;font-size:16px;line-height:1.7;margin:0 auto;padding:16px;max-width:1100px;
-color:var(--fg);background:var(--bg)}
-h1{font-size:1.6em;margin:.3em 0}h2{font-size:1.2em;margin:1.2em 0 .5em}h3{font-size:1.05em}
+    + """;font-size:16px;line-height:1.75;margin:0;color:var(--fg);background:var(--bg);
+-webkit-font-smoothing:antialiased}
+.topbar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:18px;
+padding:10px max(16px,calc((100% - 1100px)/2));background:color-mix(in srgb,var(--card) 88%,
+transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.brand{font-weight:800;font-size:1.1em;text-decoration:none;color:var(--fg);
+display:inline-flex;align-items:center;gap:8px}
+.brand .logo{display:inline-flex;width:28px;height:28px;border-radius:9px;align-items:center;
+justify-content:center;color:#fff;font-size:.9em;
+background:linear-gradient(135deg,var(--accent),var(--accent2))}
+.topbar nav{display:flex;gap:6px;margin-inline-start:auto}
+.topbar nav a{color:var(--muted);text-decoration:none;padding:4px 12px;border-radius:999px;
+font-weight:600;font-size:.95em}.topbar nav a:hover{background:var(--soft);color:var(--fg)}
+.wrap{max-width:1100px;margin:0 auto;padding:18px 16px 48px}
+h1{font-size:1.65em;margin:.3em 0;line-height:1.4}h2{font-size:1.2em;margin:1.3em 0 .5em}
+h3{font-size:1.04em;margin:.4em 0}
 a{color:var(--accent)}code,pre{font-family:"""
     + MONO_STACK
-    + """}
+    + """;font-size:.92em}
+code{background:var(--code);padding:1px 6px;border-radius:6px}
 [dir=auto],pre{unicode-bidi:plaintext}
-pre{white-space:pre-wrap;word-break:break-word;background:var(--code);padding:8px 10px;
-border-radius:8px;text-align:start}
-.hero{background:linear-gradient(135deg,#5b4be0,#0ea5a4);color:#fff;border-radius:18px;
-padding:18px 22px;margin:4px 0 16px;box-shadow:0 8px 24px var(--shadow)}
-.hero h1{margin:0 0 .2em;font-size:1.7em}.hero p{margin:.2em 0;opacity:.95}
-.hero a{color:#fff}.hero .muted{color:#ffffffcc}
-.hero .button{background:#fff;color:#4338ca;box-shadow:none}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;
+pre{white-space:pre-wrap;word-break:break-word;background:var(--code);padding:10px 12px;
+border-radius:10px;text-align:start}
+.hero{background:linear-gradient(135deg,var(--accent) 0%,var(--accent2) 55%,var(--accentb) 100%);
+color:#fff;border-radius:22px;padding:22px 26px;margin:4px 0 16px;
+box-shadow:0 14px 34px -12px #4f46e580}
+.hero h1{margin:0 0 .25em;font-size:1.75em}.hero p{margin:.2em 0;opacity:.95}
+.hero a{color:#fff}.hero .muted{color:#ffffffcc}.hero code{background:#ffffff26;color:#fff}
+.hero .button{background:#fff;color:var(--accent);box-shadow:none}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;
 margin:12px 0}
-.stat{background:var(--card);border:1px solid var(--line);border-radius:14px;
-padding:10px 14px;box-shadow:0 2px 8px var(--shadow)}
-.stat .label{color:var(--muted);font-size:.85em}.stat .value{font-size:1.25em;font-weight:700}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;
-padding:14px 18px;margin:12px 0;box-shadow:0 2px 10px var(--shadow)}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+padding:12px 16px;box-shadow:0 1px 3px var(--shadow)}
+.stat .label{color:var(--muted);font-size:.85em;display:block}
+.stat .value{font-size:1.3em;font-weight:800}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+padding:16px 20px;margin:14px 0;box-shadow:0 1px 3px var(--shadow),0 8px 24px -18px var(--shadow)}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
 .cards>.card{margin:0}.card h2,.card h3{margin-top:0}
-.project{border-top:5px solid var(--accent)}.project h2 a{text-decoration:none}
-.project.ps-done{border-top-color:#12b76a}.project.ps-failed{border-top-color:#f04438}
-.project.ps-running{border-top-color:#f79009}.project.ps-paused{border-top-color:#98a2b3}
+.project{position:relative;overflow:hidden;transition:transform .15s,box-shadow .15s}
+.project::before{content:"";position:absolute;inset:0 0 auto 0;height:4px;background:var(--accent)}
+.project:hover{transform:translateY(-2px);box-shadow:0 12px 30px -16px var(--shadow)}
+.project h2{font-size:1.08em;margin:.2em 0}.project h2 a{text-decoration:none;color:var(--fg)}
+.project.ps-done::before{background:var(--okline)}
+.project.ps-failed::before{background:var(--badline)}
+.project.ps-running::before{background:var(--busyline)}
+.project.ps-paused::before{background:#98a2b3}
 .goal{margin:.3em 0;overflow-wrap:anywhere;white-space:pre-line}
-.now{font-size:1.15em;font-weight:600;padding:10px 14px;border-radius:12px;
-background:var(--info);color:var(--infofg);margin:10px 0}
+.now{font-size:1.12em;font-weight:700;padding:12px 16px;border-radius:12px;
+background:var(--info);color:var(--infofg);margin:6px 0 10px}
 .now.ok{background:var(--ok);color:var(--okfg)}.now.bad{background:var(--bad);color:var(--badfg)}
 .now.busy{background:var(--busy);color:var(--busyfg)}
-.costcard{border-top:1px solid var(--line);margin-top:10px;padding-top:6px}
-.costcard .big{font-size:1.9em;margin:.2em 0;color:var(--accent)}
-.costcard meter{width:12em}
+.costcard{border-top:1px solid var(--line);margin-top:12px;padding-top:8px}
+.costcard .big{font-size:1.9em;margin:.15em 0;color:var(--accent)}
 .meta{color:var(--muted);font-size:.9em;margin:.2em 0}.muted{color:var(--muted)}
 table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid var(--line);
-padding:6px 8px;text-align:start;vertical-align:top}th{color:var(--muted);font-weight:600}
+padding:8px 10px;text-align:start;vertical-align:top}th{color:var(--muted);font-weight:600;
+font-size:.9em}
 .scroll{overflow-x:auto}
 .warn{color:var(--warn)}.err{color:var(--err)}
-.badge{display:inline-block;padding:1px 10px;border-radius:999px;background:var(--chip);
-font-size:.85em;font-weight:600;vertical-align:middle}
+.badge{display:inline-flex;align-items:center;gap:4px;padding:1px 11px;border-radius:999px;
+background:var(--chip);font-size:.82em;font-weight:700;vertical-align:middle;line-height:1.9}
 .st-passed,.ps-done .badge.st,.badge.ps-done{background:var(--ok);color:var(--okfg)}
 .st-failed,.st-blocked,.badge.ps-failed{background:var(--bad);color:var(--badfg)}
 .st-running,.st-verifying,.badge.ps-running{background:var(--busy);color:var(--busyfg)}
 .badge.ps-planning,.badge.ps-new{background:var(--info);color:var(--infofg)}
 .badge.tone-paused{background:#d0d5dd;color:#1d2939}
+.hero .badge{background:#ffffff2e;color:#fff}
 .hint{color:var(--muted);font-size:.9em;margin:.2em 0}
-.task{border-inline-start:5px solid var(--line)}.t-passed{border-inline-start-color:#12b76a}
-.t-failed,.t-blocked{border-inline-start-color:#f04438}
-.t-running,.t-verifying{border-inline-start-color:#f79009}
-.chips{display:flex;flex-wrap:wrap;gap:6px 12px;color:var(--muted);font-size:.9em;margin:.3em 0}
+.task{border-inline-start:4px solid var(--line)}.t-passed{border-inline-start-color:var(--okline)}
+.t-failed,.t-blocked{border-inline-start-color:var(--badline)}
+.t-running,.t-verifying{border-inline-start-color:var(--busyline)}
+.chips{display:flex;flex-wrap:wrap;gap:6px 14px;color:var(--muted);font-size:.88em;margin:.4em 0}
 meter{width:12em;vertical-align:middle}
-.bar{height:14px;border-radius:999px;background:var(--chip);overflow:hidden;margin:8px 0}
+.bar{height:12px;border-radius:999px;background:var(--chip);overflow:hidden;margin:8px 0}
 .bar .fill{height:100%;border-radius:999px;
 background:linear-gradient(90deg,var(--accent),var(--accentb))}
-.steps{list-style:none;margin:14px 0;padding:0;display:flex;flex-wrap:wrap;gap:0}
+.steps{list-style:none;margin:14px 0 4px;padding:0;display:flex;flex-wrap:wrap;gap:0}
 .steps li{flex:1 1 120px;position:relative;text-align:center;padding:0 6px 6px;
 min-width:110px}
 .steps li::before{content:"";position:absolute;top:17px;inset-inline-start:0;width:100%;
@@ -156,29 +186,65 @@ height:4px;background:var(--line);z-index:0}
 .steps li:only-child::before{display:none}
 .steps .dot{position:relative;z-index:1;display:inline-flex;align-items:center;
 justify-content:center;width:38px;height:38px;border-radius:50%;background:var(--card);
-border:3px solid var(--line);font-weight:700}
-.steps .name{display:block;font-size:.9em;margin-top:4px;overflow-wrap:anywhere}
+border:3px solid var(--line);font-weight:800}
+.steps .name{display:block;font-size:.88em;margin-top:4px;overflow-wrap:anywhere}
 .steps .when{display:block;font-size:.78em;color:var(--muted)}
-.steps .s-done::before{background:#12b76a}
-.steps .s-done .dot{background:#12b76a;border-color:#12b76a;color:#fff}
-.steps .s-now .dot{border-color:#f79009;background:var(--busy);color:var(--busyfg)}
-.steps .s-now .name{font-weight:700}
-.steps .s-fail .dot{background:#f04438;border-color:#f04438;color:#fff}
+.steps .s-done::before{background:var(--okline)}
+.steps .s-done .dot{background:var(--okline);border-color:var(--okline);color:#fff}
+.steps .s-now .dot{border-color:var(--busyline);background:var(--busy);color:var(--busyfg)}
+.steps .s-now .name{font-weight:800}
+.steps .s-fail .dot{background:var(--badline);border-color:var(--badline);color:#fff}
+.deliver{border:1px solid var(--line);border-top:6px solid var(--accent);padding:18px 22px}
+.deliver.ready{border-top-color:var(--okline);
+background:linear-gradient(180deg,color-mix(in srgb,var(--ok) 55%,var(--card)),var(--card) 140px)}
+.deliver.partial{border-top-color:var(--busyline);
+background:linear-gradient(180deg,color-mix(in srgb,var(--busy) 50%,var(--card)),var(--card) 140px)}
+.deliver h2{font-size:1.35em;margin:0 0 .3em}
+.deliver .summary{font-size:1.05em;white-space:pre-line;overflow-wrap:anywhere}
+.files-list{list-style:none;margin:10px 0;padding:0;display:grid;gap:8px}
+.file-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:10px 14px;
+border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.file-row .fname{font-weight:700;overflow-wrap:anywhere}
+.file-row .fmeta{color:var(--muted);font-size:.85em}
+.file-row .acts{display:flex;gap:6px;margin-inline-start:auto;flex-wrap:wrap}
+.file-row.missing{opacity:.75;border-style:dashed}
+.howto{background:var(--soft);border-radius:12px;padding:10px 14px;margin:10px 0;
+white-space:pre-line;overflow-wrap:anywhere}
+.checks{list-style:none;margin:6px 0;padding:0}
+.checks li{padding:2px 0;padding-inline-start:28px;position:relative}
+.checks li::before{position:absolute;inset-inline-start:0;top:3px;width:20px;height:20px;
+border-radius:50%;display:inline-flex;align-items:center;justify-content:center;
+font-size:.75em;font-weight:800;content:"•";background:var(--chip);color:var(--muted)}
+.checks li.c-ok::before{content:"✓";background:var(--ok);color:var(--okfg)}
+.checks li.c-bad::before{content:"✕";background:var(--bad);color:var(--badfg)}
+.problems{margin:8px 0;padding-inline-start:20px}.problems li{margin:4px 0}
+.retry{border-top:1px dashed var(--line);margin-top:14px;padding-top:12px}
+.btn-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0}
 textarea,input,button{font:inherit;color:inherit}
-textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;
-padding:10px}
+textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:12px;
+padding:12px 14px;line-height:1.7}
+textarea:focus,input:focus{outline:2px solid color-mix(in srgb,var(--accent) 45%,transparent);
+outline-offset:1px}
 input[type=text],input:not([type]){background:var(--card);border:1px solid var(--line);
-border-radius:8px;padding:4px 8px}
-button,.button{display:inline-block;background:linear-gradient(135deg,var(--accent),
-var(--accentb));color:#fff;border:0;border-radius:999px;padding:6px 18px;cursor:pointer;
-font-weight:600;text-decoration:none;box-shadow:0 4px 12px var(--shadow)}
+border-radius:10px;padding:5px 10px}
+input[type=checkbox]{accent-color:var(--accent);width:1.05em;height:1.05em;vertical-align:middle}
+button,.button{display:inline-flex;align-items:center;gap:6px;background:var(--accent);
+color:#fff;border:1px solid transparent;border-radius:12px;padding:8px 18px;cursor:pointer;
+font-weight:700;text-decoration:none;box-shadow:0 6px 16px -8px var(--accent);
+transition:filter .15s,transform .15s}
+button:hover,.button:hover{filter:brightness(1.08);transform:translateY(-1px)}
+.button.secondary{background:var(--card);color:var(--fg);border-color:var(--line);box-shadow:none}
+.button.small{padding:3px 12px;font-size:.88em;border-radius:10px}
 details>summary{cursor:pointer;color:var(--muted)}
-@media (prefers-color-scheme: dark){button,.button{color:#0f1117}}
-@media (max-width:640px){body{padding:10px;font-size:15px}.hero{padding:14px 16px}
-.hero h1{font-size:1.35em}.cards{grid-template-columns:1fr}
+@media (prefers-color-scheme: dark){button,.button{color:#0d0f16}
+.button.secondary{color:var(--fg)}}
+@media (max-width:640px){body{font-size:15px}.wrap{padding:12px 10px 40px}
+.hero{padding:16px 18px;border-radius:18px}.hero h1{font-size:1.35em}
+.cards{grid-template-columns:1fr}
 .steps{flex-direction:column}.steps li{flex:none;text-align:start;padding:0 0 8px 0;
 min-width:0}
-.steps li::before{display:none}.steps .name,.steps .when{display:inline;margin:0 8px}}
+.steps li::before{display:none}.steps .name,.steps .when{display:inline;margin:0 8px}
+.file-row .acts{margin-inline-start:0}}
 """
 )
 
@@ -269,7 +335,16 @@ def page(
         '<meta name="color-scheme" content="light dark">'
         f'<meta name="referrer" content="{referrer}">{reload}'
         f"<title>{text(title)}</title><style>{_STYLE}</style></head>"
-        f"<body>{body}</body></html>\n"
+        f'<body>{_topbar(lang)}<main class="wrap">{body}</main></body></html>\n'
+    )
+
+
+def _topbar(lang: Language) -> str:
+    """The app bar on every page: the name (home link) and the project list."""
+    return (
+        '<header class="topbar"><a class="brand" href="/">'
+        '<span class="logo" aria-hidden="true">A</span>Automa</a>'
+        f'<nav><a href="/">{text(t("nav.projects", lang))}</a></nav></header>'
     )
 
 
@@ -458,6 +533,8 @@ def render_project(
     lang: Language = "en",
     tz: tzinfo | None = None,
     now: datetime | None = None,
+    delivery: Delivery | None = None,
+    retry: bool = False,
 ) -> str:
     """One project page. ``forms`` (action mode only) adds approve/reject forms;
     ``notice`` is a one-line result of the last decision, shown at the top;
@@ -494,6 +571,9 @@ def render_project(
     if notice:
         parts.append(f'<p class="badge" dir="auto">{text(notice)}</p>')
     parts.append(_hero_and_journey(view, journey, lang))
+    if delivery is not None:
+        retry_form = forms if retry and not running else None
+        parts.append(_delivery_card(delivery, retry_form, lang))
     if resume and forms is not None and run is not None:
         parts.append(_start_form(view.id, run, forms, lang, stop_text("stop.continue", lang), ""))
     brake = progress.stop if progress is not None else None
@@ -540,15 +620,14 @@ def render_project(
     if run is not None and forms is not None:
         parts.append(_run_panel(view.id, run, forms, lang, when))
     count = len(view.pending)
-    parts.append(f"<h2>{text(t('approvals.heading', lang, count=count))}</h2>")
     if view.pending:
+        parts.append(f"<h2>{text(t('approvals.heading', lang, count=count))}</h2>")
         parts.append("".join(_approval(view.id, a, forms, lang, when) for a in view.pending))
-    else:
-        parts.append(f"<p>{text(t('approvals.none', lang))}</p>")
     if view.plan_version is None:
         parts.append(f"<h2>{text(t('plan.heading', lang))}</h2><p>{text(t('plan.none', lang))}</p>")
     else:
-        cards = "".join(_task_card(task, lang) for task in view.tasks)
+        checks = {d.id: d for d in delivery.tasks} if delivery is not None else {}
+        cards = "".join(_task_card(task, lang, checks.get(task.id)) for task in view.tasks)
         heading = t("plan.version", lang, version=view.plan_version, count=len(view.tasks))
         parts.append(f'<h2>{text(heading)}</h2><div class="cards">{cards}</div>')
     errors = view.errors + (progress.errors if progress is not None else ())
@@ -621,7 +700,32 @@ def _state_class(state: str | None) -> str:
     return state if state in _STATE_CLASSES else "none"
 
 
-def _task_card(task: TaskRow, lang: Language = "en") -> str:
+def _criteria_html(d: TaskDelivery | None, lang: Language) -> str:
+    """The task's acceptance checks with what the last verdict said (D157)."""
+    if d is None or not d.criteria:
+        return ""
+    items = "".join(
+        f'<li class="{_CHECK_CLASS[c.passed]}" dir="auto">{text(c.description)}</li>'
+        for c in d.criteria
+    )
+    issues = ""
+    if d.issues and d.status is not TaskStatus.PASSED:
+        notes = "".join(f'<li dir="auto">{text(i)}</li>' for i in d.issues)
+        issues = (
+            f'<p class="meta"><strong>{text(t("task.issues", lang))}</strong></p>'
+            f'<ul class="problems">{notes}</ul>'
+        )
+    return (
+        f"<details{' open' if d.status is not TaskStatus.PASSED else ''}>"
+        f"<summary>{text(t('task.checks', lang))}</summary>"
+        f'<ul class="checks">{items}</ul>{issues}</details>'
+    )
+
+
+_CHECK_CLASS = {True: "c-ok", False: "c-bad", None: "c-wait"}
+
+
+def _task_card(task: TaskRow, lang: Language = "en", checks: TaskDelivery | None = None) -> str:
     """One task of the plan as a card (D129): the title in its own direction, the
     state as a fixed class and the rest as labelled chips (translated, D144)."""
     state = _state_class(task.state)
@@ -644,7 +748,126 @@ def _task_card(task: TaskRow, lang: Language = "en") -> str:
         f'<span dir="auto">{text(last)}</span></span>'
         f"<span>{text(t('task.model', lang, model=task.model or '-'))}</span></p>"
         + _missing_program_html(task.missing_program, lang)
+        + _criteria_html(checks, lang)
         + "</article>"
+    )
+
+
+def _delivery_card(d: Delivery, forms: ActionForms | None, lang: Language) -> str:
+    """The product card (D157): what the user gets, its files with open/view/download,
+    how to use it, what was checked and, for an incomplete product, what is missing
+    and the "try again" form (D156, ``forms`` only when a retry is possible)."""
+    state = d.state.value if d.state.value in _DELIVERY_STATES else "promise"
+    title_key = {
+        "ready": "deliver.ready.title",
+        "partial": "deliver.partial.title",
+    }.get(state, "deliver.promise.title")
+    cls = state if state in ("ready", "partial") else "promise"
+    parts = [
+        f'<section class="card deliver {cls}">',
+        f"<h2>{text(t(title_key, lang))}</h2>",
+        f'<p class="summary" dir="auto">{text(d.summary)}</p>',
+    ]
+    if d.derived:
+        parts.append(f'<p class="hint">{text(t("deliver.derived", lang))}</p>')
+    done = {td.id for td in d.tasks if td.status is TaskStatus.PASSED}
+    started = d.state in (DeliveryState.READY, DeliveryState.PARTIAL)
+    if d.main_files:
+        rows = [
+            _file_row(d, f, f.task_id in done or f.task_id is None, started, lang)
+            for f in d.main_files
+        ]
+        parts.append(
+            f'<p class="meta"><strong>{text(t("deliver.files", lang))}</strong></p>'
+            f'<ul class="files-list">{"".join(rows)}</ul>'
+        )
+    if d.how_to_use.strip():
+        parts.append(
+            f'<p class="meta"><strong>{text(t("deliver.how", lang))}</strong></p>'
+            f'<div class="howto" dir="auto">{text(d.how_to_use.strip())}</div>'
+        )
+    if started:
+        checks = sum(c.passed is True for td in d.tasks for c in td.criteria)
+        line = t("deliver.checked", lang, passed=d.passed_tasks, total=len(d.tasks), checks=checks)
+        parts.append(f'<p class="meta">{text(line)}</p>')
+    problems = d.problem_tasks if d.state is DeliveryState.PARTIAL else ()
+    if problems:
+        items = []
+        for td in problems:
+            why = "; ".join(td.issues) if td.status is TaskStatus.FAILED else ""
+            why = why or t("deliver.blocked", lang)
+            items.append(
+                f"<li><strong><bdi>{text(td.title)}</bdi></strong>: <bdi>{text(why)}</bdi></li>"
+            )
+        parts.append(
+            f'<p class="meta"><strong>{text(t("deliver.problems", lang))}</strong></p>'
+            f'<ul class="problems">{"".join(items)}</ul>'
+        )
+    if started and any(f.exists for f in d.main_files) or d.state is DeliveryState.READY:
+        parts.append(
+            f'<div class="btn-row"><a class="button" href="{text(bundle_href(d.project_id))}">'
+            f"{text(t('deliver.zip', lang))}</a>"
+            f'<span class="hint">{text(t("deliver.zip.help", lang))}</span></div>'
+        )
+    if d.state is DeliveryState.PARTIAL and d.project_status.value == "failed":
+        parts.append(_retry_form(d.project_id, forms, lang))
+    parts.append("</section>")
+    return "".join(parts)
+
+
+_DELIVERY_STATES = frozenset({"ready", "partial", "in_progress", "not_started"})
+
+
+def _file_row(d: Delivery, f: DeliveryFile, accepted: bool, started: bool, lang: Language) -> str:
+    """One main file: name, size or why it is missing, and open/view/download links."""
+    pid = d.project_id
+    name = text(f.path)
+    if not f.exists:
+        key = "deliver.file.missing" if started else "deliver.file.planned"
+        return (
+            f'<li class="file-row missing"><span class="fname" dir="auto">📄 {name}</span>'
+            f'<span class="fmeta">{text(t(key, lang))}</span></li>'
+        )
+    meta = _size_text(f.size, lang)
+    if started and not accepted:
+        meta += " · " + t("deliver.file.unchecked", lang)
+    acts = []
+    if is_previewable(f.path):
+        acts.append(
+            f'<a class="button small" href="{text(preview_href(pid, f.path))}" target="_blank" '
+            f'rel="noopener noreferrer">{text(t("deliver.open", lang))}</a>'
+        )
+    view = text(files_href(pid, FilesRoute.VIEW, f.path))
+    down = text(files_href(pid, FilesRoute.DOWNLOAD, f.path))
+    acts.append(
+        f'<a class="button small secondary" href="{view}">{text(t("deliver.view", lang))}</a>'
+    )
+    acts.append(
+        f'<a class="button small secondary" href="{down}">{text(t("deliver.download", lang))}</a>'
+    )
+    icon = "🌐" if f.is_html else "📄"
+    return (
+        f'<li class="file-row"><span class="fname" dir="auto">{icon} {name}</span>'
+        f'<span class="fmeta">{text(meta)}</span><span class="acts">{"".join(acts)}</span></li>'
+    )
+
+
+def _retry_form(project_id: str, forms: ActionForms | None, lang: Language) -> str:
+    """ "Try again" for a failed project (D156); the terminal command when read-only."""
+    body = text(t("deliver.retry.body", lang, attempts=RETRY_ATTEMPTS))
+    if forms is None:
+        cli = _filled(
+            MESSAGES["deliver.retry.cli"][lang],
+            {"retry": f"automa retry {project_id}", "run": f"automa run {project_id}"},
+        )
+        return f'<div class="retry"><p class="hint">{body}</p><p class="hint">{cli}</p></div>'
+    action = text(_project_href(project_id) + "/retry")
+    return (
+        f'<form class="retry" method="post" action="{action}">'
+        f"{_hidden('csrf', forms.csrf_token)}<p>{body}</p>"
+        '<p><label><input type="checkbox" name="confirm" value="yes" required> '
+        f"{text(t('deliver.retry.confirm', lang))}</label></p>"
+        f'<p><button type="submit">{text(t("deliver.retry.button", lang))}</button></p></form>'
     )
 
 

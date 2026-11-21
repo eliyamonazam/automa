@@ -276,6 +276,7 @@ def test_server_renders_the_project_page_in_persian(tmp_path: Path) -> None:
     doc = resp.body.decode()
     assert resp.status == 200
     assert '<html lang="fa" dir="rtl">' in doc
-    assert "هدف:" in doc and "درخواست‌های منتظر تأیید (۰)" in doc
+    assert "هدف:" in doc
+    assert "درخواست‌های منتظر تأیید" not in doc  # the section is shown only when needed
     assert "همین الان" in doc
     assert LATIN_WORD.findall(_interface(doc)) == []

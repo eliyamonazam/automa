@@ -43,6 +43,7 @@ from string import Formatter
 from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
 from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError, nusd_to_usd
+from automa.delivery import try_build_delivery
 from automa.finance.anomaly import AnomalySettings
 from automa.l10n import (
     DEFAULT_TIMEZONE,
@@ -71,6 +72,7 @@ from automa.webui.actions import (
     parse_action_path,
     parse_form,
 )
+from automa.webui.bundle import build_bundle, bundle_name, parse_bundle_path
 from automa.webui.files import (
     FILE_CONTENT_SECURITY_POLICY,
     FilesRefused,
@@ -119,11 +121,13 @@ from automa.webui.render import (
 )
 from automa.webui.runs import (
     BRAKE_FIELDS,
+    RETRY_FIELDS,
     START_FIELDS,
     STOP_FIELDS,
     BackgroundRuns,
     RunPreflight,
     parse_brake_path,
+    parse_retry_path,
     parse_start_path,
     parse_stop_path,
 )
@@ -472,6 +476,9 @@ class WebApp:
         brake_pid = parse_brake_path(parts.path) if not parts.query else None
         if self._runs is not None and brake_pid is not None:
             return self._post_brake(brake_pid, headers, body)
+        retry_pid = parse_retry_path(parts.path) if not parts.query else None
+        if self._runs is not None and retry_pid is not None:
+            return self._post_retry(retry_pid, headers, body)
         action = parse_action_path(parts.path) if not parts.query else None
         if action is None:
             return self.error(404, "error.title.not_found")
@@ -551,6 +558,22 @@ class WebApp:
             form = parse_form(lowered, body, fields=BRAKE_FIELDS)
             check_token(form, self._actions)
             self._runs.brake(pid, form)
+        except ActionRefused as e:
+            return self.refused(e)
+        return self._redirect(f"/projects/{quote(pid, safe='')}")
+
+    def _post_retry(self, pid: str, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
+        """``POST /projects/<pid>/retry`` (D156): "try again", same checks as start."""
+        if self._actions is None or self._runs is None:  # never reached
+            return self.error(404, "error.title.not_found")
+        lowered = self._single_headers(headers)
+        if isinstance(lowered, Response):
+            return lowered
+        try:
+            check_same_origin(lowered, self._actions)
+            form = parse_form(lowered, body, fields=RETRY_FIELDS)
+            check_token(form, self._actions)
+            self._runs.retry(pid, form)
         except ActionRefused as e:
             return self.refused(e)
         return self._redirect(f"/projects/{quote(pid, safe='')}")
@@ -704,6 +727,9 @@ class WebApp:
         preview_target = parse_preview_path(path)
         if preview_target is not None:
             return self._preview(*preview_target)
+        bundle_pid = parse_bundle_path(path)
+        if bundle_pid is not None:
+            return self._bundle(bundle_pid)
         if path == "/":
             spent, err = self._spending()
             try:
@@ -784,9 +810,24 @@ class WebApp:
                 lang=self._lang,
                 tz=self._tz,
                 now=self._clock(),
+                delivery=try_build_delivery(self._store, pid),
+                retry=self._runs is not None and self._runs.can_retry(pid),
             )
             return _html(200, document, security=self._security)
         return self.error(404, "error.title.not_found")
+
+    def _bundle(self, pid: str) -> Response:
+        """``GET /projects/<pid>/download.zip`` (D158): files/ plus DELIVERY.md."""
+        try:
+            data = build_bundle(self._store, pid, lang=self._lang, now=self._clock())
+        except FilesRefused as e:
+            return self.refused(e, "error.title.not_available")
+        headers = (
+            ("Content-Type", "application/zip"),
+            ("Content-Disposition", content_disposition(bundle_name(pid), attachment=True)),
+            *_replace_csp(self._security, FILE_CONTENT_SECURITY_POLICY),
+        )
+        return Response(200, data, headers)
 
 
 def _task_costs(entries: Sequence[LedgerEntry]) -> dict[str, float]:

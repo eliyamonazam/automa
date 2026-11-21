@@ -111,8 +111,25 @@ as FEW tasks as will do the work correctly. Reply with ONLY one JSON object, no 
         {"description": "explains installation"}
       ]
     }
-  ]
+  ],
+  "deliverable": {                     // the finished product the user gets (always add it)
+    "summary": "what the user gets at the end, concretely",
+    "main_files": ["index.html"],      // the files that ARE the product
+    "how_to_use": "how to open, run or read it, step by step"
+  }
 }
+
+The deliverable is a promise to the user, so make it precise:
+- "summary" and "how_to_use" are shown to the user as they are: write them in the
+  language of the user's goal, in plain words for a non-programmer, and describe
+  only what the plan really produces (no "could", no extras that no task makes).
+- "main_files" lists the one to a few files that are the product itself (the page,
+  the program, the report, the spreadsheet), not every helper file. Every main
+  file MUST be named by a file_exists (or file_contains) check of the task that
+  makes it; a plan whose main file no task checks is rejected.
+- The plan must end with a finished, usable product, never a partial step: if the
+  goal is too large, deliver a smaller but complete product and say so in the
+  summary.
 
 Check types: file_exists {path}, file_contains {path, text}, command {command,
 exit_code, timeout_s}. Paths are relative to the project's files directory and

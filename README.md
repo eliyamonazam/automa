@@ -71,6 +71,8 @@ cp automa.toml.example automa.toml
 pip install -e .          # یا با Docker (پایین‌تر)
 automa new "ایده من ..."   # سؤال‌ها + ساخت plan.json + خط cost range: (بازه هزینه قبل از هر خرجی)
 automa run <project-id>    # اجرا/ادامه: Worker ← Verifier ← اصلاح (اگه سر بالای بازه هزینه از [limits] confirm_above_usd، پیش‌فرض ۰٫۳ دلار، بیشتر باشه اول می‌پرسه «ادامه بدم؟»؛ --yes بدون پرسش؛ قبل از اولین فراخوانی مدل خط مشورتی estimate: با تخمین هزینه در برابر بودجه؛ بعد از اجرا خط مشورتی unusual spending: برای فراخوانی‌ها/تلاش‌های غیرعادی همان اجرا)
+automa deliver <project-id>     # گزارش تحویل: محصول آماده‌ست؟ فایل‌های اصلی، روش استفاده، چه چیزهایی بررسی شد (--lang fa|en)
+automa retry <project-id>       # پروژهٔ ناموفق: مرحله‌های ناموفق با قوی‌ترین مدل دوباره تلاش می‌کنن (--attempts N)؛ بعد automa run
 automa run <project-id> --parallel 2   # وظایف مستقل هم‌زمان (یا [orchestrator] max_parallel در automa.toml)
 automa run <project-id> --router       # سطح شروع هر وظیفه تازه با Router داده‌محور از لاگ کیفیت (یا [router] enabled؛ --no-router)
 automa status             # فهرست پروژه‌ها، هزینه و برنامه

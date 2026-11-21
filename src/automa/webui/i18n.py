@@ -683,6 +683,89 @@ _RAW: dict[str, dict[Language, str]] = {
         "en": "The run could not be prepared.",
         "fa": "اجرا آماده نشد.",
     },
+    # Delivery: the product card (D157), retry (D156) and the zip (D158)
+    "nav.projects": {"en": "Projects", "fa": "پروژه‌ها"},
+    "nav.new": {"en": "New idea", "fa": "ایدهٔ جدید"},
+    "deliver.ready.title": {"en": "✅ Your product is ready", "fa": "✅ محصولت آماده‌ست"},
+    "deliver.partial.title": {
+        "en": "⚠️ The product is not complete yet",
+        "fa": "⚠️ محصول هنوز کامل نشده",
+    },
+    "deliver.promise.title": {"en": "🎯 What you will get", "fa": "🎯 چیزی که تحویل می‌گیری"},
+    "deliver.derived": {
+        "en": "The plan had no product description; this list comes from its final steps.",
+        "fa": "برنامه شرح محصول نداشت؛ این فهرست از مرحله‌های آخرش برداشت شده.",
+    },
+    "deliver.files": {"en": "Main files", "fa": "فایل‌های اصلی"},
+    "deliver.file.missing": {"en": "not made", "fa": "ساخته نشد"},
+    "deliver.file.planned": {"en": "not made yet", "fa": "هنوز ساخته نشده"},
+    "deliver.file.unchecked": {
+        "en": "made, but did not pass its checks",
+        "fa": "ساخته شده ولی از بررسی رد شد",
+    },
+    "deliver.open": {"en": "Open", "fa": "باز کردن"},
+    "deliver.view": {"en": "View", "fa": "دیدن"},
+    "deliver.download": {"en": "Download", "fa": "دانلود"},
+    "deliver.zip": {
+        "en": "⬇ Download everything (zip)",
+        "fa": "⬇ دانلود همهٔ فایل‌ها (یک فایل فشرده)",
+    },
+    "deliver.zip.help": {
+        "en": "All files plus DELIVERY.md, the report of what was built and checked.",
+        "fa": "همهٔ فایل‌ها به‌علاوهٔ گزارش تحویل: چی ساخته شد و چی بررسی شد.",
+    },
+    "deliver.how": {"en": "How to use it", "fa": "روش استفاده"},
+    "deliver.checked": {
+        "en": "{passed} of {total} steps passed · {checks} checks passed",
+        "fa": "{passed} از {total} مرحله قبول شد · {checks} مورد بررسی قبول شد",
+    },
+    "deliver.problems": {"en": "What is still missing", "fa": "چی هنوز کم مونده"},
+    "deliver.blocked": {
+        "en": "waits for an earlier step",
+        "fa": "منتظر یک مرحلهٔ قبلیه",
+    },
+    "deliver.retry.body": {
+        "en": (
+            "The failed steps run again on the strongest model, with the problems the "
+            "reviewer found as guidance ({attempts} more attempts each). This costs "
+            "extra; the budget caps still apply."
+        ),
+        "fa": (
+            "مرحله‌های ناموفق با قوی‌ترین مدل و با ایرادهایی که ارزیاب گرفت دوباره انجام "
+            "می‌شن (هر کدوم {attempts} تلاش دیگه). این کار خرج اضافه داره؛ سقف‌های بودجه "
+            "همچنان برقرارن."
+        ),
+    },
+    "deliver.retry.confirm": {
+        "en": "I accept that trying again costs extra",
+        "fa": "قبول دارم که دوباره تلاش کردن خرج اضافه داره",
+    },
+    "deliver.retry.button": {
+        "en": "🔁 Try again until the product is complete",
+        "fa": "🔁 دوباره تلاش کن تا محصول کامل بشه",
+    },
+    "deliver.retry.cli": {
+        "en": "From a terminal: {retry}, then {run}",
+        "fa": "از ترمینال: {retry} و بعد {run}",
+    },
+    "task.checks": {"en": "Acceptance checks", "fa": "معیارهای پذیرش"},
+    "task.issues": {"en": "Reviewer's notes", "fa": "ایرادهای ارزیاب"},
+    "refusal.not_retryable": {
+        "en": "project {id} has no failed step to try again",
+        "fa": "پروژهٔ {id} مرحلهٔ ناموفقی برای تلاش دوباره نداره",
+    },
+    "refusal.retry_failed": {
+        "en": "could not prepare the new attempt: {reason}",
+        "fa": "تلاش دوباره آماده نشد: {reason}",
+    },
+    "refusal.bundle_too_large": {
+        "en": "the project's files are too many or too large for one zip; download them one by one",
+        "fa": "فایل‌های پروژه برای یک فایل فشرده خیلی زیاد یا بزرگ‌ان؛ تک‌تک دانلودشون کن",
+    },
+    "refusal.bundle_changed": {
+        "en": "a file changed while the zip was being made; try again",
+        "fa": "یک فایل وسط ساختن فایل فشرده عوض شد؛ دوباره امتحان کن",
+    },
 }
 
 WELCOME_EXAMPLE_KEYS = ("welcome.example.1", "welcome.example.2", "welcome.example.3")

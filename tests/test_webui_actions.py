@@ -217,7 +217,8 @@ def test_approve_records_once_and_redirects(env: Env) -> None:
         }
     ]
     page = env.app.handle("GET", loc, HOST).body.decode()
-    assert "approved; the call runs at most once" in page and "Pending approvals (0)" in page
+    assert "approved; the call runs at most once" in page
+    assert "Pending approvals" not in page  # nothing pending: the section is hidden
 
 
 def test_reject_needs_no_confirmation(env: Env) -> None:

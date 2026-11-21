@@ -133,7 +133,6 @@ from automa.benchmarks import (
 from automa.budget.brake import (
     BrakeError,
     TaskBrake,
-    brake_continues,
     brake_steps,
     continue_task,
     pending_brake,
@@ -156,6 +155,7 @@ from automa.config import (
     describe_parallel,
     load_config,
 )
+from automa.delivery import DeliveryState, build_delivery, render_markdown, try_build_delivery
 from automa.events import Event, JsonlEventLog
 from automa.finance import (
     ACTUAL_EVENT,
@@ -227,6 +227,15 @@ from automa.quality import (
     QualityRecord,
     QualityStats,
     sync_project,
+)
+from automa.retry import (
+    MAX_RETRY_ATTEMPTS,
+    RETRY_ATTEMPTS,
+    RetryError,
+    brake_inputs,
+    failed_tasks,
+    grant_retry,
+    strongest_tier,
 )
 from automa.reviews import (
     MAX_REVIEWS_PER_PROJECT,
@@ -1109,7 +1118,49 @@ def run(
                 typer.echo(line)
     for line in _report_lines(report):
         typer.echo(line)
+    for line in _delivery_lines(store, pid):
+        typer.echo(line)
     raise typer.Exit(RUN_EXIT_CODES[report.reason])
+
+
+def _delivery_lines(store: ProjectStore, pid: str) -> list[str]:
+    """Short delivery summary after a run that ended (D157); nothing while paused."""
+    delivery = try_build_delivery(store, pid)
+    if delivery is None or delivery.state not in (DeliveryState.READY, DeliveryState.PARTIAL):
+        return []
+    files = ", ".join(f.path + ("" if f.exists else " (missing)") for f in delivery.main_files)
+    lines = [f"delivery: {delivery.state.value}" + (f" - main files: {files}" if files else "")]
+    lines.append(f"full delivery report: automa deliver {pid}")
+    return lines
+
+
+@app.command()
+def deliver(
+    project_id: Annotated[str, typer.Argument(help="Project to report on.")],
+    lang: Annotated[
+        str | None,
+        typer.Option("--lang", help="fa or en; default: [display] language in automa.toml."),
+    ] = None,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """What the project delivered: product, main files, how to use, checks (D157).
+
+    Read-only: reads the project, its plan, verdicts and files; no key, no model.
+    """
+    config = _load(config_path)
+    store = ProjectStore.for_workspace(config.workspace)
+    language = lang or config.display.language
+    if language not in ("fa", "en"):
+        raise _fail("--lang must be fa or en", EXIT_USER)
+    try:
+        delivery = build_delivery(store, project_id)
+    except ProjectStoreError as e:
+        raise _fail(str(e), EXIT_USER) from None
+    if delivery is None:
+        raise _fail(f"project {project_id} has no plan yet", EXIT_USER)
+    typer.echo(render_markdown(delivery, language), nl=False)
 
 
 def _task_brake(
@@ -1152,13 +1203,16 @@ def _task_brake(
         recorded = events.read()
     except (OSError, ValueError):
         recorded = []
+    # A user retry (D156) restarts the brake from what the task had cost then.
+    continues, offsets = brake_inputs(recorded)
     return TaskBrake(
         inner,
         ledger,
         pid,
         brake_steps([t.id for t in plan.tasks], config.limits, highs),
         default_step_nusd=cap_to_nusd(config.limits.task_brake_min_usd),
-        continues=brake_continues(recorded),
+        continues=continues,
+        offsets=offsets,
         events=events,
     )
 
@@ -1170,6 +1224,46 @@ def _describe_brake(brake: TaskBrake, config: AutomaConfig) -> str:
         f"a task pauses once it costs more than max({lim.task_brake_factor:g} x the high "
         f"end of its range, {_usd(cap_to_nusd(lim.task_brake_min_usd))}); allow one more "
         "step with: automa brake continue <project> <task>"
+    )
+
+
+@app.command()
+def retry(
+    project_id: Annotated[str, typer.Argument(help="Failed project to try again.")],
+    attempts: Annotated[
+        int,
+        typer.Option(
+            "--attempts",
+            help=f"Extra attempts for each failed task (1-{MAX_RETRY_ATTEMPTS}).",
+        ),
+    ] = RETRY_ATTEMPTS,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Give a failed project's failed tasks more attempts on the strongest model (D156).
+
+    The failed tasks start again at the strongest configured tier with the
+    verifier's last issues as feedback; tasks blocked by them wait again. The
+    budget caps still apply. Then continue with: automa run <project>.
+    """
+    config = _load(config_path)
+    store = ProjectStore.for_workspace(config.workspace)
+    try:
+        project = store.load(project_id)
+        tasks = failed_tasks(store, project.id) if store.has_plan(project.id) else []
+        with CostLedger.for_workspace(config.workspace) as ledger:
+            spent = {t: ledger.spent_nusd(project_id=project.id, task_id=t) for t in tasks}
+        granted = grant_retry(
+            store, project.id, config, via="cli", spent_nusd=spent, attempts=attempts
+        )
+    except (ProjectStoreError, RetryError) as e:
+        raise _fail(str(e), EXIT_USER) from None
+    tier = strongest_tier(config)
+    on = f" on the {tier.value} tier" if tier is not None else ""
+    typer.echo(
+        f"retry: {len(granted)} task(s) get {attempts} more attempt(s){on}: "
+        f"{', '.join(granted)}; continue with: automa run {project.id}"
     )
 
 
@@ -1663,6 +1757,11 @@ def _report_lines(report: RunReport) -> list[str]:
         lines.append(f"failed: {', '.join(report.failed)}")
     if report.blocked:
         lines.append(f"blocked: {', '.join(report.blocked)}")
+    if report.status is ProjectStatus.FAILED and report.failed:
+        lines.append(
+            f"next: try the failed task(s) again on the strongest model with: "
+            f"automa retry {report.project_id}, then: automa run {report.project_id}"
+        )
     if report.status is ProjectStatus.PAUSED:
         where = f" at task {report.task_id}" if report.task_id else ""
         lines.append(f"paused{where}: {_preview(report.detail, 200) or report.reason.value}")
@@ -3741,6 +3840,15 @@ class _WebRunPreflight:
 
     def command(self, project_id: str, *, yes: bool) -> list[str]:
         return webui_runs.default_command(project_id, yes=yes, config_path=self._config_path)
+
+    def grant_retry(self, project_id: str) -> list[str]:
+        """The "try again" button (D156): the same grant as ``automa retry``."""
+        config = self._config
+        store = ProjectStore.for_workspace(config.workspace)
+        tasks = failed_tasks(store, project_id)
+        with CostLedger.for_workspace(config.workspace) as ledger:
+            spent = {t: ledger.spent_nusd(project_id=project_id, task_id=t) for t in tasks}
+        return grant_retry(store, project_id, config, via="web", spent_nusd=spent)
 
 
 @app.command()

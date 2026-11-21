@@ -193,6 +193,7 @@ class TaskBrake:
         *,
         default_step_nusd: int,
         continues: Mapping[str, int] | None = None,
+        offsets: Mapping[str, int] | None = None,
         events: EventSink | None = None,
     ) -> None:
         if not project_id or not project_id.strip():
@@ -201,12 +202,17 @@ class TaskBrake:
             raise ValueError("brake steps must be strictly positive")
         if any(v < 0 for v in (continues or {}).values()):
             raise ValueError("brake continues must not be negative")
+        if any(v < 0 for v in (offsets or {}).values()):
+            raise ValueError("brake offsets must not be negative")
         self._inner = inner
         self._ledger = ledger
         self._project_id = project_id
         self._steps = MappingProxyType(dict(steps))
         self._default = default_step_nusd
         self._continues = MappingProxyType(dict(continues or {}))
+        # Spending already accepted by an explicit user retry (D156): the brake
+        # counts fresh steps from there, so a retried task is not braked at once.
+        self._offsets = MappingProxyType(dict(offsets or {}))
         self._sink = events
         self._lock = threading.Lock()
         self._announced: set[tuple[str, int]] = set()
@@ -221,8 +227,11 @@ class TaskBrake:
     def allowed_steps(self, task_id: str) -> int:
         return 1 + self._continues.get(task_id, 0)
 
+    def offset_nusd(self, task_id: str) -> int:
+        return self._offsets.get(task_id, 0)
+
     def limit_nusd(self, task_id: str) -> int:
-        return self.step_nusd(task_id) * self.allowed_steps(task_id)
+        return self.offset_nusd(task_id) + self.step_nusd(task_id) * self.allowed_steps(task_id)
 
     def authorize(self, estimate: CallEstimate) -> None:
         ctx = estimate.context

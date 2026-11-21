@@ -40,7 +40,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from automa.budget.brake import BrakeError, continue_task, decline_task
 from automa.events import Event
@@ -50,12 +50,14 @@ from automa.project.store import (
     ProjectStoreError,
     validate_project_id,
 )
+from automa.retry import RetryError, can_retry
 from automa.tools.command import spawn_automa_run
 from automa.webui.actions import CONFIRM_VALUE, ActionRefused
 
 START_FIELDS = frozenset({"csrf", "confirm"})
 STOP_FIELDS = frozenset({"csrf"})
 BRAKE_FIELDS = frozenset({"csrf", "task", "decision", "confirm"})
+RETRY_FIELDS = frozenset({"csrf", "confirm"})
 BRAKE_CONTINUE = "continue"
 BRAKE_STOP = "stop"
 MAX_TASK_ID = 200
@@ -68,6 +70,7 @@ LOG_TAIL_LINES = 12
 _START_RE = re.compile(r"^/projects/([^/]+)/start$")
 _STOP_RE = re.compile(r"^/projects/([^/]+)/stop$")
 _BRAKE_RE = re.compile(r"^/projects/([^/]+)/brake$")
+_RETRY_RE = re.compile(r"^/projects/([^/]+)/retry$")
 
 # Meaning of each ``automa run`` exit code (see the ``automa.cli`` docstring).
 EXIT_MEANINGS: Mapping[int, str] = {
@@ -100,6 +103,15 @@ class RunPreflight(Protocol):
 
     def command(self, project_id: str, *, yes: bool) -> list[str]:
         """The ``automa run`` command line for the child process."""
+        ...
+
+
+@runtime_checkable
+class RetryPreflight(Protocol):
+    """Optional part of the preflight for the "try again" button (D156)."""
+
+    def grant_retry(self, project_id: str) -> list[str]:
+        """Grant the failed tasks more attempts (as ``automa retry``); ids retried."""
         ...
 
 
@@ -153,6 +165,14 @@ def brake_path(project_id: str) -> str:
 def parse_brake_path(path: str) -> str | None:
     """The project id of a ``/projects/<pid>/brake`` path, else ``None`` (D154)."""
     return _parse(_BRAKE_RE, path)
+
+
+def retry_path(project_id: str) -> str:
+    return f"/projects/{validate_project_id(project_id)}/retry"
+
+
+def parse_retry_path(path: str) -> str | None:
+    return _parse(_RETRY_RE, path)
 
 
 def parse_start_path(path: str) -> str | None:
@@ -395,17 +415,62 @@ class BackgroundRuns:
             yes = needs and confirm == CONFIRM_VALUE
             if before_spawn is not None:
                 before_spawn()
-            argv = self._preflight.command(project_id, yes=yes)
-            started = self._clock()
-            log_path = self._new_log(project_id, started)
+            run = self._spawn_locked(project_id, yes)
+        self._started(project_id, run)
+
+    def can_retry(self, project_id: str) -> bool:
+        """Whether the "try again" button is shown (failed project, nothing running)."""
+        if not isinstance(self._preflight, RetryPreflight):
+            return False
+        with self._lock:
+            if self._active(project_id) is not None:
+                return False
+        return can_retry(self._store, project_id)
+
+    def retry(self, project_id: str, form: Mapping[str, str]) -> None:
+        """Give a failed project's failed tasks more attempts and run it (D156).
+
+        Retrying spends more money, so the confirmation box is always required and
+        the child gets ``--yes`` (the user confirmed this spending on the page). The
+        grant itself is the same as ``automa retry``; the child is the same
+        ``automa run``, so the BudgetGuard caps apply unchanged.
+        """
+        if form.get("confirm") != CONFIRM_VALUE:
+            raise ActionRefused.coded(409, "confirm_cost")
+        if not isinstance(self._preflight, RetryPreflight):
+            raise ActionRefused.coded(404, "no_such_project")
+        if project_id not in self._store.list_ids():
+            raise ActionRefused.coded(404, "no_such_project")
+        with self._lock:
+            if self._active(project_id) is not None:
+                raise ActionRefused.coded(409, "already_running", id=project_id)
+            if not can_retry(self._store, project_id):
+                raise ActionRefused.coded(409, "not_retryable", id=project_id)
             try:
-                process = self._spawn(argv, log_path)
-            except (OSError, ValueError) as e:
-                reason = e.strerror if isinstance(e, OSError) and e.strerror else str(e)
-                raise ActionRefused.coded(500, "start_failed", reason=reason) from None
-            run = _Run(process, started, log_path, yes)
-            self._runs[project_id] = run
-        self._emit(project_id, STARTED_EVENT, {"confirmed": yes, "log": log_path.name})
+                self._preflight.grant_retry(project_id)
+            except (RetryError, OSError, ProjectStoreError, ValueError) as e:
+                raise ActionRefused.coded(500, "retry_failed", reason=str(e)) from None
+            run = self._spawn_locked(project_id, True)
+        self._started(project_id, run)
+
+    def _spawn_locked(self, project_id: str, yes: bool) -> _Run:
+        """Start the ``automa run`` child (called under the lock)."""
+        argv = self._preflight.command(project_id, yes=yes)
+        started = self._clock()
+        log_path = self._new_log(project_id, started)
+        try:
+            process = self._spawn(argv, log_path)
+        except (OSError, ValueError) as e:
+            reason = e.strerror if isinstance(e, OSError) and e.strerror else str(e)
+            raise ActionRefused.coded(500, "start_failed", reason=reason) from None
+        run = _Run(process, started, log_path, yes)
+        self._runs[project_id] = run
+        return run
+
+    def _started(self, project_id: str, run: _Run) -> None:
+        self._emit(
+            project_id, STARTED_EVENT, {"confirmed": run.confirmed, "log": run.log_path.name}
+        )
         watcher = threading.Thread(
             target=self._watch, args=(project_id, run), name=f"automa-run-{project_id}", daemon=True
         )

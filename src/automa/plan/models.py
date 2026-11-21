@@ -199,16 +199,71 @@ class Task(_Strict):
         return self
 
 
+MAX_MAIN_FILES = 20
+
+
+class Deliverable(_Strict):
+    """What the user gets at the end, stated before any work starts (D155).
+
+    ``summary`` says in plain words what the finished product is, ``main_files``
+    are the files that *are* the product (each one is checked by some task, see
+    ``Plan``), and ``how_to_use`` says how to open, run or read it. All of it is
+    data shown to the user; none of it grants a tool, a path or a budget.
+    """
+
+    summary: LongText
+    main_files: list[RelPath] = Field(default_factory=list, max_length=MAX_MAIN_FILES)
+    how_to_use: Text = ""
+
+    @model_validator(mode="after")
+    def _unique(self) -> Deliverable:
+        if len(set(self.main_files)) != len(self.main_files):
+            raise ValueError("deliverable.main_files has duplicate entries")
+        return self
+
+
+def checked_paths(task: Task) -> frozenset[str]:
+    """Paths a task's deterministic file checks name (``file_exists``/``file_contains``)."""
+    return frozenset(
+        c.check.path
+        for c in task.acceptance_criteria
+        if isinstance(c.check, FileExistsCheck | FileContainsCheck)
+    )
+
+
 class Plan(_Strict):
     """Contents of ``plan.json``: the goal broken into a DAG of tasks.
 
     ``version`` starts at 1 and grows with every re-plan by the Executive.
+    ``deliverable`` (optional, D155) names the finished product; every main file
+    must be named by a ``file_exists``/``file_contains`` check of some task, so the
+    product the user is promised is the product the verifier checks.
     """
 
     schema_version: int = PLAN_SCHEMA_VERSION
     version: int = Field(default=1, ge=1)
     goal: LongText
     tasks: list[Task] = Field(min_length=1, max_length=MAX_TASKS)
+    deliverable: Deliverable | None = None
+
+    @model_validator(mode="after")
+    def _deliverable_checked(self) -> Plan:
+        if self.deliverable is None:
+            return self
+        checked: set[str] = set()
+        for t in self.tasks:
+            checked |= checked_paths(t)
+        unchecked = [p for p in self.deliverable.main_files if p not in checked]
+        if unchecked:
+            raise ValueError(
+                "deliverable.main_files not checked by any task (add a file_exists "
+                f"check to the task that makes them): {', '.join(unchecked)}"
+            )
+        return self
+
+    def task_for_file(self, path: str) -> Task | None:
+        """The first task (plan order) whose file checks name ``path``."""
+        return next((t for t in self.tasks if path in checked_paths(t)), None)
 
     @field_validator("schema_version")
     @classmethod
