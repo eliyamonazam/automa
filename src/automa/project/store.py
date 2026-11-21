@@ -54,6 +54,7 @@ from automa.plan import (
     Verdict,
 )
 from automa.tools.approvals import ApprovalStore
+from automa.userinput import UserRequestStore
 
 SCHEMA_VERSION = 1
 PROJECTS_DIRNAME = "projects"
@@ -70,6 +71,7 @@ VERDICT_FILE_FMT = "verdict-{attempt}.json"
 _TASK_ID_RE = re.compile(TASK_ID_PATTERN)
 FILES_DIR = "files"
 APPROVALS_DIR = "approvals"
+REQUESTS_DIR = "requests"
 
 PROJECT_ID_PATTERN = r"^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$|^[a-z0-9]$"
 _PROJECT_ID_RE = re.compile(PROJECT_ID_PATTERN)
@@ -275,6 +277,16 @@ class ProjectStore:
         self._require(project_id)
         return ApprovalStore(
             self.project_dir(project_id) / APPROVALS_DIR, project_id, clock=self._clock
+        )
+
+    def user_requests(self, project_id: str) -> UserRequestStore:
+        """Questions to the user of this project (D159); the project must exist."""
+        self._require(project_id)
+        return UserRequestStore(
+            self.project_dir(project_id) / REQUESTS_DIR,
+            project_id,
+            self.files_dir(project_id),
+            clock=self._clock,
         )
 
     def events(self, project_id: str) -> ProjectEventLog:

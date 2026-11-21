@@ -59,6 +59,12 @@ from automa.project.store import (
     validate_project_id,
 )
 from automa.tools.approvals import ApprovalError
+from automa.userinput import (
+    MAX_ANSWER_FILES,
+    UserRequest,
+    UserRequestError,
+    UserRequestNotFound,
+)
 from automa.webui.actions import (
     MAX_FORM_BYTES,
     ActionRefused,
@@ -130,6 +136,14 @@ from automa.webui.runs import (
     parse_retry_path,
     parse_start_path,
     parse_stop_path,
+)
+from automa.webui.upload import (
+    DECLINE_FIELDS,
+    FILE_FIELD,
+    MAX_UPLOAD_BYTES,
+    REQUEST_ANSWER_FIELDS,
+    parse_multipart,
+    parse_request_action,
 )
 from automa.webui.views import ProjectView, build_overview, build_project_view
 
@@ -358,8 +372,12 @@ class WebApp:
 
     def max_body_bytes(self, target: str) -> int:
         """The largest POST body accepted for ``target`` (idea forms are larger)."""
-        if self._ideas is not None and is_idea_path(urlsplit(target).path):
+        path = urlsplit(target).path
+        if self._ideas is not None and is_idea_path(path):
             return MAX_IDEA_FORM_BYTES
+        found = parse_request_action(path)
+        if found is not None and found[2] == "answer":
+            return MAX_UPLOAD_BYTES  # an answer may carry files (D159)
         return MAX_FORM_BYTES
 
     def error(
@@ -479,6 +497,9 @@ class WebApp:
         retry_pid = parse_retry_path(parts.path) if not parts.query else None
         if self._runs is not None and retry_pid is not None:
             return self._post_retry(retry_pid, headers, body)
+        request_action = parse_request_action(parts.path) if not parts.query else None
+        if request_action is not None:
+            return self._post_request_action(*request_action, headers, body)
         action = parse_action_path(parts.path) if not parts.query else None
         if action is None:
             return self.error(404, "error.title.not_found")
@@ -560,6 +581,60 @@ class WebApp:
             self._runs.brake(pid, form)
         except ActionRefused as e:
             return self.refused(e)
+        return self._redirect(f"/projects/{quote(pid, safe='')}")
+
+    def _post_request_action(
+        self,
+        pid: str,
+        rid: str,
+        action: str,
+        headers: Sequence[tuple[str, str]],
+        body: bytes,
+    ) -> Response:
+        """Answer (text + files) or decline a question Automa asked (D159).
+
+        Same Origin, CSRF and strict-field checks as every action. After the answer
+        is stored the run continues by itself (when background runs are on and no
+        other question is open); a run that needs the cost box waits for "Start".
+        """
+        if self._actions is None:  # never reached: POST only in action mode
+            return self.error(404, "error.title.not_found")
+        lowered = self._single_headers(headers)
+        if isinstance(lowered, Response):
+            return lowered
+        try:
+            check_same_origin(lowered, self._actions)
+            if pid not in self._store.list_ids():
+                raise ActionRefused.coded(404, "no_project", id=pid)
+            requests = self._store.user_requests(pid)
+            if action == "answer":
+                upload = parse_multipart(
+                    lowered,
+                    body,
+                    fields=REQUEST_ANSWER_FIELDS,
+                    file_field=FILE_FIELD,
+                    max_bytes=MAX_UPLOAD_BYTES,
+                    max_files=MAX_ANSWER_FILES,
+                )
+                form = upload.fields
+                check_token(form, self._actions)
+                requests.answer(rid, form.get("answer", ""), upload.files, via="web")
+            else:
+                form = parse_form(lowered, body, fields=DECLINE_FIELDS)
+                check_token(form, self._actions)
+                requests.decline(rid, form.get("reason", ""), via="web")
+        except ActionRefused as e:
+            return self.refused(e)
+        except UserRequestNotFound:
+            return self.refused(ActionRefused.coded(404, "no_such_question"))
+        except UserRequestError as e:
+            return self.refused(ActionRefused.coded(409, "answer_refused", reason=str(e)))
+        if self._runs is not None and not requests.pending():
+            try:
+                start = {"confirm": "yes"} if form.get("confirm") == "yes" else {}
+                self._runs.start(pid, start)
+            except ActionRefused:
+                pass  # e.g. the cost box is needed: the page offers "Start"
         return self._redirect(f"/projects/{quote(pid, safe='')}")
 
     def _post_retry(self, pid: str, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
@@ -811,10 +886,18 @@ class WebApp:
                 tz=self._tz,
                 now=self._clock(),
                 delivery=try_build_delivery(self._store, pid),
+                asks=self._open_asks(pid),
                 retry=self._runs is not None and self._runs.can_retry(pid),
             )
             return _html(200, document, security=self._security)
         return self.error(404, "error.title.not_found")
+
+    def _open_asks(self, pid: str) -> tuple[UserRequest, ...]:
+        """Open questions to the user (D159); none when the store is unreadable."""
+        try:
+            return tuple(self._store.user_requests(pid).pending())
+        except (UserRequestError, ProjectStoreError, OSError):
+            return ()
 
     def _bundle(self, pid: str) -> Response:
         """``GET /projects/<pid>/download.zip`` (D158): files/ plus DELIVERY.md."""

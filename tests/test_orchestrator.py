@@ -244,7 +244,7 @@ def test_executors_use_role_and_verifier_policies(tmp_path: Path) -> None:
     rig = Rig(tmp_path, write("a"), make_plan(task_dict("a", role="writer")))
     rig.run()
     names = {t.name for t in rig.provider.requests[0].tools}
-    assert names == set(rig.roles.get("writer").tools)
+    assert names == {*rig.roles.get("writer").tools, "ask_user"}  # ask_user: D159
     assert "run_command" not in names
 
 

@@ -130,6 +130,10 @@ The deliverable is a promise to the user, so make it precise:
 - The plan must end with a finished, usable product, never a partial step: if the
   goal is too large, deliver a smaller but complete product and say so in the
   summary.
+- Never plan to invent what only the user has (their files, data behind a login or
+  a paid source, accounts, keys, personal facts, decisions). A worker can ask the
+  user for it during its task (the ask_user tool) and the work waits for the
+  answer; describe in that task what to ask for. Prefer real inputs over samples.
 
 Check types: file_exists {path}, file_contains {path, text}, command {command,
 exit_code, timeout_s}. Paths are relative to the project's files directory and

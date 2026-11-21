@@ -33,6 +33,7 @@ from automa.project.store import MAX_GOAL_CHARS
 from automa.retry import RETRY_ATTEMPTS
 from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.tools.missing import install_command
+from automa.userinput import UserRequest
 from automa.webui.bundle import bundle_href
 from automa.webui.files import (
     MAX_IMAGE_BYTES,
@@ -59,6 +60,7 @@ from automa.webui.status import Chip, project_chip, task_chip
 from automa.webui.stops import MESSAGES as STOP_MESSAGES
 from automa.webui.stops import StopInfo, StopLine, describe_stop
 from automa.webui.stops import st as stop_text
+from automa.webui.upload import request_action_href
 from automa.webui.views import ApprovalView, Overview, ProjectView, TaskRow, project_title
 
 # Joiners needed by Persian text; every other Cf character (incl. bidi controls) is escaped.
@@ -219,6 +221,12 @@ font-size:.75em;font-weight:800;content:"•";background:var(--chip);color:var(-
 .checks li.c-bad::before{content:"✕";background:var(--bad);color:var(--badfg)}
 .problems{margin:8px 0;padding-inline-start:20px}.problems li{margin:4px 0}
 .retry{border-top:1px dashed var(--line);margin-top:14px;padding-top:12px}
+.ask{border:1px solid var(--line);border-top:6px solid var(--accent);
+background:linear-gradient(180deg,color-mix(in srgb,var(--info) 60%,var(--card)),var(--card) 120px)}
+.ask h2{font-size:1.3em;margin:0 0 .3em}
+.ask .question{font-size:1.12em;font-weight:700;white-space:pre-line;overflow-wrap:anywhere}
+.ask .upload{background:var(--soft);border-radius:12px;padding:10px 14px}
+input[type=file]{font-size:.92em;max-width:100%}
 .btn-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0}
 textarea,input,button{font:inherit;color:inherit}
 textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:12px;
@@ -535,6 +543,7 @@ def render_project(
     now: datetime | None = None,
     delivery: Delivery | None = None,
     retry: bool = False,
+    asks: tuple[UserRequest, ...] = (),
 ) -> str:
     """One project page. ``forms`` (action mode only) adds approve/reject forms;
     ``notice`` is a one-line result of the last decision, shown at the top;
@@ -571,6 +580,9 @@ def render_project(
     if notice:
         parts.append(f'<p class="badge" dir="auto">{text(notice)}</p>')
     parts.append(_hero_and_journey(view, journey, lang))
+    for ask in asks:
+        confirm = run is not None and run.needs_confirm
+        parts.append(_ask_card(view.id, ask, forms, confirm, lang))
     if delivery is not None:
         retry_form = forms if retry and not running else None
         parts.append(_delivery_card(delivery, retry_form, lang))
@@ -849,6 +861,54 @@ def _file_row(d: Delivery, f: DeliveryFile, accepted: bool, started: bool, lang:
     return (
         f'<li class="file-row"><span class="fname" dir="auto">{icon} {name}</span>'
         f'<span class="fmeta">{text(meta)}</span><span class="acts">{"".join(acts)}</span></li>'
+    )
+
+
+def _ask_card(
+    project_id: str, ask: UserRequest, forms: ActionForms | None, confirm: bool, lang: Language
+) -> str:
+    """An open question to the user (D159): what is needed, why, and the answer form
+    (text plus files, ``multipart/form-data``) and "I can't provide this"."""
+    head = (
+        f'<section class="card ask"><h2>{text(t("ask.title", lang))}</h2>'
+        f'<p class="question" dir="auto">{text(ask.question)}</p>'
+    )
+    if ask.why.strip():
+        head += f'<p class="hint" dir="auto">{text(ask.why)}</p>'
+    if forms is None:
+        cli = _filled(
+            MESSAGES["ask.cli"][lang],
+            {
+                "answer": f'automa answer {project_id} {ask.id} --text "..." --file PATH',
+                "decline": f"automa decline {project_id} {ask.id}",
+            },
+        )
+        return head + f'<p class="hint">{cli}</p></section>'
+    answer = text(request_action_href(project_id, ask.id, "answer"))
+    decline = text(request_action_href(project_id, ask.id, "decline"))
+    file_label = t("ask.files.needed" if ask.kind == "file" else "ask.files", lang)
+    box = (
+        '<p><label><input type="checkbox" name="confirm" value="yes"> '
+        f"{text(t('ask.confirm', lang))}</label></p>"
+        if confirm
+        else ""
+    )
+    return (
+        head
+        + f'<form method="post" action="{answer}" enctype="multipart/form-data">'
+        + _hidden("csrf", forms.csrf_token)
+        + f'<p><label for="a-{text(ask.id)}">{text(t("ask.answer", lang))}</label></p>'
+        + f'<textarea id="a-{text(ask.id)}" name="answer" rows="4" dir="auto"></textarea>'
+        + f'<p class="upload"><label>{text(file_label)} '
+        + '<input type="file" name="files" multiple></label></p>'
+        + box
+        + f'<p><button type="submit">{text(t("ask.send", lang))}</button></p></form>'
+        + f"<details><summary>{text(t('ask.decline.open', lang))}</summary>"
+        + f'<form method="post" action="{decline}">{_hidden("csrf", forms.csrf_token)}'
+        + f'<p class="hint">{text(t("ask.decline.help", lang))}</p>'
+        + f'<p><input name="reason" dir="auto" placeholder="{text(t("ask.decline.reason", lang))}">'
+        + f' <button type="submit" class="button secondary">{text(t("ask.decline", lang))}</button>'
+        + "</p></form></details></section>"
     )
 
 

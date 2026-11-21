@@ -293,7 +293,7 @@ def test_run_puts_workspace_skill_in_worker_prompt(env: Env) -> None:
     assert "## Skills" in prompt and BODY in prompt
     assert "UNUSED-SKILL-TEXT" not in prompt
     # skills never change the tools offered to the model
-    assert {t.name for t in env.provider.requests[0].tools} == set(WRITER_TOOLS)
+    assert {t.name for t in env.provider.requests[0].tools} == {*WRITER_TOOLS, "ask_user"}
     assert env.store.load(PID).status is ProjectStatus.DONE
 
 

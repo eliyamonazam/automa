@@ -88,6 +88,7 @@ from automa.roles.models import Role
 from automa.roles.registry import RoleError, RoleRegistry
 from automa.router import RouteDecision, Router
 from automa.tools import RunCommand, tools_factory
+from automa.tools.ask import AskUser, UserInputRequired
 from automa.tools.base import Tool
 from automa.tools.claims import PathClaims, paths_overlap
 from automa.tools.executor import ApprovalRequired, ToolExecutor, ToolLayerError
@@ -140,6 +141,7 @@ class StopReason(StrEnum):
     CONFIG = "config"  # e.g. no model configured for the task's tier
     USER = "user"  # stop requested by the user between steps (web UI "Stop", D126)
     TASK_BRAKE = "task_brake"  # a task cost far more than estimated (TaskBrake, D153)
+    USER_INPUT = "user_input"  # a task asked the user for something (ask_user, D159)
 
 
 class RunReport(BaseModel):
@@ -153,6 +155,7 @@ class RunReport(BaseModel):
     detail: str = ""
     task_id: str | None = None  # the task being worked on when the run stopped
     approval_id: str | None = None  # pending Approval Gate request (reason ``approval``)
+    request_id: str | None = None  # pending question to the user (reason ``user_input``)
     attempts_run: int = 0  # worker attempts started in this run
     passed: list[str] = Field(default_factory=list)
     failed: list[str] = Field(default_factory=list)
@@ -163,13 +166,19 @@ class _Stop(Exception):
     """Internal: stop the run and pause the project with ``reason``."""
 
     def __init__(
-        self, reason: StopReason, detail: str, task_id: str, approval_id: str | None = None
+        self,
+        reason: StopReason,
+        detail: str,
+        task_id: str,
+        approval_id: str | None = None,
+        request_id: str | None = None,
     ) -> None:
         super().__init__(detail)
         self.reason = reason
         self.detail = detail
         self.task_id = task_id
         self.approval_id = approval_id
+        self.request_id = request_id
 
 
 _UNFINISHED = frozenset({TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.VERIFYING})
@@ -353,6 +362,13 @@ class Orchestrator:
             raise OrchestratorError(f"project {project_id!r} has no plan yet")
         plan = store.load_plan(project_id)
         self._extra = self._read_retry_grants(project_id)
+        waiting = self._store.user_requests(project_id).pending()
+        if waiting:
+            # A question to the user is open: running would only ask it again.
+            # Stop before anything is spent until the user answers (D159).
+            first = waiting[0]
+            stop = _Stop(StopReason.USER_INPUT, first.question, first.task_id, request_id=first.id)
+            return self._pause(project_id, plan, stop, 0)
         self._set_project(project_id, ProjectStatus.RUNNING)
         self._emit(
             project_id,
@@ -523,6 +539,7 @@ class Orchestrator:
             task_id=stop.task_id,
             attempts_run=attempts_run,
             approval_id=stop.approval_id,
+            request_id=stop.request_id,
         )
         self._emit_stop(project_id, stop, "orchestrator.paused")
         return report
@@ -533,7 +550,8 @@ class Orchestrator:
             type_,
             {"reason": stop.reason.value, "task": stop.task_id}
             | ({"detail": _short(stop.detail)} if stop.detail else {})
-            | ({"approval": stop.approval_id} if stop.approval_id else {}),
+            | ({"approval": stop.approval_id} if stop.approval_id else {})
+            | ({"request": stop.request_id} if stop.request_id else {}),
         )
 
     def _pause_quietly(self, project_id: str) -> None:
@@ -835,6 +853,7 @@ class Orchestrator:
         task_id: str | None = None,
         attempts_run: int = 0,
         approval_id: str | None = None,
+        request_id: str | None = None,
     ) -> RunReport:
         states = self._store.task_states(project_id)
 
@@ -848,6 +867,7 @@ class Orchestrator:
             detail=_short(detail),
             task_id=task_id,
             approval_id=approval_id,
+            request_id=request_id,
             attempts_run=attempts_run,
             passed=ids(TaskStatus.PASSED),
             failed=ids(TaskStatus.FAILED),
@@ -865,6 +885,8 @@ class Orchestrator:
             return _Stop(
                 StopReason.APPROVAL, f"{e.tool}: {e.reason}", task_id, approval_id=e.request_id
             )
+        if isinstance(e, UserInputRequired):
+            return _Stop(StopReason.USER_INPUT, e.question, task_id, request_id=e.request_id)
         if isinstance(e, ProviderError):
             return _Stop(StopReason.PROVIDER, str(e), task_id)
         if isinstance(e, VerificationFailed):
@@ -929,6 +951,11 @@ class Orchestrator:
             self._store.events(project_id),
             project_id,
             approvals=self._store.approvals(project_id) if task_id is not None else None,
+            ask=(
+                AskUser(self._store.user_requests(project_id), task_id)
+                if task_id is not None
+                else None
+            ),
             task_id=task_id,
             claims=claims,
             auto_reads=(

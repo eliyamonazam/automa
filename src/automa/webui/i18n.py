@@ -748,6 +748,34 @@ _RAW: dict[str, dict[Language, str]] = {
         "en": "From a terminal: {retry}, then {run}",
         "fa": "از ترمینال: {retry} و بعد {run}",
     },
+    "ask.title": {
+        "en": "❓ I need something from you to go on",
+        "fa": "❓ برای ادامه یه چیزی ازت لازم دارم",
+    },
+    "ask.answer": {"en": "Your answer", "fa": "جوابت"},
+    "ask.files": {"en": "Files (optional):", "fa": "فایل (اختیاری):"},
+    "ask.files.needed": {"en": "Upload the file(s):", "fa": "فایل(ها) رو بفرست:"},
+    "ask.confirm": {
+        "en": "Going on may cost more than the confirmation limit; I accept",
+        "fa": "ادامه ممکنه از حد تأیید هزینه بیشتر خرج داشته باشه؛ قبول دارم",
+    },
+    "ask.send": {"en": "Send and continue", "fa": "بفرست و ادامه بده"},
+    "ask.decline.open": {"en": "I can't provide this", "fa": "نمی‌تونم این رو بدم"},
+    "ask.decline.help": {
+        "en": "The work goes on without it and says clearly what is missing because of it.",
+        "fa": "کار بدون اون ادامه پیدا می‌کنه و دقیق می‌گه به خاطرش چی کم مونده.",
+    },
+    "ask.decline.reason": {"en": "Why (optional)", "fa": "چرا (اختیاری)"},
+    "ask.decline": {"en": "Go on without it", "fa": "بدون اون ادامه بده"},
+    "ask.cli": {
+        "en": "Answer from a terminal: {answer} (or: {decline}), then automa run",
+        "fa": "از ترمینال جواب بده: {answer} (یا: {decline})، بعد automa run",
+    },
+    "refusal.no_such_question": {"en": "no such question", "fa": "چنین سؤالی نیست"},
+    "refusal.answer_refused": {
+        "en": "the answer was not saved: {reason}",
+        "fa": "جواب ذخیره نشد: {reason}",
+    },
     "task.checks": {"en": "Acceptance checks", "fa": "معیارهای پذیرش"},
     "task.issues": {"en": "Reviewer's notes", "fa": "ایرادهای ارزیاب"},
     "refusal.not_retryable": {

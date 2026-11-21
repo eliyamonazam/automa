@@ -63,6 +63,7 @@ STOP_FOR_REASON: dict[StopReason, BenchmarkStop] = {
     StopReason.CONFIG: BenchmarkStop.CONFIG,
     StopReason.USER: BenchmarkStop.USER,
     StopReason.TASK_BRAKE: BenchmarkStop.TASK_BRAKE,
+    StopReason.USER_INPUT: BenchmarkStop.USER_INPUT,
 }
 
 

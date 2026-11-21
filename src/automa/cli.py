@@ -308,6 +308,7 @@ from automa.tools.approvals import (
 )
 from automa.tools.github import GitHubRead, describe_github_request
 from automa.tools.web import FetchUrl, describe_fetch_request
+from automa.userinput import MAX_ANSWER_FILE_BYTES, RequestStatus, UserRequestError
 from automa.webui import money as webui_money
 from automa.webui import runs as webui_runs
 from automa.webui import server as webui_server
@@ -335,6 +336,7 @@ EXIT_SELF_NOTHING_OPEN = 9
 EXIT_ROADMAP_INVALID = 10
 EXIT_NOT_CONFIRMED = 11
 EXIT_STOPPED = 12
+EXIT_NEEDS_INPUT = 13
 EXIT_INTERRUPTED = 130
 
 # Exit code of each way a run can end (see the module docstring).
@@ -349,6 +351,7 @@ RUN_EXIT_CODES: dict[StopReason, int] = {
     StopReason.TOOL_LAYER: EXIT_PAUSED,
     StopReason.USER: EXIT_STOPPED,
     StopReason.TASK_BRAKE: EXIT_PAUSED,
+    StopReason.USER_INPUT: EXIT_NEEDS_INPUT,
 }
 
 LEDGER_FILENAME = "ledger.sqlite3"
@@ -1267,6 +1270,91 @@ def retry(
     )
 
 
+@app.command()
+def requests(
+    project_id: Annotated[str, typer.Argument(help="Project whose questions to list.")],
+    show_all: Annotated[
+        bool, typer.Option("--all", help="Also answered and declined questions.")
+    ] = False,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Questions Automa asked you while working on a project (D159)."""
+    config = _load(config_path)
+    store = ProjectStore.for_workspace(config.workspace)
+    try:
+        reqs = store.user_requests(project_id).list()
+    except (ProjectStoreError, UserRequestError) as e:
+        raise _fail(str(e), EXIT_USER) from None
+    shown = [r for r in reqs if show_all or r.status is RequestStatus.PENDING]
+    if not shown:
+        typer.echo("no open questions" if not show_all else "no questions")
+        return
+    for r in shown:
+        typer.echo(f"{r.id} [{r.status.value}] task {r.task_id} ({r.kind})")
+        typer.echo(f"  question: {r.question}")
+        if r.why:
+            typer.echo(f"  why: {r.why}")
+        if r.status is not RequestStatus.PENDING:
+            typer.echo(f"  answer: {_preview(r.answer, 200) or '-'}")
+            for f in r.files:
+                typer.echo(f"  file: {f}")
+
+
+@app.command()
+def answer(
+    project_id: Annotated[str, typer.Argument(help="Project.")],
+    request_id: Annotated[str, typer.Argument(help="Question id (see: automa requests).")],
+    text: Annotated[str, typer.Option("--text", help="Your answer.")] = "",
+    files: Annotated[
+        list[Path] | None,
+        typer.Option("--file", help="A file to give (repeat for more files)."),
+    ] = None,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Answer a question Automa asked (text and/or files); then: automa run (D159)."""
+    config = _load(config_path)
+    store = ProjectStore.for_workspace(config.workspace)
+    uploads: list[tuple[str, bytes]] = []
+    for path in files or []:
+        try:
+            if not path.is_file():
+                raise _fail(f"not a file: {path}", EXIT_USER)
+            if path.stat().st_size > MAX_ANSWER_FILE_BYTES:
+                raise _fail(f"{path} is larger than {MAX_ANSWER_FILE_BYTES} bytes", EXIT_USER)
+            uploads.append((path.name, path.read_bytes()))
+        except OSError as e:
+            raise _fail(f"cannot read {path}: {e}", EXIT_USER) from None
+    try:
+        req = store.user_requests(project_id).answer(request_id, text, uploads, via="cli")
+    except (ProjectStoreError, UserRequestError) as e:
+        raise _fail(str(e), EXIT_USER) from None
+    saved = f"; files: {', '.join(req.files)}" if req.files else ""
+    typer.echo(f"answered {req.id}{saved}; continue with: automa run {project_id}")
+
+
+@app.command()
+def decline(
+    project_id: Annotated[str, typer.Argument(help="Project.")],
+    request_id: Annotated[str, typer.Argument(help="Question id (see: automa requests).")],
+    reason: Annotated[str, typer.Option("--reason", help="Why (optional).")] = "",
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Say you cannot provide what a question asks; the work goes on without it (D159)."""
+    config = _load(config_path)
+    store = ProjectStore.for_workspace(config.workspace)
+    try:
+        req = store.user_requests(project_id).decline(request_id, reason, via="cli")
+    except (ProjectStoreError, UserRequestError) as e:
+        raise _fail(str(e), EXIT_USER) from None
+    typer.echo(f"declined {req.id}; continue with: automa run {project_id}")
+
+
 @brake_app.command("continue")
 def brake_continue(
     project_id: Annotated[str, typer.Argument(help="Project paused by the brake.")],
@@ -1771,6 +1859,15 @@ def _report_lines(report: RunReport) -> list[str]:
                 f"next: automa approvals {report.project_id}, then "
                 f"automa approve {report.project_id} {report.approval_id} (or: automa reject "
                 f"{report.project_id} {report.approval_id}), then: automa run {report.project_id}"
+            )
+            return lines
+        if report.reason is StopReason.USER_INPUT and report.request_id:
+            pid, rid = report.project_id, report.request_id
+            lines.append(f"automa needs something from you ({rid}): {report.detail}")
+            lines.append(
+                f'next: automa answer {pid} {rid} --text "..." [--file PATH] '
+                f"(or, if you cannot provide it: automa decline {pid} {rid}), "
+                f"then: automa run {pid}"
             )
             return lines
         if report.reason is StopReason.TASK_BRAKE and report.task_id:

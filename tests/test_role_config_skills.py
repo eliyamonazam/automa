@@ -346,7 +346,7 @@ def test_run_adds_configured_skill_to_builtin_writer(env: Env) -> None:
     assert "## Skills" in prompt and BODY in prompt
     assert "UNUSED-SKILL-TEXT" not in prompt
     # the built-in writer keeps exactly its tools
-    assert {t.name for t in env.provider.requests[0].tools} == set(WRITER_TOOLS)
+    assert {t.name for t in env.provider.requests[0].tools} == {*WRITER_TOOLS, "ask_user"}
     assert env.store.load(PID).status is ProjectStatus.DONE
 
 

@@ -46,6 +46,7 @@ StopKind = Literal[
     "tool_layer",
     "config",
     "task_brake",
+    "user_input",
     "other",
 ]
 StopTone = Literal["info", "bad"]
@@ -66,6 +67,7 @@ _REASON_KIND: Mapping[str, StopKind] = MappingProxyType(
         "tool_layer": "tool_layer",
         "config": "config",
         "task_brake": "task_brake",
+        "user_input": "user_input",
     }
 )
 # Matched against the lower-cased recorded provider error, never shown.
@@ -85,7 +87,7 @@ _NETWORK_MARKS = ("could not connect", "timed out", "network error")
 _RESUMABLE: frozenset[StopKind] = frozenset(
     {"balance", "network", "provider", "approval", "user", "verification", "tool_layer"}
 )
-_INFO_TONE: frozenset[StopKind] = frozenset({"approval", "user"})
+_INFO_TONE: frozenset[StopKind] = frozenset({"approval", "user", "user_input"})
 
 
 class StopInfo(BaseModel):
@@ -230,6 +232,12 @@ _RAW: dict[str, dict[Language, str]] = {
     "stop.approval": {
         "en": "Paused for your approval. Once you decided, it can continue.",
         "fa": "منتظر تأیید تو متوقف شد؛ وقتی تصمیم گرفتی، می‌شه ادامه داد.",
+    },
+    "stop.user_input": {
+        "en": "Waiting for you: Automa needs something from you to go on (see the "
+        "question below). It continues once you answer.",
+        "fa": "منتظر توئه: برای ادامه یه چیزی ازت لازم داره (سؤال پایین رو ببین)؛ وقتی "
+        "جواب بدی ادامه می‌ده.",
     },
     "stop.user": {
         "en": "Stopped as you asked. Continue whenever you like.",

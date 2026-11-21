@@ -23,12 +23,14 @@ from pydantic import ValidationError
 
 from automa.events import Event, EventSink
 from automa.tools.approvals import ApprovalError, ApprovalStatus, ApprovalStore
+from automa.tools.ask import AskUser, UserInputRequired
 from automa.tools.base import MAX_TOOL_OUTPUT_CHARS, Tool, ToolError, ToolResult
 from automa.tools.claims import PathClaims
 from automa.tools.policy import Decision, PermissionPolicy, PolicyDecision
 from automa.tools.web import FetchUrl
 from automa.tools.web_reads import AutoReadPolicy, auto_read_refusal
 from automa.tools.workspace import MAX_WRITE_BYTES, Workspace
+from automa.userinput import UserRequest
 
 MAX_ARGUMENTS_CHARS = 2 * MAX_WRITE_BYTES
 MAX_ERROR_CHARS = 1_000
@@ -73,7 +75,10 @@ class ToolExecutor:
         task_id: str | None = None,
         claims: PathClaims | None = None,
         auto_reads: AutoReadPolicy | None = None,
+        ask: AskUser | None = None,
     ) -> None:
+        if ask is not None and not isinstance(ask, AskUser):
+            raise TypeError("ask must be an AskUser")
         if auto_reads is not None and not isinstance(auto_reads, AutoReadPolicy):
             raise TypeError("auto_reads must be an AutoReadPolicy")
         if not isinstance(policy, PermissionPolicy):
@@ -101,7 +106,10 @@ class ToolExecutor:
             if tool.name in registry:
                 raise ValueError(f"duplicate tool name: {tool.name!r}")
             registry[tool.name] = tool
+        if ask is not None and ask.name in registry:
+            raise ValueError(f"duplicate tool name: {ask.name!r}")
         self._tools = registry
+        self._ask = ask
         self._policy = policy
         self._workspace = workspace
         self._events = events
@@ -132,9 +140,16 @@ class ToolExecutor:
         offered = {Decision.ALLOW}
         if self._approvals is not None:
             offered.add(Decision.NEEDS_APPROVAL)
-        return [
+        specs = [
             t.spec() for _, t in sorted(self._tools.items()) if self._decide(t).decision in offered
         ]
+        if self._ask is not None:
+            specs.append(self._ask.spec())  # always offered with a request store (D159)
+        return specs
+
+    def user_answers(self) -> list[UserRequest]:
+        """This task's answered/declined questions to the user (D159)."""
+        return self._ask.answered() if self._ask is not None else []
 
     def _emit(self, type_: str, data: dict[str, Any]) -> None:
         try:
@@ -148,6 +163,8 @@ class ToolExecutor:
         return ToolResult(tool=name, ok=False, error=_short(error), denied=denied)
 
     def execute(self, name: str, arguments: str | Mapping[str, Any] | None) -> ToolResult:
+        if self._ask is not None and name == self._ask.name:
+            return self._execute_ask(self._ask, arguments)
         tool = self._tools.get(name) if isinstance(name, str) else None
         if tool is None:
             label = name if isinstance(name, str) else repr(name)
@@ -232,6 +249,39 @@ class ToolExecutor:
                 content = content[:MAX_TOOL_OUTPUT_CHARS] + "\n[... truncated]"
             result = ToolResult(tool=tool.name, ok=True, content=content)
         return self._finish(tool, args, result)
+
+    def _execute_ask(self, tool: AskUser, arguments: str | Mapping[str, Any] | None) -> ToolResult:
+        """``ask_user`` (D159): no policy (it acts on nothing); may raise
+        ``UserInputRequired``, which propagates so the project pauses."""
+        try:
+            if arguments is None:
+                raw: Any = {}
+            elif isinstance(arguments, str):
+                if len(arguments) > MAX_ARGUMENTS_CHARS:
+                    raise ToolError("arguments are too large")
+                raw = json.loads(arguments) if arguments.strip() else {}
+            else:
+                raw = dict(arguments)
+            if not isinstance(raw, dict):
+                raise ToolError("arguments must be a JSON object")
+            args = tool.args_model.model_validate(raw)
+        except ValidationError as e:
+            return self._finish(tool, None, self._fail(tool.name, _format_validation(e)))
+        except (ValueError, TypeError) as e:
+            return self._finish(tool, None, self._fail(tool.name, f"invalid arguments: {e}"))
+        except ToolError as e:
+            return self._finish(tool, None, self._fail(tool.name, str(e)))
+        try:
+            content = tool.ask(args)
+        except UserInputRequired as e:
+            self._emit(
+                "tool.user_input_required",
+                {"tool": tool.name, "request": e.request_id, **tool.audit(args)},
+            )
+            raise
+        except ToolError as e:
+            return self._finish(tool, args, self._fail(tool.name, str(e)))
+        return self._finish(tool, args, ToolResult(tool=tool.name, ok=True, content=content))
 
     def _auto_read_limit_reached(self, tool: Tool, args: Any) -> bool:
         """A qualifying plain read (D93) after the task's automatic allowance is used."""

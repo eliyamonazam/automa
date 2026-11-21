@@ -25,7 +25,8 @@ from automa.project import ProjectStatus, ProjectStore
 
 PID = "proj-1"
 OTHER = "proj-2"
-WRITER_TOOLS = {"read_file", "list_dir", "write_file"}
+# Worker requests also offer ask_user (D159), outside the role's policy.
+WRITER_TOOLS = {"read_file", "list_dir", "write_file", "ask_user"}
 USER_PREF = "USER-PREF: answer in Persian"
 PROJECT_NOTE = "PROJECT-NOTE: the client wants a short README"
 OTHER_NOTE = "OTHER-PROJECT-NOTE: never visible elsewhere"
