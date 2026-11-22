@@ -113,6 +113,20 @@ EMPTY_ART = (
     "</svg>"
 )
 
+# The error page's picture (D177): a signpost on a soft circle (no text, fixed markup).
+ERROR_ART = (
+    '<svg class="empty-art" viewBox="0 0 120 120" width="120" height="120" '
+    'aria-hidden="true" focusable="false">'
+    '<circle cx="60" cy="60" r="56" fill="var(--busy)"/>'
+    '<path d="M60 30v66" stroke="var(--busyfg)" stroke-width="4" stroke-linecap="round"/>'
+    '<path d="M38 38h40l8 8-8 8H38z" fill="var(--card)" stroke="var(--busyfg)" '
+    'stroke-width="3" stroke-linejoin="round"/>'
+    '<path d="M82 60H42l-8 8 8 8h40z" fill="var(--card)" stroke="var(--busyfg)" '
+    'stroke-width="3" stroke-linejoin="round"/>'
+    '<path d="M46 96h28" stroke="var(--busyfg)" stroke-width="4" stroke-linecap="round"/>'
+    "</svg>"
+)
+
 _RAW: dict[str, dict[Language, str]] = {
     "card.waiting": {"en": "Waiting for you", "fa": "منتظر جواب تو"},
     "card.waiting.hint": {

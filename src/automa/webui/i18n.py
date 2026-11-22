@@ -191,6 +191,12 @@ _RAW: dict[str, dict[Language, str]] = {
         "fa": "در حال کار: این صفحه هر {seconds} ثانیه تازه می‌شه",
     },
     "tech.summary": {"en": "Technical details", "fa": "جزئیات فنی"},
+    "tech.project_id": {"en": "Project id:", "fa": "شناسهٔ پروژه:"},
+    "tech.steps": {"en": "Steps", "fa": "مرحله‌ها"},
+    "tech.col.id": {"en": "Id", "fa": "شناسه"},
+    "tech.col.role": {"en": "Role", "fa": "نقش"},
+    "tech.col.after": {"en": "After", "fa": "بعد از"},
+    "tech.col.model": {"en": "Model", "fa": "مدل"},
     "tech.events": {
         "en": "Latest events ({count}, newest first)",
         "fa": "آخرین رویدادها ({count}، جدیدترین اول)",

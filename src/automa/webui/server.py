@@ -81,6 +81,7 @@ from automa.webui.actions import (
     parse_form,
 )
 from automa.webui.bundle import build_bundle, bundle_name, parse_bundle_path
+from automa.webui.cards import ERROR_ART
 from automa.webui.files import (
     FILE_CONTENT_SECURITY_POLICY,
     FilesRefused,
@@ -311,9 +312,10 @@ def _error_page(
     lead: str | None = None,
 ) -> Response:
     title = t(title_key, lang)
-    body = f"<h1>{text(title)}</h1>"
+    # A friendly card with a picture and one clear way back (D177).
+    body = f'<section class="card errorcard">{ERROR_ART}<h1>{text(title)}</h1>'
     body += _error_detail(lang, detail, code, params or {}, lead)
-    body += f'<p><a href="/">{text(t("error.back", lang))}</a></p>'
+    body += f'<p><a class="button" href="/">{text(t("error.back", lang))}</a></p></section>'
     actions = security is not SECURITY_HEADERS
     return _html(status, page(title, body, actions=actions, lang=lang), security=security)
 

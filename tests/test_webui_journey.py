@@ -184,7 +184,10 @@ def test_cost_card_in_persian() -> None:
 def test_events_are_folded_into_technical_details() -> None:
     ev = (pg.EventLine(ts=T0, type="plan.saved", summary=""),)
     doc = rd.render_project(_view(), progress=pg.ProgressView(events=ev))
-    assert doc.index("<details><summary>Technical details</summary>") < doc.index("plan.saved")
+    # D177: one folded section at the bottom holds the events (and other ids).
+    tech = '<details class="card tech" id="tech"><summary>Technical details</summary>'
+    assert doc.index(tech) < doc.index("plan.saved")
+    assert doc.index("Progress") < doc.index(tech)
 
 
 def test_budget_stop_says_why_and_what_to_do() -> None:

@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-22 — M16: بازطراحی ظاهر، بخش ۳ب (D177)
+- **انجام‌شده:** کارت‌های مرحله در صفحهٔ پروژه ساده شدن (بدون شناسه، نقش، وابستگی و مدل)؛ همهٔ اطلاعات فنی (شناسهٔ پروژه، جدول مرحله‌ها با شناسه/نقش/وابستگی/مدل، رویدادهای اخیر) در یک «جزئیات فنی» تاشو پایین صفحه جمع شدن. صفحهٔ خطا کارت دوستانه با تصویر و دکمهٔ برگشت شد.
+- **فایل‌ها:** `src/automa/webui/render.py` (`_tech_details`، `_task_card`، سربرگ، CSS)، `src/automa/webui/server.py` (`_error_page`)، `src/automa/webui/cards.py` (`ERROR_ART`)، `src/automa/webui/i18n.py`؛ تست‌ها: `tests/test_webui_style.py`، `tests/test_webui_progress.py`، `tests/test_webui_project_fa.py`، `tests/test_webui_journey.py`، `tests/test_webui_screenshot_fixes.py`، `tests/test_webui_errors_fa.py`.
+- **تست‌ها:** `pytest` ← ۶۲۵۰ سبز، ۲ رد شده (Docker واقعی)؛ حالت شبیه CI هم سبز؛ `ruff check` و `ruff format --check` سبز. بررسی بصری با Chrome headless در ۱۲۸۰ و ۳۹۰ پیکسل.
+- **مشکلات:** BudgetGuard و Policy دست نخوردن.
+- **برای صاحب مخزن:** کاری لازم نیست.
+- **قدم بعدی:** مورد باز بعدی M16.
+
 ## 2026-11-22 — M16: بازطراحی ظاهر، بخش ۳الف (D176)
 - **انجام‌شده:** صفحه‌های ایدهٔ جدید، سؤال‌ها و «در حال فکر کردن» حالا نوار سه‌قدمی «ایده ← سؤال‌ها و چیزهای لازم ← برنامه و هزینه» دارن؛ فهرست فایل‌ها به‌جای جدول، کارت با آیکون و دکمه‌های «باز کردن» و «دانلود» شد؛ پیکان «برگشت» در فارسی درست به راست اشاره می‌کنه. مورد شکسته شد؛ «جزئیات فنی» صفحهٔ پروژه و صفحهٔ خطا بخش ۳ب.
 - **فایل‌ها:** `src/automa/webui/render.py` (`_wizard`، `_back`، `_listing_row`، CSS)، `src/automa/webui/i18n.py`؛ تست‌ها: `tests/test_webui_style.py`، `tests/test_webui_files_fa.py`.

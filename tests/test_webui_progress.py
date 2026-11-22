@@ -432,7 +432,8 @@ def test_render_event_text_is_escaped_and_bidi_visible(store: ProjectStore) -> N
 def test_render_task_state_columns(store: ProjectStore) -> None:
     _state(store, "a", TaskStatus.PASSED, model="m-<b>")
     doc = rd.render_project(_view(store))
-    assert '<article class="card task t-passed">' in doc and "Model: " in doc
+    assert '<article class="card task t-passed">' in doc
+    assert '<td dir="ltr">m-&lt;b&gt;</td>' in doc  # the model is in the technical details
     check, queue = STATUS_ICONS["check"], STATUS_ICONS["queue"]
     assert f'<span class="ico" aria-hidden="true">{check}</span> passed</span>' in doc
     assert f'<span class="ico" aria-hidden="true">{queue}</span> not started</span>' in doc

@@ -173,7 +173,8 @@ def test_no_technical_details_without_a_log(tmp_path: Path) -> None:
     store.create("g", project_id="p1")
     forms = rd.ActionForms(csrf_token=TOKEN)
     html = rd.render_project(build_project_view(store, "p1", 0), forms, run=_panel(state=None))
-    assert "<details" not in html
+    assert "(run log)" not in html  # only the page's own technical details (D177)
+    assert html.count("<details") == 1
 
 
 # --- the web cost range line --------------------------------------------------------

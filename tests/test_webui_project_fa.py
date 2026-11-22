@@ -245,7 +245,9 @@ def test_persian_recorded_data_is_escaped_and_untranslated() -> None:
     )
     doc = _render(view=view)
     assert "<b>x</b>" not in doc and "&lt;b&gt;x&lt;/b&gt;" in doc
-    assert "نقش: dev&lt;" in doc and "مدل: m&amp;" in doc
+    # Role and model are recorded data in the technical details (D177), escaped.
+    assert "<td>dev&lt;</td>" in doc and '<td dir="ltr">m&amp;</td>' in doc
+    assert "جزئیات فنی" in doc and "شناسه" in doc
 
 
 def test_persian_unusual_line_singular() -> None:

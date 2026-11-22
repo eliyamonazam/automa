@@ -153,7 +153,9 @@ def test_overview_with_no_projects_has_no_card_grid(tmp_path: Path) -> None:
 
 def test_project_header_is_a_card_with_persian_goal(store: ProjectStore) -> None:
     doc = rd.render_project(build_project_view(store, "p1", 0))
-    assert '<header class="hero"><h1 dir="auto">' in doc and "<code>p1</code>" in doc
+    assert '<header class="hero"><h1 dir="auto">' in doc
+    # The id is only in the technical details at the bottom (D177).
+    assert '<code dir="ltr">p1</code>' in doc.split('id="tech"')[1]
     assert f'<p class="goal" dir="auto">{PERSIAN}</p>' in doc
 
 
@@ -161,7 +163,9 @@ def test_tasks_are_cards_with_persian_title(store: ProjectStore) -> None:
     doc = rd.render_project(build_project_view(store, "p1", 0))
     assert doc.count('<article class="card task t-none">') == 2
     assert '<p class="goal" dir="auto">نوشتن پیش‌نویس</p>' in doc
-    assert "After: a" in doc and "Role: writer" in doc and "Attempts: 0" in doc
+    assert "Attempts: 0" in doc and "After: a" not in doc and "Role: writer" not in doc
+    tech = doc.split('id="tech"')[1]
+    assert '<td dir="ltr">a</td>' in tech and "<td>writer</td>" in tech
 
 
 def test_task_card_title_is_escaped(tmp_path: Path) -> None:

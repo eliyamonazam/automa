@@ -219,6 +219,8 @@ border:3px solid var(--line);font-weight:800}
 .steps .s-now .name{font-weight:800}
 .steps .s-fail .dot{background:var(--badline);border-color:var(--badline);color:#fff}
 .steps.wizard{flex-wrap:nowrap;margin:6px 0 14px}
+.errorcard{text-align:center;max-width:560px;margin:24px auto;padding:28px 22px}
+.errorcard .err,.errorcard .muted{text-align:start}
 .steps.wizard li{flex:1 1 0;min-width:0}
 .deliver{border:1px solid var(--line);border-top:6px solid var(--accent);padding:18px 22px}
 .deliver.ready{border-top-color:var(--okline);
@@ -894,6 +896,7 @@ def render_project(
         parts.append(f'<h2>{text(heading)}</h2><div class="cards">{cards}</div>')
     errors = view.errors + (progress.errors if progress is not None else ())
     parts.append(_errors(errors, lang))
+    parts.append(_tech_details(view, progress, lang, when))
     refresh = REFRESH_SECONDS if progress is not None and progress.live else None
     title = f"Automa — {project_title(view.goal) or view.id}"
     return page(title, "".join(parts), actions=forms is not None, refresh=refresh, lang=lang)
@@ -945,7 +948,7 @@ def _hero_and_journey(view: ProjectView, j: Journey, lang: Language) -> str:
         '<header class="hero">'
         f'<h1 dir="auto">{text(title)} '
         f"{_chip_html(project_chip(view.status, lang), f'ps-{status}')}</h1>"
-        f'<p class="muted"><code>{text(view.id)}</code></p></header>'
+        "</header>"
         '<section class="card journey">'
         f'<p class="now {j.tone}" dir="auto">{text(j.now)}</p>'
         f'<div class="bar" role="progressbar" aria-valuenow="{percent}" aria-valuemin="0" '
@@ -1018,22 +1021,19 @@ def _task_card(task: TaskRow, lang: Language = "en", checks: TaskDelivery | None
     state = _state_class(task.state)
     chip = task_chip(task.state, lang)
     order = localize_digits(str(task.order), lang)
-    after = ", ".join(task.depends_on) or "-"
     # The latest attempt's status uses the task-state words (unknown: as recorded).
     last = task_state_label(task.last_result, lang) if task.last_result else "-"
+    # Id, role, dependencies and model are in the page's "Technical details" (D177).
     return (
         f'<article class="card task t-{state}">'
-        f'<h3><span class="badge">#{text(order)}</span> <code>{text(task.id)}</code> '
+        f'<h3><span class="badge">#{text(order)}</span> '
         f"{_chip_html(chip, f'st-{state}')}</h3>"
-        f'<p class="goal" dir="auto">{text(task.title)}</p>'
+        f'<p class="goal" dir="auto">{text(task.title or task.id)}</p>'
         + _hint_html(chip)
         + '<p class="chips">'
-        f"<span>{text(t('task.role', lang, role=task.role))}</span>"
-        f'<span dir="auto">{text(t("task.after", lang, after=after))}</span>'
         f"<span>{text(t('task.attempts', lang, count=task.attempts))}</span>"
         f"<span>{text(t('task.last', lang))} "
-        f'<span dir="auto">{text(last)}</span></span>'
-        f"<span>{text(t('task.model', lang, model=task.model or '-'))}</span></p>"
+        f'<span dir="auto">{text(last)}</span></span></p>'
         + _missing_program_html(task.missing_program, lang)
         + _criteria_html(checks, lang)
         + "</article>"
@@ -1315,21 +1315,50 @@ def _progress(
     if p.live:
         live = t("progress.live", lang, seconds=REFRESH_SECONDS)
         parts.append(f'<p class="badge">{text(live)}</p>')
-    if p.events:
+    parts.append("</section>")
+    return "".join(parts)
+
+
+def _tech_details(
+    view: ProjectView, progress: ProgressView | None, lang: Language, when: When
+) -> str:
+    """Everything technical in one folded section at the bottom (D177): the project
+    id, each step's id, role, dependencies and model, and the latest events. All
+    values are recorded data and escaped."""
+    parts = [
+        f'<details class="card tech" id="tech"><summary>{text(t("tech.summary", lang))}</summary>',
+        f'<p>{text(t("tech.project_id", lang))} <code dir="ltr">{text(view.id)}</code></p>',
+    ]
+    if view.tasks:
+        rows = "".join(
+            f"<tr><td>{text(localize_digits(str(r.order), lang))}</td>"
+            f'<td><code dir="ltr">{text(r.id)}</code></td><td>{text(r.role)}</td>'
+            f'<td dir="ltr">{text(", ".join(r.depends_on) or "-")}</td>'
+            f'<td dir="ltr">{text(r.model or "-")}</td></tr>'
+            for r in view.tasks
+        )
+        parts.append(
+            f"<h3>{text(t('tech.steps', lang))}</h3>"
+            f'<div class="scroll"><table><thead><tr><th>#</th>'
+            f"<th>{text(t('tech.col.id', lang))}</th><th>{text(t('tech.col.role', lang))}</th>"
+            f"<th>{text(t('tech.col.after', lang))}</th>"
+            f"<th>{text(t('tech.col.model', lang))}</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table></div>"
+        )
+    if progress is not None and progress.events:
         rows = "".join(
             f"<tr><td>{text(when(e.ts))}</td><td>{text(e.type)}</td>"
             f'<td dir="auto">{text(e.summary or "-")}</td></tr>'
-            for e in p.events
+            for e in progress.events
         )
-        events = t("tech.events", lang, count=len(p.events))
+        events = t("tech.events", lang, count=len(progress.events))
         parts.append(
-            f"<details><summary>{text(t('tech.summary', lang))}</summary>"
             f"<h3>{text(events)}</h3>"
             f'<div class="scroll"><table><thead><tr><th>{text(t("tech.time", lang))}</th>'
             f"<th>{text(t('tech.event', lang))}</th><th>{text(t('tech.details', lang))}</th>"
-            f"</tr></thead><tbody>{rows}</tbody></table></div></details>"
+            f"</tr></thead><tbody>{rows}</tbody></table></div>"
         )
-    parts.append("</section>")
+    parts.append("</details>")
     return "".join(parts)
 
 

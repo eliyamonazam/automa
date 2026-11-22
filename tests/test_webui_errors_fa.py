@@ -106,14 +106,16 @@ def test_idea_refusal_keeps_its_english_message_and_gets_a_lead() -> None:
 # -- English pages are unchanged -----------------------------------------------------
 
 
-def test_english_error_page_is_unchanged(tmp_path: Path) -> None:
+def test_english_error_page_text_is_unchanged(tmp_path: Path) -> None:
     app = _app(tmp_path, "en")
     r = app.handle("GET", "/projects/p-20261120-101010-abcdef", HOST)
     doc = _body(r)
     assert r.status == 404
+    # D177: the same words in a card with a picture and a button.
+    assert '<section class="card errorcard"><svg class="empty-art"' in doc
     assert (
         '<h1>Not found</h1><p class="err">no project p-20261120-101010-abcdef</p>'
-        '<p><a href="/">← all projects</a></p>'
+        '<p><a class="button" href="/">← all projects</a></p></section>'
     ) in doc
     assert '<html lang="en">' in doc
 
