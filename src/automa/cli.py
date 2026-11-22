@@ -185,6 +185,18 @@ from automa.finance import (
     estimate_plan,
     spending_report,
 )
+from automa.ideafiles import MAX_IDEA_FILE_BYTES as IDEA_FILE_LIMIT
+from automa.ideafiles import (
+    IdeaFileError,
+)
+from automa.ideafiles import (
+    check_files as check_idea_files,
+)
+from automa.ideafiles import describe as describe_idea_files
+from automa.ideafiles import list_files as list_idea_files
+from automa.ideafiles import (
+    save_files as save_idea_files,
+)
 from automa.llm.factory import image_provider_from_config, provider_from_config
 from automa.llm.gateway import LLMGateway
 from automa.llm.images import ImageGateway, ImageProvider
@@ -647,6 +659,14 @@ def new(
             "system prompts as data; default: [memory] in_prompts in automa.toml (on).",
         ),
     ] = None,
+    files: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--file",
+            help="Attach a file to the idea (repeatable): stored in files/inputs/idea/ "
+            "and shown to the Executive and the workers as data.",
+        ),
+    ] = None,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Path to automa.toml.")
     ] = None,
@@ -655,8 +675,11 @@ def new(
     goal = goal.strip()
     if not goal:
         raise _fail("goal must not be empty", EXIT_USER)
+    attached = _read_idea_files(files or [])
     config = _load(config_path)
     if workflow_id is not None:
+        if attached:
+            raise _fail("--file cannot be used with --workflow; nothing was created", EXIT_USER)
         _new_from_workflow(config, goal, project_id, workflow_id)
         return
     prep = _prepare_executive(config, memory)
@@ -667,9 +690,40 @@ def new(
     except ProjectStoreError as e:
         raise _fail(str(e), EXIT_USER) from None
     typer.echo(f"project: {project.id}")
+    if attached:
+        try:
+            paths = save_idea_files(store.files_dir(project.id), attached)
+        except IdeaFileError as e:
+            raise _fail(f"{_safe(str(e))} (project {project.id} has no plan)", EXIT_USER) from None
+        typer.echo(f"files: {_safe(', '.join(paths))}")
     typer.echo(f"memory: {_describe_prompt_memory(prep.memory)}")
     _print_suggestions(config, goal)
     _plan_with_executive(config, store, project, prep, ask=ask)
+
+
+def _read_idea_files(paths: Sequence[Path]) -> list[tuple[str, bytes]]:
+    """Read ``--file`` arguments before anything is created (D162)."""
+    out: list[tuple[str, bytes]] = []
+    for path in paths:
+        try:
+            if not path.is_file():
+                raise _fail(f"not a file: {_safe(str(path))}; nothing was created", EXIT_USER)
+            if path.stat().st_size > IDEA_FILE_LIMIT:
+                raise _fail(
+                    f"{_safe(path.name)} is larger than {IDEA_FILE_LIMIT // (1024 * 1024)} MB; "
+                    "nothing was created",
+                    EXIT_USER,
+                )
+            out.append((path.name, path.read_bytes()))
+        except OSError as e:
+            raise _fail(
+                f"cannot read {_safe(str(path))}: {e.strerror}; nothing was created", EXIT_USER
+            ) from None
+    try:
+        check_idea_files(out)
+    except IdeaFileError as e:
+        raise _fail(f"{_safe(str(e))}; nothing was created", EXIT_USER) from None
+    return out
 
 
 class _ExecutivePrep(NamedTuple):
@@ -919,7 +973,11 @@ def _match_line(m: WorkflowMatch) -> str:
 def _clarify(agent: ExecutiveAgent, store: ProjectStore, project: Project) -> list[Clarification]:
     """Ask the Executive's questions, read answers from the user, persist them."""
     try:
-        questions = agent.clarify(project.goal, project_id=project.id)
+        questions = agent.clarify(
+            project.goal,
+            project_id=project.id,
+            attachments=describe_idea_files(list_idea_files(store.files_dir(project.id))),
+        )
     except BudgetError:
         store.set_status(project.id, ProjectStatus.PAUSED)
         raise
@@ -3899,7 +3957,11 @@ class _WebIdeaPlanner:
 
     def clarify(self, project_id: str) -> list[str]:
         def ask(agent: ExecutiveAgent, store: ProjectStore) -> list[str]:
-            return agent.clarify(store.load(project_id).goal, project_id=project_id)
+            return agent.clarify(
+                store.load(project_id).goal,
+                project_id=project_id,
+                attachments=describe_idea_files(list_idea_files(store.files_dir(project_id))),
+            )
 
         return self._call(project_id, ask)
 

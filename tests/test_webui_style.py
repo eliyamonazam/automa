@@ -213,7 +213,10 @@ def test_run_panel_is_a_card_and_log_tail_has_auto_direction() -> None:
 
 def test_new_idea_and_clarify_forms_are_cards() -> None:
     forms = rd.ActionForms(FORM_TOKEN)
-    assert '<form class="card" method="post" action="/new">' in rd.render_new_idea(forms)
+    assert (
+        '<form class="card" method="post" action="/new" enctype="multipart/form-data">'
+        in rd.render_new_idea(forms)
+    )
     doc = rd.render_clarify("p1", PERSIAN, ["چه لحنی؟"], forms)
     assert '<form class="card" method="post" action="/projects/p1/clarify">' in doc
     assert '<p dir="auto"><label>1. چه لحنی؟' in doc

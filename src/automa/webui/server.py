@@ -143,7 +143,9 @@ from automa.webui.static import STATIC_HEADERS, is_static_path, static_asset
 from automa.webui.upload import (
     DECLINE_FIELDS,
     FILE_FIELD,
+    MAX_PARTS,
     MAX_UPLOAD_BYTES,
+    MULTIPART,
     REQUEST_ANSWER_FIELDS,
     parse_multipart,
     parse_request_action,
@@ -376,6 +378,8 @@ class WebApp:
     def max_body_bytes(self, target: str) -> int:
         """The largest POST body accepted for ``target`` (idea forms are larger)."""
         path = urlsplit(target).path
+        if self._ideas is not None and path == NEW_PATH:
+            return MAX_UPLOAD_BYTES  # the new idea may carry files (D162)
         if self._ideas is not None and is_idea_path(path):
             return MAX_IDEA_FORM_BYTES
         found = parse_request_action(path)
@@ -551,9 +555,26 @@ class WebApp:
         fields = IDEA_FIELDS if pid is None else ANSWER_FIELDS
         try:
             check_same_origin(lowered, self._actions)
-            form = parse_form(lowered, body, fields=fields, max_bytes=MAX_IDEA_FORM_BYTES)
+            files: list[tuple[str, bytes]] = []
+            ctype = lowered.get("content-type", "").split(";", 1)[0].strip().lower()
+            if pid is None and ctype == MULTIPART:
+                # D162: the new-idea form with attached files.
+                upload = parse_multipart(
+                    lowered,
+                    body,
+                    fields=IDEA_FIELDS,
+                    file_field=FILE_FIELD,
+                    max_bytes=MAX_UPLOAD_BYTES,
+                    # the count is checked by IdeaFlow, with a clear message
+                    max_files=MAX_PARTS,
+                )
+                form, files = upload.fields, upload.files
+            else:
+                form = parse_form(lowered, body, fields=fields, max_bytes=MAX_IDEA_FORM_BYTES)
             check_token(form, self._actions)
-            location = self._ideas.start(form) if pid is None else self._ideas.answer(pid, form)
+            location = (
+                self._ideas.start(form, files) if pid is None else self._ideas.answer(pid, form)
+            )
         except ActionRefused as e:
             return self.refused(e)
         return self._redirect(location)

@@ -30,6 +30,7 @@ from automa.webui import actions as wa
 from automa.webui import ideas as wi
 from automa.webui import server as ws
 from automa.webui.render import ActionForms, render_clarify, render_new_idea
+from automa.webui.upload import MAX_UPLOAD_BYTES
 
 LEDGER = "ledger.sqlite3"
 PORT = 8765
@@ -206,7 +207,8 @@ def test_head_new_has_no_side_effects(env: Env) -> None:
 )
 def test_cross_origin_or_odd_posts_are_refused(env: Env, headers: dict[str, str]) -> None:
     r = env.post("/new", {"csrf": TOKEN, "goal": "x", "ask": "yes"}, headers=headers)
-    assert r.status in (403, 415)
+    # A multipart body is a valid kind for /new (files, D162) but this one is malformed.
+    assert r.status in ((400,) if "multipart" in str(headers) else (403, 415))
     assert env.store.list_ids() == []
     assert env.planner.calls == []
 
@@ -270,7 +272,7 @@ def test_query_string_on_post_is_not_an_idea(env: Env) -> None:
 
 
 def test_body_limits_depend_on_path(env: Env, tmp_path: Path) -> None:
-    assert env.app.max_body_bytes("/new") == wi.MAX_IDEA_FORM_BYTES
+    assert env.app.max_body_bytes("/new") == MAX_UPLOAD_BYTES  # may carry files (D162)
     assert env.app.max_body_bytes("/projects/p1/clarify") == wi.MAX_IDEA_FORM_BYTES
     assert env.app.max_body_bytes("/projects/p1/approvals/a/approve") == wa.MAX_FORM_BYTES
     ro = Env(tmp_path / "ro", actions=False)

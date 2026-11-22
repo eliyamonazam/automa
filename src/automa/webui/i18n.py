@@ -284,6 +284,14 @@ _RAW: dict[str, dict[Language, str]] = {
         "en": "What should the project achieve?",
         "fa": "پروژه قراره چه کاری انجام بده؟",
     },
+    "idea.files": {"en": "Helpful files (optional):", "fa": "فایل‌های کمکی (اختیاری):"},
+    "idea.files.hint": {
+        "en": "For example a spreadsheet or CSV of your data, a sample or a logo. Up to 10 "
+        "files, each up to 20 MB. Automa reads them as data and does not have to ask you "
+        "for them later.",
+        "fa": "مثلاً فایل اکسل یا جدول داده‌هات، یک نمونه یا لوگو. تا ۱۰ فایل، هر کدوم تا ۲۰ "
+        "مگابایت. Automa این‌ها رو به‌عنوان داده می‌خونه و بعداً لازم نیست دوباره ازت بخواد.",
+    },
     "idea.ask": {"en": "Ask clarifying questions first", "fa": "اول چند سؤال روشن‌کننده بپرس"},
     "idea.submit": {"en": "Create plan", "fa": "ساختن برنامه"},
     "thinking.title": {"en": "Automa — thinking", "fa": "Automa — در حال فکر کردن"},
@@ -772,6 +780,22 @@ _RAW: dict[str, dict[Language, str]] = {
         "fa": "از ترمینال جواب بده: {answer} (یا: {decline})، بعد automa run",
     },
     "refusal.no_such_question": {"en": "no such question", "fa": "چنین سؤالی نیست"},
+    "refusal.idea_files_too_many": {
+        "en": "at most {max} files can be attached to an idea; nothing was created",
+        "fa": "حداکثر {max} فایل می‌شه کنار ایده فرستاد؛ چیزی ساخته نشد",
+    },
+    "refusal.idea_file_too_large": {
+        "en": "{name} is larger than {mb} MB; nothing was created",
+        "fa": "فایل {name} بزرگ‌تر از {mb} مگابایته؛ چیزی ساخته نشد",
+    },
+    "refusal.idea_files_too_large": {
+        "en": "the files are larger than {mb} MB together; nothing was created",
+        "fa": "فایل‌ها روی هم بزرگ‌تر از {mb} مگابایتن؛ چیزی ساخته نشد",
+    },
+    "refusal.idea_file_not_saved": {
+        "en": "could not save the file {name}; the project has no plan yet",
+        "fa": "فایل {name} ذخیره نشد؛ پروژه هنوز برنامه نداره",
+    },
     "refusal.answer_refused": {
         "en": "the answer was not saved: {reason}",
         "fa": "جواب ذخیره نشد: {reason}",

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import Protocol
 from urllib.parse import quote, unquote
 
+from automa.ideafiles import IdeaFileError, check_files, save_files
 from automa.plan import Clarification
 from automa.plan.models import MAX_ANSWER_CHARS, MAX_CLARIFICATIONS
 from automa.project.store import (
@@ -128,6 +129,20 @@ def parse_answers(form: Mapping[str, str], questions: Sequence[str]) -> list[Cla
     return items
 
 
+def _file_refusal(e: IdeaFileError) -> ActionRefused:
+    """A refused attached file (D162) as a translated refusal."""
+    p = e.params
+    if e.code == "idea_files_too_many":
+        return ActionRefused.coded(400, "idea_files_too_many", max=str(p.get("max", "")))
+    if e.code == "idea_file_too_large":
+        return ActionRefused.coded(
+            400, "idea_file_too_large", name=str(p.get("name", "")), mb=str(p.get("mb", ""))
+        )
+    if e.code == "idea_files_too_large":
+        return ActionRefused.coded(400, "idea_files_too_large", mb=str(p.get("mb", "")))
+    return ActionRefused.coded(400, "idea_file_not_saved", name=str(p.get("name", "")))
+
+
 def _refusal(e: IdeaError, project_id: str | None) -> ActionRefused:
     where = f" (project {project_id})" if project_id else " (nothing was created)"
     return ActionRefused(KIND_STATUS[e.kind], f"{e.message}{where}", lead=f"idea.{e.kind}")
@@ -218,9 +233,17 @@ class IdeaFlow:
         if not self._busy.acquire(blocking=False):
             raise ActionRefused.coded(409, "executive_busy")
 
-    def start(self, form: Mapping[str, str]) -> str:
-        """Create the project and ask (or plan); returns where the browser goes next."""
+    def start(self, form: Mapping[str, str], files: Sequence[tuple[str, bytes]] = ()) -> str:
+        """Create the project and ask (or plan); returns where the browser goes next.
+
+        ``files`` (D162): files attached to the idea; checked before the project is
+        created and saved into its ``files/inputs/idea/`` before the first model call.
+        """
         goal, ask = parse_idea(form)
+        try:
+            check_files(files)
+        except IdeaFileError as e:
+            raise _file_refusal(e) from None
         self._acquire()
         handed_off = False
         try:
@@ -233,6 +256,11 @@ class IdeaFlow:
             except ProjectStoreError as e:
                 raise ActionRefused(400, str(e), lead="lead.store") from None
             pid = project.id
+            if files:
+                try:
+                    save_files(self._store.files_dir(pid), files)
+                except IdeaFileError as e:
+                    raise _file_refusal(e) from None
             if self._background:
                 handed_off = True
                 return self._spawn(

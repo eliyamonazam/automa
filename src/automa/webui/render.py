@@ -237,8 +237,13 @@ font-size:.75em;font-weight:800;content:"•";background:var(--chip);color:var(-
 background:linear-gradient(180deg,color-mix(in srgb,var(--info) 60%,var(--card)),var(--card) 120px)}
 .ask h2{font-size:1.3em;margin:0 0 .3em}
 .ask .question{font-size:1.12em;font-weight:700;white-space:pre-line;overflow-wrap:anywhere}
-.ask .upload{background:var(--soft);border-radius:12px;padding:10px 14px}
+.upload{background:var(--soft);border:1px dashed var(--line);border-radius:12px;
+padding:10px 14px;margin:12px 0}
+.upload p{margin:4px 0}.upload .hint{margin:6px 0 0}
 input[type=file]{font-size:.92em;max-width:100%}
+input[type=file]::file-selector-button{font:inherit;font-weight:700;color:var(--fg);
+background:var(--card);border:1px solid var(--line);border-radius:10px;padding:5px 14px;
+margin-inline-end:10px;cursor:pointer}
 .btn-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0}
 textarea,input,button{font:inherit;color:inherit}
 textarea{width:100%;background:var(--card);border:1px solid var(--line);border-radius:12px;
@@ -1446,10 +1451,15 @@ def render_new_idea(forms: ActionForms, lang: Language = "en", *, goal: str = ""
         f'<p><a href="/">{text(jt("nav.back", lang))}</a></p>'
         f"<h1>{text(t('idea.heading', lang))}</h1>"
         f"<p>{text(t('idea.intro', lang))}</p>"
-        f'<form class="card" method="post" action="/new">{_hidden("csrf", forms.csrf_token)}'
+        '<form class="card" method="post" action="/new" enctype="multipart/form-data">'
+        f"{_hidden('csrf', forms.csrf_token)}"
         f'<p><textarea name="goal" rows="8" cols="80" maxlength="{MAX_GOAL_CHARS}" '
         f'dir="auto" required placeholder="{text(t("idea.placeholder", lang))}">'
         f"{text(goal)}</textarea></p>"
+        f'<div class="upload"><p><label for="idea-files"><strong>{text(t("idea.files", lang))}'
+        "</strong></label></p>"
+        '<input id="idea-files" type="file" name="files" multiple>'
+        f'<p class="hint">{text(t("idea.files.hint", lang))}</p></div>'
         f'<p><label><input type="checkbox" name="ask" value="{ASK_VALUE}" checked> '
         f"{text(t('idea.ask', lang))}</label></p>"
         f'<p><button type="submit">{text(t("idea.submit", lang))}</button></p></form>'

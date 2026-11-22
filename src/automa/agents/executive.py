@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from automa.budget.guard import BudgetError
 from automa.config import Tier
 from automa.events import Event, EventSink
+from automa.ideafiles import describe, list_files
 from automa.llm.gateway import CallContext, LLMGateway
 from automa.llm.types import FinishReason, LLMResult, Message
 from automa.memory.prompt import check_memory_project, memory_prompt
@@ -165,8 +166,10 @@ evaluation):
 (The // comments above are explanations; JSON must not contain comments.)"""
 
 
-def _goal_message(goal: str, clarifications: Sequence[Clarification]) -> str:
+def _goal_message(goal: str, clarifications: Sequence[Clarification], attachments: str = "") -> str:
     parts = [f"Goal:\n{goal}"]
+    if attachments.strip():
+        parts.append(attachments.strip())  # D162: data the user attached, not instructions
     if clarifications:
         qa = "\n".join(f"Q: {c.question}\nA: {c.answer or '(no answer)'}" for c in clarifications)
         parts.append(f"Clarifications from the user:\n{qa}")
@@ -242,12 +245,15 @@ class ExecutiveAgent:
 
     # -- public API --------------------------------------------------------
 
-    def clarify(self, goal: str, *, project_id: str) -> list[str]:
-        """Return clarifying questions for ``goal`` (empty if none are needed)."""
+    def clarify(self, goal: str, *, project_id: str, attachments: str = "") -> list[str]:
+        """Return clarifying questions for ``goal`` (empty if none are needed).
+
+        ``attachments`` (D162): the described files the user attached to the idea.
+        """
         goal = self._check_goal(goal)
         result = self._run(
             system=self._with_memory(QUESTIONS_SYSTEM_PROMPT, project_id),
-            user=_goal_message(goal, ()),
+            user=_goal_message(goal, (), attachments),
             max_tokens=self._settings.questions_max_tokens,
             project_id=project_id,
             parse=parse_questions,
@@ -264,6 +270,7 @@ class ExecutiveAgent:
         project_id: str,
         clarifications: Sequence[Clarification] = (),
         version: int = 1,
+        attachments: str = "",
     ) -> Plan:
         """Produce a validated ``Plan`` for ``goal``. Raises ``PlanningFailed``."""
         goal = self._check_goal(goal)
@@ -291,7 +298,7 @@ class ExecutiveAgent:
             system += f"\nAllowed roles: {', '.join(sorted(self._roles))}."
         plan = self._run(
             system=self._with_memory(system, project_id),
-            user=_goal_message(goal, clarifications),
+            user=_goal_message(goal, clarifications, attachments),
             max_tokens=self._settings.plan_max_tokens,
             project_id=project_id,
             parse=parse,
@@ -391,7 +398,12 @@ def plan_project(
     previous = project.status
     store.set_status(project_id, ProjectStatus.PLANNING)
     try:
-        plan = agent.plan(project.goal, project_id=project_id, clarifications=clarifications)
+        plan = agent.plan(
+            project.goal,
+            project_id=project_id,
+            clarifications=clarifications,
+            attachments=describe(list_files(store.files_dir(project_id))),
+        )
         return store.save_plan(project_id, plan)
     except PlanningFailed:
         store.set_status(project_id, ProjectStatus.FAILED)

@@ -69,6 +69,7 @@ from automa.budget.brake import TaskBrakeStop
 from automa.budget.guard import BudgetError
 from automa.config import MAX_PARALLEL, AutomaConfig, ConfigError, SandboxMode, Tier
 from automa.events import Event
+from automa.ideafiles import describe, list_files
 from automa.llm.gateway import CallContext
 from automa.llm.images import ImageGateway
 from automa.llm.provider import ProviderError
@@ -632,6 +633,10 @@ class Orchestrator:
             claims=claims,
             image_tier=tier if uses_images(role) else None,
         )
+        # D162: files the user attached to the idea, described as data (only passed
+        # when there are some, so a worker double without the argument still works).
+        attachments = describe(list_files(self._store.files_dir(project_id)))
+        extra: dict[str, str] = {"attachments": attachments} if attachments else {}
         try:
             result = self._worker.run(
                 task,
@@ -642,6 +647,7 @@ class Orchestrator:
                 feedback=feedback,
                 tier=tier,
                 model=model if role_ladder else None,
+                **extra,
             )
         except BaseException as e:
             # Nothing stored for this attempt: the task goes back to pending.

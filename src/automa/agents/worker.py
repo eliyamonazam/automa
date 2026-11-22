@@ -255,11 +255,15 @@ class WorkerSettings(BaseModel):
 
 
 def task_message(
-    task: Task, feedback: Sequence[Issue] = (), answers: Sequence[UserRequest] = ()
+    task: Task,
+    feedback: Sequence[Issue] = (),
+    answers: Sequence[UserRequest] = (),
+    attachments: str = "",
 ) -> str:
     """The user message that describes ``task`` (and the Verifier's issues on a retry).
 
     ``answers`` (D159): what the user answered (or declined) to this task's questions.
+    ``attachments`` (D162): the described files the user attached to the idea.
     """
     parts = [f"# Task `{task.id}`: {task.title}"]
     if task.description:
@@ -275,6 +279,8 @@ def task_message(
             line += f"  (checked automatically: {c.check.model_dump_json()})"
         criteria.append(line)
     parts.append("## Acceptance criteria\n" + "\n".join(criteria))
+    if attachments.strip():
+        parts.append(attachments.strip())
     if answers:
         parts.append(
             "## Answers from the user (your earlier questions)\n"
@@ -356,6 +362,7 @@ class WorkerAgent:
         feedback: Sequence[Issue] = (),
         tier: Tier | None = None,
         model: str | None = None,
+        attachments: str = "",
     ) -> TaskResult:
         """Run one attempt at ``task``. ``tier`` overrides task/role tier (escalation).
 
@@ -394,7 +401,7 @@ class WorkerAgent:
         context = CallContext(project_id=project_id, task_id=task.id)
         messages: list[Message] = [
             Message.system(system),
-            Message.user(task_message(task, feedback, executor.user_answers())),
+            Message.user(task_message(task, feedback, executor.user_answers(), attachments)),
         ]
         started = self._clock()
         files: dict[str, None] = {}
