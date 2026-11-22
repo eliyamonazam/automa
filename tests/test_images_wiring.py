@@ -267,7 +267,7 @@ def builtin() -> RoleRegistry:
 def test_designer_role_is_builtin_and_bounded() -> None:
     d = builtin().get("designer")
     assert uses_images(d)
-    assert set(d.tools) == {"read_file", "list_dir", "write_file", "generate_image"}
+    assert set(d.tools) == {"read_file", "list_dir", "write_file", "edit_file", "generate_image"}
     assert d.max_risk is RiskLevel.WRITE
     policy = d.policy()
     assert policy.decide("generate_image", RiskLevel.WRITE).decision is Decision.ALLOW

@@ -1,7 +1,7 @@
 name = "architect"
 description = "Designs structure: modules, interfaces, data formats and file layout."
 tier = "large"
-tools = ["read_file", "list_dir", "write_file"]
+tools = ["read_file", "list_dir", "write_file", "edit_file"]
 max_risk = "write"
 max_steps = 30
 instructions = """

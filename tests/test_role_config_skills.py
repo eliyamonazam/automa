@@ -27,7 +27,7 @@ from automa.tools import RiskLevel, default_tools
 
 PID = "proj-1"
 BODY = "Always end every document with the line: -- house style --"
-WRITER_TOOLS = ("read_file", "list_dir", "write_file")
+WRITER_TOOLS = ("read_file", "list_dir", "write_file", "edit_file")
 
 TOML = """\
 workspace = "{ws}"

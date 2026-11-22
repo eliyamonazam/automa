@@ -88,6 +88,7 @@ from automa.quality import QualityError, QualityLog, QualityRecord
 from automa.roles.models import Role
 from automa.roles.registry import RoleError, RoleRegistry
 from automa.router import RouteDecision, Router
+from automa.suspend import SuspendedAttempt, save_suspended, take_suspended
 from automa.tools import RunCommand, tools_factory
 from automa.tools.ask import AskUser, UserInputRequired
 from automa.tools.base import Tool
@@ -636,7 +637,18 @@ class Orchestrator:
         # D162: files the user attached to the idea, described as data (only passed
         # when there are some, so a worker double without the argument still works).
         attachments = describe(list_files(self._store.files_dir(project_id)))
-        extra: dict[str, str] = {"attachments": attachments} if attachments else {}
+        extra: dict[str, Any] = {"attachments": attachments} if attachments else {}
+        # D166: the same attempt stopped by a question the user has now answered
+        # continues where it stopped (passed only when there is one).
+        project_dir = store.project_dir(project_id)
+        resumed = take_suspended(project_dir, task.id, attempt)
+        if resumed is not None:
+            extra["resume"] = resumed
+            self._emit(
+                project_id,
+                "orchestrator.resumed_attempt",
+                {"task": task.id, "attempt": attempt, "request": resumed.request_id},
+            )
         try:
             result = self._worker.run(
                 task,
@@ -650,6 +662,11 @@ class Orchestrator:
                 **extra,
             )
         except BaseException as e:
+            if isinstance(e, UserInputRequired) and isinstance(e.suspended, SuspendedAttempt):
+                try:
+                    save_suspended(project_dir, e.suspended)
+                except OSError:
+                    pass  # not kept: the attempt simply starts again after the answer
             # Nothing stored for this attempt: the task goes back to pending.
             self._save_state(
                 project_id,

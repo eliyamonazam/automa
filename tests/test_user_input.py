@@ -176,11 +176,18 @@ def test_question_pauses_answer_resumes_and_reaches_the_worker(tmp_path: Path) -
     done = rig.run()
     assert done.status is ProjectStatus.DONE
     first = rig.provider.requests[n]
-    user = first.messages[1].content or ""
-    assert "Answers from the user" in user and "sheet attached" in user
-    assert f"inputs/{pending[0].id}/sales.csv" in user
+    # D166: the same attempt continues; the answer is the ask_user call's result.
+    assert [m.role.value for m in first.messages[:3]] == ["system", "user", "assistant"]
+    assert first.messages[2].tool_calls[0].name == ASK_TOOL
+    answer = first.messages[-1].content or ""
+    assert first.messages[-1].role.value == "tool"
+    assert "sheet attached" in answer and f"inputs/{pending[0].id}/sales.csv" in answer
     assert ASK_TOOL in {t.name for t in first.tools}
     assert "Never invent data" in (first.messages[0].content or "")
+    assert not (rig.store.project_dir(PID) / "suspended" / "a.json").exists()
+    resumed = [e for e in rig.store.events(PID).read() if e.type == "orchestrator.resumed_attempt"]
+    assert resumed and resumed[0].data["request"] == pending[0].id
+    assert rig.store.attempt_count(PID, "a") == 1  # one attempt, not two
 
 
 def test_same_question_after_answer_is_answered_without_pause(tmp_path: Path) -> None:
@@ -266,3 +273,71 @@ def test_cli_decline_and_refusals(env: CliEnv, tmp_path: Path) -> None:
     assert r.exit_code == 0 and "declined" in r.output
     assert env.run("decline", "p1", rid).exit_code == cli.EXIT_USER
     assert env.run("requests", "nope").exit_code == cli.EXIT_USER
+
+
+# --- continuing the same attempt (D166) ---------------------------------------------
+
+
+def test_calls_after_the_question_in_the_same_reply_run_after_the_answer(tmp_path: Path) -> None:
+    both = calls(
+        (ASK_TOOL, {"question": "Name?", "kind": "text"}),
+        ("write_file", {"path": "a.txt", "content": "ok"}),
+    )
+    rig = Rig(tmp_path, [both], make_plan(task_dict("a")))
+    rig.run()
+    assert not (rig.store.files_dir(PID) / "a.txt").exists()  # not run before the answer
+    rid = requests_of(rig).pending()[0].id
+    requests_of(rig).answer(rid, "Ali", via="test")
+    rig.provider.push("done")
+    assert rig.run().status is ProjectStatus.DONE
+    assert (rig.store.files_dir(PID) / "a.txt").read_text() == "ok"
+    last = (
+        rig.provider.requests[-2] if len(rig.provider.requests) > 2 else rig.provider.requests[-1]
+    )
+    tool_texts = [m.content or "" for m in last.messages if m.role.value == "tool"]
+    assert any("Ali" in t for t in tool_texts) and any("wrote" in t for t in tool_texts)
+
+
+def test_broken_suspended_file_falls_back_to_a_fresh_attempt(tmp_path: Path) -> None:
+    rig = Rig(tmp_path, [ask("Which city?", "text")], make_plan(task_dict("a")))
+    rig.run()
+    path = rig.store.project_dir(PID) / "suspended" / "a.json"
+    assert path.is_file()
+    path.write_text("{broken", encoding="utf-8")
+    rid = requests_of(rig).pending()[0].id
+    requests_of(rig).answer(rid, "Tehran", via="test")
+    rig.provider.push(*write("a"))
+    n = len(rig.provider.requests)
+    assert rig.run().status is ProjectStatus.DONE
+    user = rig.provider.requests[n].messages[1].content or ""
+    assert "Answers from the user" in user and "Tehran" in user  # restarted with answers
+    assert not path.exists()
+
+
+def test_take_suspended_checks_task_and_attempt(tmp_path: Path) -> None:
+    from automa.config import Tier
+    from automa.llm.types import Message, ToolCall
+    from automa.suspend import SuspendedAttempt, has_suspended, save_suspended, take_suspended
+
+    s = SuspendedAttempt(
+        task_id="a",
+        attempt=2,
+        request_id="req-000000000001",
+        messages=(Message.system("s"), Message.user("u")),
+        calls_left=(ToolCall(id="c", name=ASK_TOOL, arguments="{}"),),
+        intact_left=(True,),
+        steps=3,
+        cost_nusd=5,
+        tier=Tier.MEDIUM,
+        model="m",
+        started_at=T0,
+    )
+    save_suspended(tmp_path, s)
+    assert has_suspended(tmp_path, "a")
+    assert take_suspended(tmp_path, "a", 1) is None  # other attempt: dropped
+    assert not has_suspended(tmp_path, "a")
+    save_suspended(tmp_path, s)
+    assert take_suspended(tmp_path, "a", 2) == s
+    assert take_suspended(tmp_path, "a", 2) is None  # used once
+    with pytest.raises(ValueError):
+        take_suspended(tmp_path, "../x", 1)

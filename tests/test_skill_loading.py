@@ -182,7 +182,7 @@ daily_usd = 2.0
 per_call_usd = 0.25
 """
 
-WRITER_TOOLS = ("read_file", "list_dir", "write_file")
+WRITER_TOOLS = ("read_file", "list_dir", "write_file", "edit_file")
 
 
 def calls(*items: tuple[str, dict[str, Any]]) -> ChatResponse:

@@ -1,7 +1,7 @@
 name = "designer"
 description = "Creates images (PNG/JPEG) for the project with the image model and places them in pages or documents."
 tier = "medium"
-tools = ["read_file", "list_dir", "write_file", "generate_image"]
+tools = ["read_file", "list_dir", "write_file", "edit_file", "generate_image"]
 max_risk = "write"
 max_steps = 20
 instructions = """

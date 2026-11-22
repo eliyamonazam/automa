@@ -1,7 +1,7 @@
 name = "researcher"
 description = "Gathers and summarizes information from the project files and approved web pages or public GitHub content into written notes."
 tier = "medium"
-tools = ["read_file", "list_dir", "write_file", "fetch_url", "github_read"]
+tools = ["read_file", "list_dir", "write_file", "edit_file", "fetch_url", "github_read"]
 max_risk = "write"
 max_steps = 30
 instructions = """

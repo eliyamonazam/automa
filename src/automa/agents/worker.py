@@ -48,6 +48,8 @@ from automa.memory.store import MemoryContext
 from automa.plan.models import MAX_TEXT_CHARS, Issue, ResultStatus, Task, TaskResult
 from automa.roles.models import Role
 from automa.skills.registry import SkillRegistry
+from automa.suspend import SuspendedAttempt
+from automa.tools.ask import UserInputRequired
 from automa.tools.base import ToolResult
 from automa.tools.executor import ToolExecutor
 from automa.tools.missing import missing_program
@@ -100,7 +102,12 @@ WORKER_PROTOCOL = """\
   decision that changes the result) and you have the ask_user tool, ask for exactly
   that and wait; do not guess and do not deliver a fake or partial product instead.
 - If the user's answers are listed in the task, use them; never ask the same thing
-  again."""
+  again.
+- Work economically (every step re-sends the whole conversation): put independent
+  tool calls in one reply (for example read several files at once); do not re-read
+  a file you just wrote; change part of a file with edit_file instead of writing it
+  all again; write a long file in parts (write_file, then write_file with
+  append=true) so no single reply is very long."""
 
 
 # Upper bound on all skill text added to one system prompt (bounds input cost).
@@ -367,8 +374,12 @@ class WorkerAgent:
         tier: Tier | None = None,
         model: str | None = None,
         attachments: str = "",
+        resume: SuspendedAttempt | None = None,
     ) -> TaskResult:
         """Run one attempt at ``task``. ``tier`` overrides task/role tier (escalation).
+
+        ``resume`` (D166): the same attempt, stopped earlier by ``ask_user``; the
+        conversation continues from where it stopped instead of starting again.
 
         ``model`` (D97) runs the attempt on that model instead of the tier's; the
         gateway checks it has a price (and ``text`` if catalogued) and every call
@@ -411,6 +422,13 @@ class WorkerAgent:
         files: dict[str, None] = {}
         cost_nusd = 0
         steps = 0
+        if resume is not None:
+            if resume.task_id != task.id or resume.attempt != attempt:
+                raise ValueError("resume belongs to another task or attempt")
+            messages = list(resume.messages)
+            started, steps, cost_nusd = resume.started_at, resume.steps, resume.cost_nusd
+            files = dict.fromkeys(resume.files)
+            tier, model = resume.tier, resume.model
         self._emit(
             "worker.started",
             project_id,
@@ -431,26 +449,51 @@ class WorkerAgent:
         step_tokens = s.step_max_tokens
         repeats = _RepeatTracker(s.stop_after_repeated_errors)
         repeated: tuple[str, str] | None = None  # (tool, error) that repeated
-        while steps < max_steps:
-            steps += 1
-            compact_tool_results(
-                messages, keep=s.keep_full_tool_results, threshold=s.compact_tool_result_chars
-            )
-            # Gateway errors (budget stop, provider failure) propagate: never retried here.
-            result = self._gateway.complete(
-                messages,
-                tier=tier,
-                model=model,
-                max_tokens=step_tokens,
-                temperature=s.temperature,
-                tools=tools,
-                context=context,
-            )
-            cost_nusd += usd_to_nusd(result.cost_usd)
-            reply = result.response.message
-            finish = result.response.finish_reason
+        # D166: a resumed attempt first runs the calls left over from the reply that
+        # asked the user (the ask_user call now returns the answer).
+        resume_calls: tuple[ToolCall, ...] = resume.calls_left if resume is not None else ()
+        resume_intact: tuple[bool, ...] = resume.intact_left if resume is not None else ()
+        while steps < max_steps or resume_calls:
+            if resume_calls:
+                calls, intact = resume_calls, list(resume_intact)
+                resume_calls, resume_intact = (), ()
+            else:
+                steps += 1
+                compact_tool_results(
+                    messages, keep=s.keep_full_tool_results, threshold=s.compact_tool_result_chars
+                )
+                # Gateway errors (budget stop, provider failure) propagate: never retried here.
+                result = self._gateway.complete(
+                    messages,
+                    tier=tier,
+                    model=model,
+                    max_tokens=step_tokens,
+                    temperature=s.temperature,
+                    tools=tools,
+                    context=context,
+                )
+                cost_nusd += usd_to_nusd(result.cost_usd)
+                reply = result.response.message
+                finish = result.response.finish_reason
 
-            if reply.tool_calls:
+                if not reply.tool_calls:
+                    text = (reply.content or "").strip()
+                    if finish is FinishReason.CONTENT_FILTER:
+                        status = ResultStatus.FAILED
+                        error = "model reply was blocked by a content filter"
+                        break
+                    if finish is FinishReason.LENGTH:
+                        messages += [
+                            Message.assistant(text or "(cut off)"),
+                            Message.user(NUDGE_TRUNCATED),
+                        ]
+                        continue
+                    if not text:
+                        messages += [Message.assistant("(empty reply)"), Message.user(NUDGE_EMPTY)]
+                        continue
+                    status, summary, error = ResultStatus.COMPLETED, text, None
+                    break
+
                 intact = [_arguments_ok(tc.arguments) for tc in reply.tool_calls]
                 calls = tuple(
                     ToolCall(
@@ -473,62 +516,63 @@ class WorkerAgent:
                     project_id,
                     {"task": task.id, "step": steps, "tool_calls": len(calls)},
                 )
-                for i, call in enumerate(calls):
-                    if repeated is not None:
-                        text = NOT_RUN_AFTER_REPEAT
-                    elif not intact[i]:
-                        text = CUT_OFF_CALL
-                    elif i >= s.max_tool_calls_per_step:
-                        text = (
-                            f"ERROR: not run: at most {s.max_tool_calls_per_step} tool "
-                            "calls per reply"
-                        )
-                    else:
-                        # ApprovalRequired / ToolLayerError propagate to the caller.
-                        tool_result = executor.execute(call.name, call.arguments)
-                        if tool_result.ok:
-                            path = _produced_path(call)
-                            if path is not None:
-                                files[path] = None
-                        text = _short(tool_result.as_text(), s.max_tool_result_chars)
-                        repeated = repeats.see(tool_result)
-                    messages.append(Message.tool(call.id, text or "(no output)"))
+            for i, call in enumerate(calls):
                 if repeated is not None:
-                    # Every call of this reply got a result (the conversation stays
-                    # valid); no further model call is made for this attempt.
-                    tool_name, tool_error = repeated
-                    status = ResultStatus.FAILED
-                    error = repeated_error_reason(
-                        tool_name, tool_error, s.stop_after_repeated_errors
+                    text = NOT_RUN_AFTER_REPEAT
+                elif not intact[i]:
+                    text = CUT_OFF_CALL
+                elif i >= s.max_tool_calls_per_step:
+                    text = (
+                        f"ERROR: not run: at most {s.max_tool_calls_per_step} tool calls per reply"
                     )
-                    program = missing_program(tool_error)
-                    self._emit(
-                        "worker.repeated_error",
-                        project_id,
-                        {
-                            "task": task.id,
-                            "attempt": attempt,
-                            "step": steps,
-                            "tool": tool_name,
-                            "times": s.stop_after_repeated_errors,
-                        }
-                        | ({"missing_program": program} if program is not None else {}),
-                    )
-                    break
-                continue
-
-            text = (reply.content or "").strip()
-            if finish is FinishReason.CONTENT_FILTER:
-                status, error = ResultStatus.FAILED, "model reply was blocked by a content filter"
+                else:
+                    # ApprovalRequired / ToolLayerError propagate to the caller.
+                    try:
+                        tool_result = executor.execute(call.name, call.arguments)
+                    except UserInputRequired as e:
+                        # D166: keep the conversation so the next run continues here.
+                        e.suspended = SuspendedAttempt(
+                            task_id=task.id,
+                            attempt=attempt,
+                            request_id=e.request_id,
+                            messages=tuple(messages),
+                            calls_left=tuple(calls[i:]),
+                            intact_left=tuple(intact[i:]),
+                            steps=steps,
+                            files=tuple(files),
+                            cost_nusd=cost_nusd,
+                            tier=tier,
+                            model=model,
+                            started_at=started,
+                        )
+                        raise
+                    if tool_result.ok:
+                        path = _produced_path(call)
+                        if path is not None:
+                            files[path] = None
+                    text = _short(tool_result.as_text(), s.max_tool_result_chars)
+                    repeated = repeats.see(tool_result)
+                messages.append(Message.tool(call.id, text or "(no output)"))
+            if repeated is not None:
+                # Every call of this reply got a result (the conversation stays
+                # valid); no further model call is made for this attempt.
+                tool_name, tool_error = repeated
+                status = ResultStatus.FAILED
+                error = repeated_error_reason(tool_name, tool_error, s.stop_after_repeated_errors)
+                program = missing_program(tool_error)
+                self._emit(
+                    "worker.repeated_error",
+                    project_id,
+                    {
+                        "task": task.id,
+                        "attempt": attempt,
+                        "step": steps,
+                        "tool": tool_name,
+                        "times": s.stop_after_repeated_errors,
+                    }
+                    | ({"missing_program": program} if program is not None else {}),
+                )
                 break
-            if finish is FinishReason.LENGTH:
-                messages += [Message.assistant(text or "(cut off)"), Message.user(NUDGE_TRUNCATED)]
-                continue
-            if not text:
-                messages += [Message.assistant("(empty reply)"), Message.user(NUDGE_EMPTY)]
-                continue
-            status, summary, error = ResultStatus.COMPLETED, text, None
-            break
 
         task_result = TaskResult(
             task_id=task.id,

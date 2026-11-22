@@ -380,6 +380,7 @@ def test_builtin_policies_through_executor(tmp_path: Path) -> None:
         "read_file",
         "list_dir",
         "write_file",
+        "edit_file",
     }
     res = writer.execute("run_command", '{"argv": ["true"]}')
     assert not res.ok and res.denied

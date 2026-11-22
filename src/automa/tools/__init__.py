@@ -12,7 +12,7 @@ from automa.tools.base import (
 )
 from automa.tools.command import RunCommand, RunCommandArgs, check_docker, clean_env
 from automa.tools.executor import ApprovalRequired, ToolExecutor, ToolLayerError
-from automa.tools.files import FILE_TOOLS, DeleteFile, ListDir, ReadFile, WriteFile
+from automa.tools.files import FILE_TOOLS, DeleteFile, EditFile, ListDir, ReadFile, WriteFile
 from automa.tools.github import (
     GitHubRead,
     GitHubReadArgs,
@@ -106,6 +106,7 @@ __all__ = [
     "Workspace",
     "WorkspaceError",
     "WriteFile",
+    "EditFile",
     "check_docker",
     "clean_env",
     "default_tools",

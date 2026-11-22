@@ -1,6 +1,7 @@
 """File tools confined to the project workspace.
 
-``read_file``, ``write_file``, ``list_dir`` and ``delete_file`` (irreversible: it
+``read_file``, ``write_file`` (replace or append), ``edit_file`` (exact text
+replacement, D165), ``list_dir`` and ``delete_file`` (irreversible: it
 always needs the user's approval through the Approval Gate).
 """
 
@@ -11,7 +12,7 @@ from typing import ClassVar
 from pydantic import Field, field_validator
 
 from automa.plan.models import MAX_PATH_CHARS
-from automa.tools.base import MAX_TOOL_OUTPUT_CHARS, RiskLevel, Tool, ToolArgs
+from automa.tools.base import MAX_TOOL_OUTPUT_CHARS, RiskLevel, Tool, ToolArgs, ToolError
 from automa.tools.workspace import (
     MAX_LIST_ENTRIES,
     MAX_WRITE_BYTES,
@@ -43,13 +44,21 @@ class ReadFile(Tool):
 class WriteFileArgs(ToolArgs):
     path: str = Field(min_length=1, max_length=MAX_PATH_CHARS, description="Relative path")
     content: str = Field(max_length=MAX_WRITE_BYTES, description="Full new file content")
+    append: bool = Field(
+        default=False,
+        description=(
+            "Add content to the end of the file instead of replacing it (to write a "
+            "long file in parts)"
+        ),
+    )
 
 
 class WriteFile(Tool):
     name: ClassVar[str] = "write_file"
     description: ClassVar[str] = (
         "Create or overwrite a UTF-8 text file in the project workspace "
-        "(parent directories are created)."
+        "(parent directories are created). With append=true the content is added "
+        "to the end instead. To change part of an existing file use edit_file."
     )
     risk: ClassVar[RiskLevel] = RiskLevel.WRITE
     args_model: ClassVar[type[ToolArgs]] = WriteFileArgs
@@ -57,8 +66,78 @@ class WriteFile(Tool):
     def run(self, args: ToolArgs, workspace: Workspace) -> str:
         if not isinstance(args, WriteFileArgs):
             raise TypeError("arguments were not validated by the executor")
+        if args.append:
+            old = _read_whole(workspace, args.path, missing_ok=True)
+            n = workspace.write_text(args.path, old + args.content)
+            return (
+                f"appended {len(args.content.encode('utf-8'))} bytes to {args.path} ({n} bytes now)"
+            )
         n = workspace.write_text(args.path, args.content)
         return f"wrote {n} bytes to {args.path}"
+
+    def writes(self, args: ToolArgs) -> tuple[str, ...]:
+        return _written(args)
+
+
+def _read_whole(workspace: Workspace, path: str, *, missing_ok: bool = False) -> str:
+    """The whole text of ``path`` (refused if larger than a write may be)."""
+    try:
+        text, truncated = workspace.read_text(path, max_bytes=MAX_WRITE_BYTES)
+    except WorkspaceError as e:
+        if missing_ok and str(e).startswith("file not found"):
+            return ""
+        raise
+    if truncated:
+        raise WorkspaceError(f"{path} is larger than {MAX_WRITE_BYTES} bytes")
+    return text
+
+
+class EditFileArgs(ToolArgs):
+    path: str = Field(min_length=1, max_length=MAX_PATH_CHARS, description="Relative path")
+    old_text: str = Field(
+        min_length=1,
+        max_length=MAX_WRITE_BYTES,
+        description="Exact text to replace (copied from the file, unique)",
+    )
+    new_text: str = Field(max_length=MAX_WRITE_BYTES, description="Text to put in its place")
+    replace_all: bool = Field(default=False, description="Replace every occurrence")
+
+
+class EditFile(Tool):
+    """Change part of a file without writing it all again (D165): fewer output
+    tokens, and no truncated rewrites of long files."""
+
+    name: ClassVar[str] = "edit_file"
+    description: ClassVar[str] = (
+        "Replace exact text in an existing UTF-8 file of the project workspace. "
+        "old_text must appear exactly once (or set replace_all). Prefer this over "
+        "rewriting a whole file for a small change."
+    )
+    risk: ClassVar[RiskLevel] = RiskLevel.WRITE
+    args_model: ClassVar[type[ToolArgs]] = EditFileArgs
+
+    def run(self, args: ToolArgs, workspace: Workspace) -> str:
+        if not isinstance(args, EditFileArgs):
+            raise TypeError("arguments were not validated by the executor")
+        text = _read_whole(workspace, args.path)
+        count = text.count(args.old_text)
+        if count == 0:
+            raise ToolError(
+                f"old_text not found in {args.path}; read the file and copy the exact text"
+            )
+        if count > 1 and not args.replace_all:
+            raise ToolError(
+                f"old_text appears {count} times in {args.path}; add surrounding text "
+                "to make it unique or set replace_all"
+            )
+        new = (
+            text.replace(args.old_text, args.new_text)
+            if args.replace_all
+            else text.replace(args.old_text, args.new_text, 1)
+        )
+        n = workspace.write_text(args.path, new)
+        done = count if args.replace_all else 1
+        return f"edited {args.path}: {done} replacement(s), {n} bytes now"
 
     def writes(self, args: ToolArgs) -> tuple[str, ...]:
         return _written(args)
@@ -140,4 +219,4 @@ def _written(args: ToolArgs) -> tuple[str, ...]:
         return ()  # the tool itself rejects the path
 
 
-FILE_TOOLS: tuple[type[Tool], ...] = (ReadFile, WriteFile, ListDir, DeleteFile)
+FILE_TOOLS: tuple[type[Tool], ...] = (ReadFile, WriteFile, EditFile, ListDir, DeleteFile)

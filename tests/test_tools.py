@@ -430,6 +430,7 @@ class TestToolDefinition:
         assert risks == {
             "read_file": RiskLevel.READ,
             "write_file": RiskLevel.WRITE,
+            "edit_file": RiskLevel.WRITE,
             "list_dir": RiskLevel.READ,
             "run_command": RiskLevel.EXECUTE,
             "delete_file": RiskLevel.WRITE,
@@ -820,3 +821,66 @@ def test_file_tools_never_touch_filesystem_directly() -> None:
             mod = getattr(node, "module", None) or ""
             names = {a.name for a in node.names}
             assert not ({mod} | names) & {"os", "pathlib", "shutil", "subprocess"}
+
+
+# --- edit_file and write_file append (D165) ---------------------------------------
+
+
+def _ws(tmp_path: Path) -> Workspace:
+    d = tmp_path / "ws_edit"
+    d.mkdir(exist_ok=True)
+    return Workspace(d)
+
+
+def _run(tool: Tool, ws: Workspace, **args: object) -> str:
+    return tool.run(tool.args_model.model_validate(args), ws)
+
+
+def test_edit_file_replaces_exact_text(tmp_path: Path) -> None:
+    from automa.tools.files import EditFile
+
+    ws = _ws(tmp_path)
+    ws.write_text("p.html", "<h1>Old</h1>\n<p>a</p>\n<p>a</p>\n")
+    out = _run(EditFile(), ws, path="p.html", old_text="<h1>Old</h1>", new_text="<h1>New</h1>")
+    assert "1 replacement" in out
+    assert ws.read_text("p.html")[0].startswith("<h1>New</h1>")
+    with pytest.raises(ToolError, match="appears 2 times"):
+        _run(EditFile(), ws, path="p.html", old_text="<p>a</p>", new_text="x")
+    out = _run(
+        EditFile(), ws, path="p.html", old_text="<p>a</p>", new_text="<p>b</p>", replace_all=True
+    )
+    assert "2 replacement" in out and ws.read_text("p.html")[0].count("<p>b</p>") == 2
+    with pytest.raises(ToolError, match="not found"):
+        _run(EditFile(), ws, path="p.html", old_text="zzz", new_text="x")
+    with pytest.raises(WorkspaceError):
+        _run(EditFile(), ws, path="missing.html", old_text="a", new_text="b")
+    with pytest.raises(WorkspaceError):
+        _run(EditFile(), ws, path="../x", old_text="a", new_text="b")
+
+
+def test_write_file_append(tmp_path: Path) -> None:
+    from automa.tools.files import WriteFile
+
+    ws = _ws(tmp_path)
+    _run(WriteFile(), ws, path="long.html", content="part1\n", append=True)  # new file
+    out = _run(WriteFile(), ws, path="long.html", content="part2\n", append=True)
+    assert "appended 6 bytes" in out
+    assert ws.read_text("long.html")[0] == "part1\npart2\n"
+    _run(WriteFile(), ws, path="long.html", content="fresh")
+    assert ws.read_text("long.html")[0] == "fresh"
+
+
+def test_edit_file_goes_through_the_policy(tmp_path: Path) -> None:
+    from automa.roles import RoleRegistry
+
+    ws = _ws(tmp_path)
+    ws.write_text("a.txt", "x")
+    reviewer_like = ToolExecutor(
+        default_tools(),
+        RoleRegistry.builtin().get("writer").policy(),
+        ws,
+        MemoryEventSink(),
+        "p",
+    )
+    ok = reviewer_like.execute("edit_file", '{"path": "a.txt", "old_text": "x", "new_text": "y"}')
+    assert ok.ok and ws.read_text("a.txt")[0] == "y"

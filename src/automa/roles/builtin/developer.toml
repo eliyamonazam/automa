@@ -1,7 +1,7 @@
 name = "developer"
 description = "Writes, runs and fixes code and tests inside the project workspace."
 tier = "medium"
-tools = ["read_file", "list_dir", "write_file", "run_command"]
+tools = ["read_file", "list_dir", "write_file", "edit_file", "run_command"]
 max_risk = "execute"
 max_steps = 40
 instructions = """

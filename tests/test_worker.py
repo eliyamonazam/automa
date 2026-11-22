@@ -275,7 +275,7 @@ def test_requests_carry_task_context_and_only_allowed_tools(tmp_path: Path) -> N
     rig.run("writer", task=make_task("writer"))
     req: ChatRequest = rig.provider.requests[0]
     names = {t.name for t in req.tools}
-    assert names == {"read_file", "list_dir", "write_file"}
+    assert names == {"read_file", "list_dir", "write_file", "edit_file"}
     assert "run_command" not in names
     assert req.max_tokens == WorkerSettings().step_max_tokens
     assert req.model == "fake-medium"
@@ -591,7 +591,7 @@ def test_budget_stop_before_first_call(tmp_path: Path) -> None:
 
 
 def test_budget_stop_mid_loop_is_not_retried(tmp_path: Path) -> None:
-    # Each call reserves ~0.008 USD (4000 output tokens at 2$/Mtok + input). The first
+    # Each call reserves ~0.0105 USD (4000 output tokens at 2$/Mtok + input). The first
     # call really costs 0.005 USD, so the second reservation no longer fits the cap.
     first = calls(("write_file", {"path": "a.txt", "content": "x"}))
     first = first.model_copy(
@@ -600,8 +600,8 @@ def test_budget_stop_mid_loop_is_not_retried(tmp_path: Path) -> None:
     rig = Rig(
         tmp_path,
         [first, "done", "done"],
-        project_usd=0.0101,
-        per_call_usd=0.0101,
+        project_usd=0.011,
+        per_call_usd=0.011,
     )
     with pytest.raises(BudgetExceeded):
         rig.run()

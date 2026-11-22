@@ -1,7 +1,7 @@
 name = "writer"
 description = "Writes and edits documents, reports and user-facing text."
 tier = "medium"
-tools = ["read_file", "list_dir", "write_file"]
+tools = ["read_file", "list_dir", "write_file", "edit_file"]
 max_risk = "write"
 max_steps = 30
 instructions = """

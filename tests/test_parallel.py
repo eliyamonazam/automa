@@ -246,7 +246,7 @@ def test_concurrent_calls_cannot_overspend_project_cap(tmp_path: Path) -> None:
     jointly overrun the project cap: concurrent calls beyond it are refused."""
     ids = ["a", "b", "c", "d"]
     plan = make_plan(*(task_dict(t) for t in ids))
-    cap = 0.01  # about one worst-case reservation
+    cap = 0.0115  # about one worst-case reservation
     rig = routed_rig(
         tmp_path, plan, {t: write(t) * 3 for t in ids}, project_usd=cap, per_call_usd=cap
     )

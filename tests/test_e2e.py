@@ -310,7 +310,7 @@ def test_lifecycle_budget_stop_mid_task_and_resume_after_raising_cap(e2e: E2E) -
 
     # A project cap that admits the first worker step but not the reservation for the
     # second: the guard stops the run in the middle of task ``design``.
-    cap_usd = planned / 1e9 + 0.0402
+    cap_usd = planned / 1e9 + 0.0432
     e2e.write_config(project=cap_usd)
     e2e.script(*design_attempt(), *build_attempt(), judgment(True), *docs_attempt())
     r = e2e.cli("run", PID, "--yes")

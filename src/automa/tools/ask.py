@@ -42,6 +42,8 @@ class UserInputRequired(Exception):  # noqa: N818 - a control-flow signal, not a
         super().__init__(question)
         self.request_id = request_id
         self.question = question
+        # Set by the worker (D166): the attempt so far, so it can continue later.
+        self.suspended: object | None = None
 
 
 class AskUserArgs(ToolArgs):
