@@ -37,6 +37,7 @@ from automa.project.store import MAX_GOAL_CHARS
 from automa.retry import RETRY_ATTEMPTS
 from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.tools.missing import install_command
+from automa.updatecheck import UpdateNotice
 from automa.userinput import UserRequest
 from automa.webui.activity import Activity
 from automa.webui.bundle import bundle_href
@@ -131,6 +132,16 @@ background:linear-gradient(135deg,var(--accent),var(--accent2))}
 .topbar nav a{color:var(--muted);text-decoration:none;padding:4px 12px;border-radius:999px;
 font-weight:600;font-size:.95em}.topbar nav a:hover{background:var(--soft);color:var(--fg)}
 .wrap{max-width:1100px;margin:0 auto;padding:18px 16px 48px}
+.updatebar{display:flex;gap:10px;align-items:flex-start;max-width:1068px;margin:14px auto 0;
+padding:10px 16px;border-radius:12px;background:var(--info);color:var(--infofg);
+border:1px solid color-mix(in srgb,var(--infofg) 22%,transparent)}
+.updatebar .icon{flex:none;margin-top:4px}.updatebar>div{min-width:0;flex:1}
+.updatebar strong{display:block}.updatebar details>summary{color:inherit;font-weight:600}
+.updatebar ul{margin:.3em 0;padding-inline-start:1.3em;color:var(--fg)}
+.updatebar li.more{list-style:none;color:var(--muted)}
+.updatebar p{margin:.4em 0 .2em;color:var(--fg)}
+.updatebar p.term{color:var(--muted);font-size:.92em}
+@media (max-width:1100px){.updatebar{margin-inline:16px}}
 h1{font-size:1.65em;margin:.3em 0;line-height:1.4}h2{font-size:1.2em;margin:1.3em 0 .5em}
 h3{font-size:1.04em;margin:.4em 0}
 a{color:var(--accent)}code,pre{font-family:"""
@@ -414,6 +425,7 @@ class TopBar:
     new_idea: bool = False
     month_usd: float | None = None
     rate: float | None = None
+    update: UpdateNotice | None = None  # a newer Automa is waiting (D178)
 
 
 _TOP_BAR: ContextVar[TopBar] = ContextVar("automa_top_bar", default=TopBar())  # noqa: B039
@@ -488,6 +500,7 @@ def page(
         f'<meta name="referrer" content="{referrer}">{reload}'
         f"<title>{text(title)}</title><style>{FONT_FACE}{_STYLE}</style></head>"
         f"<body>{_topbar(lang, _TOP_BAR.get(), new_idea=new_idea)}"
+        f"{'' if refresh is not None else _update_bar(_TOP_BAR.get().update, lang)}"
         f'<main class="wrap">{body}</main></body></html>\n'
     )
 
@@ -521,6 +534,27 @@ def _topbar(lang: Language, bar: TopBar, *, new_idea: bool = False) -> str:
         '<span class="logo" aria-hidden="true">A</span>Automa</a>'
         f'<nav><a class="projects" href="/">{text(t("nav.projects", lang))}</a>{month}{idea}</nav>'
         "</header>"
+    )
+
+
+def _update_bar(notice: UpdateNotice | None, lang: Language) -> str:
+    """The small "a new version is ready" bar under the app bar (D178). Not shown on
+    self-refreshing pages, where an opened list would snap shut every few seconds."""
+    if notice is None:
+        return ""
+    items = [f'<li dir="auto">{text(title)}</li>' for title in notice.titles]
+    if notice.more:
+        items.append(f'<li class="more">{text(t("update.more", lang, count=notice.more))}</li>')
+    if not items:
+        items.append(f"<li>{text(t('update.small', lang, count=notice.commits))}</li>")
+    return (
+        f'<aside class="updatebar" role="status">{ICONS["download"]}<div>'
+        f"<strong>{text(t('update.ready', lang))}</strong>"
+        f"<details><summary>{text(t('update.whats_new', lang))}</summary>"
+        f"<ul>{''.join(items)}</ul><p>{text(t('update.how', lang))}</p>"
+        f'<p class="term">{text(t("update.terminal", lang))} '
+        '<code dir="ltr">automa update</code></p></details>'
+        "</div></aside>"
     )
 
 

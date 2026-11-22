@@ -551,11 +551,14 @@ class DisplayConfig(_Strict):
     ``language``: ``"fa"`` (default) or ``"en"``, the language of the web UI (D135).
     ``timezone``: IANA name (default ``Asia/Tehran``) in which the web UI shows times;
     a name the system cannot resolve is rejected when the file is loaded.
+    ``update_check``: ``automa web`` shows a "new version is ready" bar when the clone
+    is behind ``origin/main`` (at most one ``git fetch`` a day, download only; D178).
     """
 
     toman_per_usd: StrictFloat | StrictInt | None = Field(default=None, gt=0, le=MAX_TOMAN_PER_USD)
     language: Language = DEFAULT_LANGUAGE
     timezone: StrictStr = DEFAULT_TIMEZONE
+    update_check: bool = True
 
     @field_validator("timezone")
     @classmethod

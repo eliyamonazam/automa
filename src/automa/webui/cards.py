@@ -95,6 +95,9 @@ ICONS: Mapping[str, str] = MappingProxyType(
             '<path d="M3 9h18"/>'
         ),
         "clock": _SVG.format('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+        "download": _SVG.format(
+            '<path d="M12 4v11"/><path d="m7 10.5 5 5 5-5"/><path d="M5 20h14"/>'
+        ),
     }
 )
 

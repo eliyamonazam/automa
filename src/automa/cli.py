@@ -85,7 +85,7 @@ from typing import Annotated, Any, NamedTuple, TypeVar
 import typer
 from pydantic import ValidationError
 
-from automa import __version__
+from automa import __version__, updatecheck
 from automa.agents import (
     Clarification,
     ExecutiveAgent,
@@ -4276,6 +4276,9 @@ def web(
             toman_per_usd=config.display.toman_per_usd,
             language=config.display.language,
             timezone=config.display.timezone,
+            updates=updatecheck.watcher_for(config.workspace)
+            if config.display.update_check
+            else None,
         )
     except webui_server.WebServerError as e:
         raise _fail(str(e), EXIT_USER) from None

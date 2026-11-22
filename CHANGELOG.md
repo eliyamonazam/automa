@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-22 — M16: نوار «نسخهٔ تازه آماده‌ست» در رابط وب (D178)
+- **انجام‌شده:** وقتی نسخهٔ تازه‌ای از Automa روی GitHub هست، بالای همهٔ صفحه‌های رابط وب یک نوار کوچک «نسخهٔ تازهٔ Automa آماده‌ست» میاد، با فهرست تاشوی «چه چیزهایی تازه‌ست» (از عنوان‌های همین گزارش تغییرات) و راهنمای «روی به‌روزرسانی Automa دابل‌کلیک کن». بررسی حداکثر روزی یک بار و در پس‌زمینه انجام می‌شه، صفحه رو کند نمی‌کنه و اگه اینترنت یا git نبود بی‌صداست. مورد نقشهٔ راه شکسته شد (۲الف انجام شد؛ ۲ب: پیام «به‌روز شدی» و تصویرهای README).
+- **فایل‌ها:** `src/automa/updatecheck.py` (تازه)، `src/automa/webui/render.py` (`_update_bar`، `TopBar.update`، CSS)، `src/automa/webui/server.py`، `src/automa/webui/i18n.py`، `src/automa/webui/cards.py` (آیکون)، `src/automa/config.py` (`[display] update_check`)، `src/automa/cli.py`، `automa.toml.example`؛ تست: `tests/test_updatecheck.py`.
+- **تست‌ها:** `pytest` ← ۶۲۸۸ سبز، ۲ رد شده (Docker واقعی)؛ حالت شبیه CI هم سبز؛ `ruff check` و `ruff format --check` سبز. بررسی بصری با Chrome headless در ۱۲۸۰ و ۳۹۰ پیکسل (فارسی و انگلیسی؛ خط فرمان ترمینال جدا شد چون وسط جملهٔ فارسی برعکس دیده می‌شد).
+- **مشکلات:** BudgetGuard و Policy دست نخوردن؛ allow-list دستورهای به‌روزرسانی گسترده نشد.
+- **برای صاحب مخزن:** کاری لازم نیست. اگه نوار رو نمی‌خوای: `[display] update_check = false`.
+- **قدم بعدی:** به‌روزرسانی ساده و تصویری (۲ب).
+
 ## 2026-11-22 — M16: بازطراحی ظاهر، بخش ۳ب (D177)
 - **انجام‌شده:** کارت‌های مرحله در صفحهٔ پروژه ساده شدن (بدون شناسه، نقش، وابستگی و مدل)؛ همهٔ اطلاعات فنی (شناسهٔ پروژه، جدول مرحله‌ها با شناسه/نقش/وابستگی/مدل، رویدادهای اخیر) در یک «جزئیات فنی» تاشو پایین صفحه جمع شدن. صفحهٔ خطا کارت دوستانه با تصویر و دکمهٔ برگشت شد.
 - **فایل‌ها:** `src/automa/webui/render.py` (`_tech_details`، `_task_card`، سربرگ، CSS)، `src/automa/webui/server.py` (`_error_page`)، `src/automa/webui/cards.py` (`ERROR_ART`)، `src/automa/webui/i18n.py`؛ تست‌ها: `tests/test_webui_style.py`، `tests/test_webui_progress.py`، `tests/test_webui_project_fa.py`، `tests/test_webui_journey.py`، `tests/test_webui_screenshot_fixes.py`، `tests/test_webui_errors_fa.py`.

@@ -61,6 +61,7 @@ from automa.project.store import (
     validate_project_id,
 )
 from automa.tools.approvals import ApprovalError
+from automa.updatecheck import UpdateNotice, UpdateWatcher
 from automa.userinput import (
     MAX_ANSWER_FILES,
     UserRequest,
@@ -338,8 +339,10 @@ class WebApp:
         language: Language = "en",
         timezone: str = DEFAULT_TIMEZONE,
         clock: Callable[[], datetime] | None = None,
+        updates: UpdateWatcher | None = None,
     ):
         self._store = ProjectStore.for_workspace(workspace)
+        self._updates = updates  # the "new version" bar (D178); never blocks a request
         if language not in LANGUAGES:
             raise ValueError(f"unknown language: {language!r}")
         # Display only (D140): the language and local time zone of translated pages.
@@ -504,7 +507,16 @@ class WebApp:
             new_idea=self._ideas is not None and self._actions is not None,
             month_usd=None if totals is None else totals[1],
             rate=self._rate,
+            update=self._update_notice(),
         )
+
+    def _update_notice(self) -> UpdateNotice | None:
+        if self._updates is None:
+            return None
+        try:
+            return self._updates.notice()
+        except Exception:  # noqa: BLE001 - a version check must never break a page
+            return None
 
     def _static(self, path: str) -> Response:
         """A fixed asset (the font and its licence, D161); anything else is 404."""
@@ -1198,6 +1210,7 @@ def create_server(
     toman_per_usd: float | None = None,
     language: Language = "en",
     timezone: str = DEFAULT_TIMEZONE,
+    updates: UpdateWatcher | None = None,
 ) -> ThreadingHTTPServer:
     """A bound (not yet serving) server. ``port=0`` picks a free port (tests).
 
@@ -1207,7 +1220,8 @@ def create_server(
     (only with ``allow_actions``, D125) enables the "Start run" button; ``anomaly``
     is the unusual-spending threshold of the progress panel (``[finance]``, D132);
     ``toman_per_usd`` shows every amount first in rounded toman (D133); ``language``
-    and ``timezone`` are ``[display]`` (translated pages and local times, D140)."""
+    and ``timezone`` are ``[display]`` (translated pages and local times, D140);
+    ``updates`` shows a "new version is ready" bar (D178)."""
     host = validate_bind_host(host)
     port = validate_port(port)
 
@@ -1237,6 +1251,7 @@ def create_server(
         language=language,
         timezone=timezone,
         background_ideas=True,  # the browser waits on a "thinking" page (D137)
+        updates=updates,
     )
     server.RequestHandlerClass = make_handler(app, log)
     return server

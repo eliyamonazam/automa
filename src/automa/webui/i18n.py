@@ -191,6 +191,24 @@ _RAW: dict[str, dict[Language, str]] = {
         "fa": "در حال کار: این صفحه هر {seconds} ثانیه تازه می‌شه",
     },
     "tech.summary": {"en": "Technical details", "fa": "جزئیات فنی"},
+    # New-version bar (D178)
+    "update.ready": {
+        "en": "A new version of Automa is ready",
+        "fa": "نسخهٔ تازهٔ Automa آماده‌ست",
+    },
+    "update.whats_new": {"en": "What's new", "fa": "چه چیزهایی تازه‌ست"},
+    "update.more": {"en": "and {count} more", "fa": "و {count} مورد دیگه"},
+    "update.small": {
+        "en": "{count} small improvements",
+        "fa": "{count} بهبود کوچک",
+    },
+    "update.how": {
+        "en": "To get it, double-click “Update Automa” on your desktop, then close this "
+        "Automa window and open it again. Nothing of yours is deleted.",
+        "fa": "برای گرفتنش روی میان‌بر «به‌روزرسانی Automa» روی دسکتاپ دابل‌کلیک کن، بعد "
+        "این پنجرهٔ Automa رو ببند و دوباره باز کن. چیزی از تو پاک نمی‌شه.",
+    },
+    "update.terminal": {"en": "Or in Ubuntu:", "fa": "یا در Ubuntu بزن:"},
     "tech.project_id": {"en": "Project id:", "fa": "شناسهٔ پروژه:"},
     "tech.steps": {"en": "Steps", "fa": "مرحله‌ها"},
     "tech.col.id": {"en": "Id", "fa": "شناسه"},

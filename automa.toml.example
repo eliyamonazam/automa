@@ -96,6 +96,9 @@ output_per_mtok = 20.00
 # Web UI language ("fa" or "en") and the time zone its times are shown in.
 # language = "fa"
 # timezone = "Asia/Tehran"
+# automa web shows "a new version is ready" when origin/main is ahead (at most one
+# download-only git fetch a day; false turns it off).
+# update_check = true
 
 # Hard caps in USD. Reaching a cap stops the run; per_call must not exceed the others.
 [limits]
