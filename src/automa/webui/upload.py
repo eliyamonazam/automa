@@ -141,3 +141,22 @@ def parse_request_action(path: str) -> tuple[str, str, str] | None:
         return validate_project_id(m.group(1)), m.group(2), m.group(3)
     except ProjectStoreError:
         return None
+
+
+CHANGE_FIELDS = frozenset({"csrf", "change", "confirm"})
+_CHANGE_RE = re.compile(r"^/projects/([^/]+)/change$")
+
+
+def change_href(project_id: str) -> str:
+    return f"/projects/{validate_project_id(project_id)}/change"
+
+
+def parse_change_path(path: str) -> str | None:
+    """The project id of ``/projects/<pid>/change`` (D169), else ``None``."""
+    m = _CHANGE_RE.match(path)
+    if m is None:
+        return None
+    try:
+        return validate_project_id(m.group(1))
+    except ProjectStoreError:
+        return None

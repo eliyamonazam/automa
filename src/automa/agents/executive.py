@@ -240,6 +240,87 @@ def parse_questions(text: str) -> Questions:
         raise PlanError("questions failed validation", "\n".join(lines)) from e
 
 
+CHANGE_INSTRUCTIONS = """
+
+You are now changing a project that already ran. The user saw the product and
+asks for a change. You get the current plan (tasks that already ran, with their
+ids), the current deliverable, the files the project has, and the change request.
+Reply with ONLY this JSON object:
+{
+  "tasks": [ ... NEW tasks only, same task format as above ... ],
+  "deliverable": { "summary": ..., "main_files": [...], "how_to_use": ... }
+}
+- Add as few tasks as the change needs (often one). Do not repeat finished work.
+- New task ids must differ from every existing id. New tasks may depend on
+  existing task ids.
+- Tasks change existing files in place (edit_file) and keep everything that is
+  not part of the request as it is.
+- "deliverable" is the updated promise after the change; every main file must be
+  named by a file_exists (or file_contains) check of some task (old or new).
+- Never invent what only the user has; a task can ask the user with ask_user.
+"""
+
+
+def change_message(plan: Plan, request: str, files: str, delivery: str) -> str:
+    """The user message of a change request (D169)."""
+    current = json.dumps(
+        {
+            "goal": plan.goal,
+            "tasks": [t.model_dump(mode="json") for t in plan.tasks],
+            "deliverable": plan.deliverable.model_dump(mode="json") if plan.deliverable else None,
+        },
+        ensure_ascii=False,
+        indent=1,
+    )
+    parts = [f"Current plan (already ran):\n{current}"]
+    if delivery.strip():
+        parts.append(f"What was delivered:\n{delivery.strip()}")
+    parts.append(f"Files in the project:\n{files.strip() or '(none)'}")
+    parts.append(f"Change request from the user:\n{request.strip()}")
+    return "\n\n".join(parts)
+
+
+def parse_change(text: str, plan: Plan, roles: Collection[str] | None) -> Plan:
+    """The next plan version: ``plan`` plus the new tasks and deliverable (D169)."""
+    raw = strip_code_fence(text)
+    try:
+        data: Any = json.loads(raw)
+    except ValueError as e:
+        raise PlanError("change is not valid JSON", f"- <root>: invalid JSON ({e})") from e
+    if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
+        raise PlanError("change must be an object with tasks", "- tasks: expected a list")
+    if not data["tasks"]:
+        raise PlanError("change adds no task", "- tasks: add at least one new task")
+    existing = {t.id for t in plan.tasks}
+    clash = sorted({str(t.get("id")) for t in data["tasks"] if isinstance(t, dict)} & existing)
+    if clash:
+        raise PlanError("task ids already used", f"- tasks.id: already used: {', '.join(clash)}")
+    merged = {
+        "goal": plan.goal,
+        "version": plan.version + 1,
+        "tasks": [*[t.model_dump(mode="json") for t in plan.tasks], *data["tasks"]],
+        "deliverable": data.get("deliverable")
+        or (plan.deliverable.model_dump(mode="json") if plan.deliverable else None),
+    }
+    try:
+        new = Plan.model_validate(merged)
+    except ValidationError as e:
+        lines = []
+        for err in e.errors(include_url=False, include_input=False)[:20]:
+            loc = ".".join(str(p) for p in err["loc"]) or "<root>"
+            lines.append(f"- {loc}: {err['msg']}")
+        raise PlanError("changed plan failed validation", "\n".join(lines)) from e
+    if roles is not None:
+        unknown = sorted({t.role for t in new.tasks} - set(roles))
+        if unknown:
+            raise PlanError(
+                "plan uses unknown roles",
+                f"- tasks.role: unknown role(s) {', '.join(unknown)}; "
+                f"allowed: {', '.join(sorted(roles))}",
+            )
+    return new
+
+
 class ExecutiveAgent:
     """Plans a goal through the (guarded) ``LLMGateway``.
 
@@ -353,6 +434,37 @@ class ExecutiveAgent:
             {"version": plan.version, "tasks": len(plan.tasks)},
         )
         return plan
+
+    def plan_change(
+        self,
+        plan: Plan,
+        request: str,
+        *,
+        project_id: str,
+        files: str = "",
+        delivery: str = "",
+    ) -> Plan:
+        """The next plan version carrying out a change request (D169)."""
+        request = request.strip()
+        if not request:
+            raise ValueError("change request must not be empty")
+        system = PLAN_SYSTEM_PROMPT + CHANGE_INSTRUCTIONS
+        if self._roles is not None:
+            system += f"\nAllowed roles: {', '.join(sorted(self._roles))}."
+        new = self._run(
+            system=self._with_memory(system, project_id),
+            user=change_message(plan, request, files, delivery),
+            max_tokens=self._settings.plan_max_tokens,
+            project_id=project_id,
+            parse=lambda text: parse_change(text, plan, self._roles),
+            kind="change",
+        )
+        self._emit(
+            "executive.change_ready",
+            project_id,
+            {"version": new.version, "new_tasks": len(new.tasks) - len(plan.tasks)},
+        )
+        return new
 
     # -- internals ---------------------------------------------------------
 

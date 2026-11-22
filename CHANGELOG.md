@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-22 — M16: درخواست تغییر بعد از تحویل (D169)
+- **انجام‌شده:** بعد از دیدن محصول می‌شه نوشت «این رو عوض کن» (با فایل اختیاری): در وب فرم «تغییری می‌خوای؟» زیر کارت محصول، در ترمینال `automa change <id> "..."`. فقط مرحله‌های لازم به برنامه اضافه می‌شن، چیزهای درست دست نمی‌خورن، تاریخچهٔ درخواست‌ها در صفحهٔ پروژه دیده می‌شه و کار خودش ادامه پیدا می‌کنه؛ بازبینی نهایی هم درخواست‌های تغییر رو می‌سنجه.
+- **فایل‌ها:** `src/automa/changes.py` (تازه)، `src/automa/agents/executive.py` (`plan_change`، `parse_change`، `CHANGE_INSTRUCTIONS`)، `src/automa/final_review.py` (`just_fixed`)، `src/automa/orchestrator.py`، `src/automa/cli.py` (`change`، `_WebIdeaPlanner.change`)، `src/automa/webui/ideas.py` (`IdeaFlow.change`)، `src/automa/webui/server.py`، `src/automa/webui/upload.py`، `src/automa/webui/render.py`، `src/automa/webui/i18n.py`؛ تست‌ها: `tests/test_changes.py`، `tests/test_webui_ideas.py`.
+- **تست‌ها:** `pytest` ← ۶۱۴۵ سبز، ۲ رد شده (Docker واقعی)؛ حالت شبیه CI هم سبز؛ `ruff check` و `ruff format --check` سبز. بررسی بصری با Chrome headless در ۱۲۰۰ و ۳۹۰ پیکسل.
+- **مشکلات:** BudgetGuard و Policy دست نخوردن؛ فراخوانی Executive از همون guard می‌گذره.
+- **برای صاحب مخزن:** کاری لازم نیست.
+- **قدم بعدی:** «الان داره چیکار می‌کنه» زنده.
+
 ## 2026-11-22 — M16: بازبینی نهایی محصول (D168)
 - **انجام‌شده:** قبل از «تموم شد»، کل محصول یک بار در برابر هدف، وعدهٔ محصول و جواب‌های خود کاربر سنجیده می‌شه (فقط ایرادهای جدی، مخصوصاً محتوای ساختگی). اگه ایراد داشت، یک وظیفهٔ رفع خودکار اضافه می‌شه و کار ادامه پیدا می‌کنه؛ اگه باز هم ایراد موند، محصول تحویل می‌شه و ایرادها در کارت محصول و گزارش تحویل نوشته می‌شن.
 - **فایل‌ها:** `src/automa/final_review.py` (تازه)، `src/automa/orchestrator.py` (`_finish`، `_final_review`، `OrchestratorSettings.final_review`)، `src/automa/delivery.py` (`reviewed`، `review_issues`)، `src/automa/webui/render.py`، `src/automa/webui/i18n.py`، `src/automa/config.py` و `src/automa/cli.py` (`[orchestrator] final_review`)، `automa.toml.example`؛ تست: `tests/test_final_review.py` و افزودن پاسخ بازبینی به چند تست تحویل.

@@ -916,3 +916,87 @@ def test_serve_uses_background_ideas() -> None:
     import inspect
 
     assert "background_ideas=True" in inspect.getsource(ws.create_server)
+
+
+# --- change requests after delivery (D169) --------------------------------------
+
+
+class ChangePlanner(FakePlanner):
+    def change(self, project_id: str, text: str, files: Sequence[tuple[str, bytes]] = ()) -> None:
+        self.calls.append(("change", (project_id, text, [n for n, _ in files])))
+        if "change" in self.fail:
+            raise self.fail["change"]
+        from datetime import UTC, datetime
+
+        from automa.changes import ChangeRecord, _save_changes, load_changes
+
+        d = self.store.project_dir(project_id)
+        rec = ChangeRecord(at=datetime(2026, 11, 22, tzinfo=UTC), text=text, plan_version=1)
+        _save_changes(d, [*load_changes(d), rec])
+        self.store.set_status(project_id, ProjectStatus.PAUSED)
+
+
+def _done_project(env: Env) -> str:
+    env.new(ask=False)
+    pid = env.store.list_ids()[0]
+    env.store.set_status(pid, ProjectStatus.DONE)
+    return pid
+
+
+def _mp(
+    fields: dict[str, str], files: list[tuple[str, bytes]] = ()
+) -> tuple[bytes, dict[str, str]]:
+    b = "----chg"
+    out = b""
+    for k, v in fields.items():
+        out += (
+            f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n'.encode()
+            + v.encode()
+            + b"\r\n"
+        )
+    for n, data in files:
+        out += (
+            (
+                f'--{b}\r\nContent-Disposition: form-data; name="files"; filename="{n}"\r\n\r\n'
+            ).encode()
+            + data
+            + b"\r\n"
+        )
+    return out + f"--{b}--\r\n".encode(), {"Content-Type": f"multipart/form-data; boundary={b}"}
+
+
+def test_change_form_on_done_project_and_post(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    env.planner.__class__ = ChangePlanner
+    pid = _done_project(env)
+    page = env.get(f"/projects/{pid}").body.decode()
+    assert f'action="/projects/{pid}/change"' in page and "Want a change?" in page
+    body, headers = _mp({"csrf": TOKEN, "change": "make it blue"}, [("logo.png", b"x")])
+    r = env.post(f"/projects/{pid}/change", body=body, headers=headers)
+    assert r.status == 303
+    assert ("change", (pid, "make it blue", ["logo.png"])) in env.planner.calls
+    page = env.get(f"/projects/{pid}").body.decode()
+    assert "make it blue" in page  # history shown
+
+
+def test_change_refusals(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    env.planner.__class__ = ChangePlanner
+    env.new(ask=False)
+    pid = env.store.list_ids()[0]  # planned, not done
+    assert '/change"' not in env.get(f"/projects/{pid}").body.decode()
+    body, headers = _mp({"csrf": TOKEN, "change": "x"})
+    assert env.post(f"/projects/{pid}/change", body=body, headers=headers).status == 409
+    env.store.set_status(pid, ProjectStatus.DONE)
+    body, headers = _mp({"csrf": "bad" * 15, "change": "x"})
+    assert env.post(f"/projects/{pid}/change", body=body, headers=headers).status == 403
+    body, headers = _mp({"csrf": TOKEN, "change": "   "})
+    assert env.post(f"/projects/{pid}/change", body=body, headers=headers).status == 409
+    body, headers = _mp({"csrf": TOKEN, "change": "x", "extra": "1"})
+    assert env.post(f"/projects/{pid}/change", body=body, headers=headers).status == 400
+    assert not [c for c in env.planner.calls if c[0] == "change"]
+
+
+def test_no_change_form_without_change_planner(env: Env) -> None:
+    pid = _done_project(env)
+    assert '/change"' not in env.get(f"/projects/{pid}").body.decode()

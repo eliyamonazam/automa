@@ -21,6 +21,7 @@ from datetime import UTC, datetime, tzinfo
 from string import Formatter
 from urllib.parse import quote
 
+from automa.changes import ChangeRecord
 from automa.delivery import Delivery, DeliveryFile, DeliveryState, TaskDelivery
 from automa.feasibility import FeasibilityWarning
 from automa.l10n import (
@@ -65,7 +66,7 @@ from automa.webui.status import STATUS_ICONS, Chip, project_chip, task_chip
 from automa.webui.stops import MESSAGES as STOP_MESSAGES
 from automa.webui.stops import StopInfo, StopLine, describe_stop
 from automa.webui.stops import st as stop_text
-from automa.webui.upload import request_action_href
+from automa.webui.upload import change_href, request_action_href
 from automa.webui.views import (
     ApprovalView,
     Overview,
@@ -768,6 +769,8 @@ def render_project(
     delivery: Delivery | None = None,
     retry: bool = False,
     asks: tuple[UserRequest, ...] = (),
+    change_form: bool = False,
+    changes: tuple[ChangeRecord, ...] = (),
 ) -> str:
     """One project page. ``forms`` (action mode only) adds approve/reject forms;
     ``notice`` is a one-line result of the last decision, shown at the top;
@@ -812,6 +815,8 @@ def render_project(
     if delivery is not None:
         retry_form = forms if retry and not running else None
         parts.append(_delivery_card(delivery, retry_form, lang))
+    if changes or (change_form and forms is not None):
+        parts.append(_change_card(view.id, forms if change_form else None, changes, lang, when))
     if resume and forms is not None and run is not None:
         parts.append(_start_form(view.id, run, forms, lang, stop_text("stop.continue", lang), ""))
     brake = progress.stop if progress is not None else None
@@ -1140,6 +1145,39 @@ def _ask_card(
         + f' <button type="submit" class="button secondary">{text(t("ask.decline", lang))}</button>'
         + "</p></form></details></section>"
     )
+
+
+def _change_card(
+    project_id: str,
+    forms: ActionForms | None,
+    changes: tuple[ChangeRecord, ...],
+    lang: Language,
+    when: Callable[[datetime], str],
+) -> str:
+    """Change requests after delivery (D169): earlier ones, and the form."""
+    parts = [f'<section class="card change"><h2>{text(t("change.title", lang))}</h2>']
+    if changes:
+        items = "".join(
+            f'<li><span class="meta">{text(when(c.at))}</span> '
+            f'<span dir="auto">{text(c.text)}</span></li>'
+            for c in changes
+        )
+        parts.append(f'<ul class="problems">{items}</ul>')
+    if forms is not None:
+        action = text(change_href(project_id))
+        parts.append(
+            f'<form method="post" action="{action}" enctype="multipart/form-data">'
+            + _hidden("csrf", forms.csrf_token)
+            + f'<p class="hint">{text(t("change.help", lang))}</p>'
+            + '<textarea name="change" rows="3" dir="auto" required></textarea>'
+            + f'<p class="upload"><label>{text(t("ask.files", lang))} '
+            + '<input type="file" name="files" multiple></label></p>'
+            + '<p><label><input type="checkbox" name="confirm" value="yes"> '
+            + f"{text(t('ask.confirm', lang))}</label></p>"
+            + f'<p><button type="submit">{text(t("change.send", lang))}</button></p></form>'
+        )
+    parts.append("</section>")
+    return "".join(parts)
 
 
 def _retry_form(project_id: str, forms: ActionForms | None, lang: Language) -> str:
@@ -1532,7 +1570,9 @@ def _project_id_html(project_id: str, lang: Language) -> str:
 
 def render_thinking(project_id: str, phase: str, elapsed_s: int, lang: Language = "en") -> str:
     """The self-refreshing page shown while the Executive works (D137)."""
-    what = "thinking.questions" if phase == "questions" else "thinking.plan"
+    what = {"questions": "thinking.questions", "change": "thinking.change"}.get(
+        phase, "thinking.plan"
+    )
     elapsed = t("thinking.elapsed", lang, seconds=max(0, elapsed_s))
     body = (
         f'<p><a href="/">{text(jt("nav.back", lang))}</a></p>'

@@ -45,7 +45,6 @@ from automa.plan.models import (
 
 REVIEW_FILE = "final_review.json"
 FIX_TASK_PREFIX = "final-fix"
-MAX_FIX_ROUNDS = 1
 MAX_FILE_CHARS = 4_000
 MAX_TOTAL_CHARS = 16_000
 MAX_ISSUES = 5
@@ -109,6 +108,12 @@ def save_review(project_dir: Path, review: ReviewStatus) -> None:
             os.unlink(tmp)
         except FileNotFoundError:
             pass
+
+
+def just_fixed(plan: Plan) -> bool:
+    """Whether the plan's last task is a fix task: a review right after a fix does
+    not add another (one fix round per review; a later change starts a new one)."""
+    return plan.tasks[-1].id.startswith(FIX_TASK_PREFIX)
 
 
 def fix_rounds(plan: Plan) -> int:

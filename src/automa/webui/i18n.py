@@ -387,6 +387,16 @@ _RAW: dict[str, dict[Language, str]] = {
             "می‌ره مرحلهٔ بعد."
         ),
     },
+    "thinking.change": {
+        "en": (
+            "The Executive is adding the steps your change needs. This usually takes"
+            " under a minute; this page refreshes by itself and moves on when it is done."
+        ),
+        "fa": (
+            "داره مرحله‌هایی که تغییرت لازم داره رو به برنامه اضافه می‌کنه. معمولاً کمتر از"
+            " یک دقیقه طول می‌کشه؛ این صفحه خودش تازه می‌شه و بعدش جلو می‌ره."
+        ),
+    },
     "thinking.plan": {
         "en": (
             "The Executive is making the plan and the cost estimate. This usually takes"
@@ -908,6 +918,23 @@ _RAW: dict[str, dict[Language, str]] = {
     "refusal.answer_refused": {
         "en": "the answer was not saved: {reason}",
         "fa": "جواب ذخیره نشد: {reason}",
+    },
+    "change.title": {"en": "Want a change?", "fa": "تغییری می‌خوای؟"},
+    "change.help": {
+        "en": (
+            "Write what should change (for example: make the header blue, add my "
+            "Telegram link). The steps it needs are added and the work goes on; what "
+            "is already right stays as it is."
+        ),
+        "fa": (
+            "بنویس چی عوض بشه (مثلاً: سربرگ آبی بشه، لینک تلگرامم اضافه بشه). مرحله‌های "
+            "لازم اضافه می‌شن و کار ادامه پیدا می‌کنه؛ چیزهایی که درستن دست نمی‌خورن."
+        ),
+    },
+    "change.send": {"en": "Apply this change", "fa": "این تغییر رو اعمال کن"},
+    "refusal.not_changeable": {
+        "en": "project {id} must be finished (done or not completed) to ask for a change",
+        "fa": "برای درخواست تغییر، پروژهٔ {id} باید تموم شده باشه",
     },
     "task.checks": {"en": "Acceptance checks", "fa": "معیارهای پذیرش"},
     "task.issues": {"en": "Reviewer's notes", "fa": "ایرادهای ارزیاب"},

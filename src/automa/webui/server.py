@@ -43,6 +43,7 @@ from string import Formatter
 from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
 from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError, nusd_to_usd
+from automa.changes import ChangeError, can_change, check_change, load_changes
 from automa.delivery import try_build_delivery
 from automa.feasibility import FeasibilityWarning, plan_warnings
 from automa.finance.anomaly import AnomalySettings
@@ -143,12 +144,14 @@ from automa.webui.runs import (
 )
 from automa.webui.static import STATIC_HEADERS, is_static_path, static_asset
 from automa.webui.upload import (
+    CHANGE_FIELDS,
     DECLINE_FIELDS,
     FILE_FIELD,
     MAX_PARTS,
     MAX_UPLOAD_BYTES,
     MULTIPART,
     REQUEST_ANSWER_FIELDS,
+    parse_change_path,
     parse_multipart,
     parse_request_action,
 )
@@ -385,8 +388,8 @@ class WebApp:
         if self._ideas is not None and is_idea_path(path):
             return MAX_IDEA_FORM_BYTES
         found = parse_request_action(path)
-        if found is not None and found[2] == "answer":
-            return MAX_UPLOAD_BYTES  # an answer may carry files (D159)
+        if (found is not None and found[2] == "answer") or parse_change_path(path) is not None:
+            return MAX_UPLOAD_BYTES  # an answer or a change may carry files (D159, D169)
         return MAX_FORM_BYTES
 
     def error(
@@ -526,6 +529,9 @@ class WebApp:
         retry_pid = parse_retry_path(parts.path) if not parts.query else None
         if self._runs is not None and retry_pid is not None:
             return self._post_retry(retry_pid, headers, body)
+        change_pid = parse_change_path(parts.path) if not parts.query else None
+        if change_pid is not None and self._ideas is not None:
+            return self._post_change(change_pid, headers, body)
         request_action = parse_request_action(parts.path) if not parts.query else None
         if request_action is not None:
             return self._post_request_action(*request_action, headers, body)
@@ -700,6 +706,52 @@ class WebApp:
             except ActionRefused:
                 pass  # e.g. the cost box is needed: the page offers "Start"
         return self._redirect(f"/projects/{quote(pid, safe='')}")
+
+    def _post_change(self, pid: str, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
+        """``POST /projects/<pid>/change`` (D169): a change request after delivery.
+
+        Same Origin, CSRF and strict-field checks as every action; the Executive
+        step runs in the background (thinking page) and the run starts after it
+        (unless the cost box is needed: then the page offers "Start")."""
+        if self._actions is None or self._ideas is None:  # never reached
+            return self.error(404, "error.title.not_found")
+        lowered = self._single_headers(headers)
+        if isinstance(lowered, Response):
+            return lowered
+        try:
+            check_same_origin(lowered, self._actions)
+            if pid not in self._store.list_ids():
+                raise ActionRefused.coded(404, "no_project", id=pid)
+            upload = parse_multipart(
+                lowered,
+                body,
+                fields=CHANGE_FIELDS,
+                file_field=FILE_FIELD,
+                max_bytes=MAX_UPLOAD_BYTES,
+                max_files=MAX_ANSWER_FILES,
+            )
+            check_token(upload.fields, self._actions)
+            try:
+                text = check_change(upload.fields.get("change", ""), upload.files)
+            except ChangeError as e:
+                raise ActionRefused.coded(409, "answer_refused", reason=str(e)) from None
+            if not can_change(self._store, pid):
+                raise ActionRefused.coded(409, "not_changeable", id=pid)
+            confirm = upload.fields.get("confirm") == "yes"
+            runs = self._runs
+
+            def start(project_id: str) -> None:
+                if runs is None:
+                    return
+                try:
+                    runs.start(project_id, {"confirm": "yes"} if confirm else {})
+                except ActionRefused:
+                    pass  # e.g. the cost box is needed: the page offers "Start"
+
+            target = self._ideas.change(pid, text, upload.files, after=start)
+        except ActionRefused as e:
+            return self.refused(e)
+        return self._redirect(target)
 
     def _post_retry(self, pid: str, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
         """``POST /projects/<pid>/retry`` (D156): "try again", same checks as start."""
@@ -991,6 +1043,12 @@ class WebApp:
                 now=self._clock(),
                 delivery=try_build_delivery(self._store, pid),
                 asks=self._open_asks(pid),
+                change_form=(
+                    self._ideas is not None
+                    and self._ideas.can_change()
+                    and can_change(self._store, pid)
+                ),
+                changes=tuple(load_changes(self._store.project_dir(pid))),
                 retry=self._runs is not None and self._runs.can_retry(pid),
             )
             return _html(200, document, security=self._security)

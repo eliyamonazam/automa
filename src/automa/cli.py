@@ -147,6 +147,7 @@ from automa.budget.ledger import (
     nusd_to_usd,
     usd_to_nusd,
 )
+from automa.changes import ChangeError, can_change, check_change, load_changes, request_change
 from automa.config import (
     MAX_PARALLEL,
     AutomaConfig,
@@ -1466,6 +1467,54 @@ def decline(
     except (ProjectStoreError, UserRequestError) as e:
         raise _fail(str(e), EXIT_USER) from None
     typer.echo(f"declined {req.id}; continue with: automa run {project_id}")
+
+
+@app.command()
+def change(
+    project_id: Annotated[str, typer.Argument(help="A done or failed project.")],
+    text: Annotated[str, typer.Argument(help="What should change, in your words.")],
+    files: Annotated[
+        list[Path] | None,
+        typer.Option("--file", help="A file to give with the change (repeat for more)."),
+    ] = None,
+    config_path: Annotated[
+        Path | None, typer.Option("--config", help="Path to automa.toml.")
+    ] = None,
+) -> None:
+    """Ask for a change after delivery; the plan grows by the tasks it needs (D169).
+
+    One Executive call (guarded by the budget caps). Then: automa run <project>.
+    """
+    config = _load(config_path)
+    store = ProjectStore.for_workspace(config.workspace)
+    uploads: list[tuple[str, bytes]] = []
+    for path in files or []:
+        try:
+            if not path.is_file():
+                raise _fail(f"not a file: {path}", EXIT_USER)
+            uploads.append((path.name, path.read_bytes()))
+        except OSError as e:
+            raise _fail(f"cannot read {path}: {e}", EXIT_USER) from None
+    try:
+        check_change(text, uploads)
+        if not can_change(store, project_id):
+            raise ChangeError(f"project {project_id} must be done or failed to request a change")
+    except ChangeError as e:
+        raise _fail(str(e), EXIT_USER) from None
+    try:
+        new = _WebIdeaPlanner(config).change(project_id, text, uploads, via="cli")
+    except IdeaError as e:
+        code = {"budget": EXIT_BUDGET, "config": EXIT_CONFIG, "provider": EXIT_PROVIDER}.get(
+            e.kind, EXIT_PLANNING
+        )
+        raise _fail(e.message, code) from None
+    records = load_changes(store.project_dir(project_id))
+    new_ids = set(records[-1].new_tasks) if records else set()
+    added = [t for t in new.tasks if t.id in new_ids]
+    typer.echo(f"plan v{new.version}: {len(added)} new task(s)")
+    for t in added:
+        typer.echo(_safe(f"  + {t.id} [{t.role}] {t.title}"))
+    typer.echo(f"next: automa run {project_id}")
 
 
 @brake_app.command("continue")
@@ -4029,6 +4078,24 @@ class _WebIdeaPlanner:
     def cost_range(self, project_id: str) -> str:
         store = ProjectStore.for_workspace(self._config.workspace)
         return _web_cost_range(self._config, store, project_id)
+
+    def change(
+        self,
+        project_id: str,
+        text: str,
+        files: Sequence[tuple[str, bytes]] = (),
+        *,
+        via: str = "web",
+    ) -> Plan:
+        """A change request after delivery (D169): the Executive adds the tasks."""
+
+        def make(agent: ExecutiveAgent, store: ProjectStore) -> Plan:
+            try:
+                return request_change(agent, store, project_id, text, files, via=via)
+            except ChangeError as e:
+                raise IdeaError("planning", _safe(str(e))) from None
+
+        return self._call(project_id, make)
 
 
 class _WebRunPreflight:

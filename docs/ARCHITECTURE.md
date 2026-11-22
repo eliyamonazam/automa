@@ -202,6 +202,9 @@ Executive در **همون فراخوانی سؤال‌ها** (بدون فراخ�
 ### بازبینی نهایی محصول (`src/automa/final_review.py`؛ D168)
 وقتی همهٔ وظیفه‌ها قبول شدن و برنامه `deliverable` داره، `Orchestrator._finish` یک فراخوانی ارزیاب (از طریق gateway Worker و همون BudgetGuard) با هدف، وعده، جواب‌های کاربر و ابتدای فایل‌های اصلی می‌گیره و نتیجه رو در `<project>/final_review.json` می‌نویسه. ایراد جدی بار اول ← وظیفهٔ `final-fix` در نسخهٔ بعدی برنامه (وضعیت وظیفه‌های قبلی منتقل می‌شه) و ادامهٔ اجرا؛ بار دوم ← `done` با ایرادها در `Delivery.review_issues`.
 
+### درخواست تغییر بعد از تحویل (`src/automa/changes.py`؛ D169)
+روی پروژهٔ `done`/`failed`، `request_change` با `ExecutiveAgent.plan_change` فقط وظیفه‌های تازه و `deliverable` به‌روز رو به نسخهٔ بعدی برنامه اضافه می‌کنه (وضعیت وظیفه‌های قبلی منتقل می‌شه)، درخواست رو در `<project>/changes.json` و فایل‌ها رو در `files/inputs/change-<n>/` نگه می‌داره و پروژه رو `paused` می‌کنه. ورودی‌ها: `automa change` و `POST /projects/<pid>/change` (کار Executive در پس‌زمینهٔ `IdeaFlow`، بعدش شروع اجرا).
+
 ### رابط وب (`src/automa/webui/`، D77، D78، D123، D124، D125، D126، D127، D128، D129، D130، D131، D133، D135)
 به‌طور پیش‌فرض فقط‌خواندنی (حالت عملیاتی اختیاری پایین‌تر). `views.py` مدل‌های نمای pydantic (`Overview`/`ProjectRow`، `ProjectView`/`TaskRow`/`ApprovalView`) را از فایل‌های `ProjectStore` می‌سازد و خرج را از فراخواننده می‌گیرد؛ دادهٔ خراب به‌صورت خط خطا نشان داده می‌شود. `render.py` HTML خالص می‌سازد: همهٔ متن ثبت‌شده با `text()` (نمایش آشکار کاراکترهای کنترلی/bidi و escape HTML)، بدون اسکریپت/فرم/منبع بیرونی، با CSP سخت. تصمیم دربارهٔ تأییدها فقط از CLI.
 

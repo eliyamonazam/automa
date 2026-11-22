@@ -408,6 +408,46 @@ class IdeaFlow:
             if not handed_off:
                 self._busy.release()
 
+    def can_change(self) -> bool:
+        """Whether the planner takes change requests (D169)."""
+        return callable(getattr(self._planner, "change", None))
+
+    def change(
+        self,
+        project_id: str,
+        text: str,
+        files: Sequence[tuple[str, bytes]] = (),
+        *,
+        after: Callable[[str], None] | None = None,
+    ) -> str:
+        """Plan a change request after delivery (D169); returns where to go next.
+
+        ``after`` runs once the new tasks are planned (the server starts the run).
+        """
+        change = getattr(self._planner, "change", None)
+        if not callable(change):
+            raise ActionRefused.coded(404, "no_such_project")
+        self._acquire()
+        handed_off = False
+
+        def work() -> str:
+            try:
+                change(project_id, text, files)
+            except IdeaError as e:
+                raise _refusal(e, project_id) from None
+            if after is not None:
+                after(project_id)
+            return project_path(project_id)
+
+        try:
+            if self._background:
+                handed_off = True
+                return self._spawn(project_id, "change", work)
+            return work()
+        finally:
+            if not handed_off:
+                self._busy.release()
+
     def _plan_then(self, project_id: str, items: Sequence[Clarification]) -> str:
         self._plan(project_id, items)
         return project_path(project_id)

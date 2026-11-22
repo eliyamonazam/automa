@@ -73,15 +73,14 @@ from automa.final_review import (
     MAX_FILE_CHARS as MAX_REVIEW_FILE_CHARS,
 )
 from automa.final_review import (
-    MAX_FIX_ROUNDS,
-    fix_rounds,
+    MAX_TOTAL_CHARS as MAX_REVIEW_TOTAL_CHARS,
+)
+from automa.final_review import (
+    just_fixed,
     load_review,
     run_review,
     save_review,
     with_fix_task,
-)
-from automa.final_review import (
-    MAX_TOTAL_CHARS as MAX_REVIEW_TOTAL_CHARS,
 )
 from automa.ideafiles import describe, list_files
 from automa.llm.gateway import CallContext
@@ -931,6 +930,11 @@ class Orchestrator:
             ]
         except UserRequestError:
             answers = []
+        from automa.changes import load_changes  # local: changes imports the agents
+
+        answers += [
+            f"Later change request from the user: {c.text}" for c in load_changes(project_dir)
+        ]
         owner = next(
             (t for t in (plan.task_for_file(p) for p in d.main_files) if t is not None),
             plan.tasks[-1],
@@ -968,7 +972,7 @@ class Orchestrator:
                 "fix_round": review.fix_round,
             },
         )
-        if review.passed or fix_rounds(plan) >= MAX_FIX_ROUNDS:
+        if review.passed or review.unavailable or just_fixed(plan):
             return None
         new = with_fix_task(plan, review)
         before = store.task_states(project_id)
