@@ -401,3 +401,10 @@ def test_roles_package_does_not_touch_llm_or_run_tools() -> None:
                 assert not node.module.startswith("automa.budget"), py.name
             if isinstance(node, ast.Attribute):
                 assert node.attr not in {"run", "execute", "complete"}, f"{py.name}: {node.attr}"
+
+
+def test_developer_keeps_terminal_output_in_english() -> None:
+    # D174: Windows/WSL terminals show Persian reversed; documents may stay Persian.
+    text = RoleRegistry.builtin().get("developer").instructions
+    assert "printed" in text or "prints in a terminal" in text
+    assert "English" in text and "README" in text

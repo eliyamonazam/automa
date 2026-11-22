@@ -139,6 +139,7 @@ code{background:var(--code);padding:1px 6px;border-radius:6px}
 [dir=auto],pre{unicode-bidi:plaintext}
 pre{white-space:pre-wrap;word-break:break-word;background:var(--code);padding:10px 12px;
 border-radius:10px;text-align:start}
+pre.prose{font-family:inherit;line-height:1.9;font-size:1em;padding:14px 18px}
 .hero{background:linear-gradient(135deg,var(--accent) 0%,var(--accent2) 55%,var(--accentb) 100%);
 color:#fff;border-radius:22px;padding:22px 26px;margin:4px 0 16px;
 box-shadow:0 14px 34px -12px #4f46e580}
@@ -917,6 +918,7 @@ def _activity_card(a: Activity, lang: Language, when: When) -> str:
 
 
 _STEP_MARK = {"done": "✓", "fail": "✕"}
+_PROSE_SUFFIXES = (".md", ".markdown", ".txt")
 
 
 def _hero_and_journey(view: ProjectView, j: Journey, lang: Language) -> str:
@@ -1823,7 +1825,9 @@ def render_file(
         if content.truncated:
             shown = _size_text(len(content.text.encode()), lang)
             parts.append(f'<p class="warn">{text(t("file.truncated", lang, size=shown))}</p>')
-        parts.append(f'<pre dir="auto">{text(content.text)}</pre>')
+        # Prose files read in the page's font, one direction per paragraph (D174).
+        prose = ' class="prose"' if path.lower().endswith(_PROSE_SUFFIXES) else ""
+        parts.append(f'<pre dir="auto"{prose}>{text(content.text)}</pre>')
     elif content.kind == "image" and img_src is not None:
         src = text(files_href(pid, FilesRoute.RAW, path))
         dims = localize_digits(f"{content.width}×{content.height}", lang)

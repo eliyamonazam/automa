@@ -426,7 +426,16 @@ def test_render_text_view_escapes(workspace: Path) -> None:
     doc = render.render_file(wf.read_file(store, "p1", "notes.txt"))
     assert "<script>" not in doc and "&lt;script&gt;" in doc
     assert "\\u202e" in doc and "\u202e" not in doc
-    assert '<pre dir="auto">' in doc and "img-src 'none'" in doc
+    assert '<pre dir="auto" class="prose">' in doc and "img-src 'none'" in doc
+
+
+def test_prose_files_read_in_the_page_font_and_code_stays_monospace(workspace: Path) -> None:
+    store = ProjectStore.for_workspace(workspace)
+    md = render.render_file(wf.read_file(store, "p1", "sub/deep.md"))
+    assert '<pre dir="auto" class="prose">' in md and "pre.prose{" in md
+    (store.files_dir("p1") / "main.py").write_text("print('hi')\n", encoding="utf-8")
+    code = render.render_file(wf.read_file(store, "p1", "main.py"))
+    assert '<pre dir="auto">' in code and 'class="prose"' not in code
 
 
 def test_render_image_without_source_shows_no_image(workspace: Path) -> None:

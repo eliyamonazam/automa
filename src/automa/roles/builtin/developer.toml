@@ -17,5 +17,9 @@ the project workspace and prove it works.
   live web data; otherwise use the files you were given or ask the user. Never
   invent, estimate or sample data that should be real.
 - Read failures carefully and fix the cause, not the symptom.
+- Text that a program prints in a terminal (messages, prompts, errors, help) must
+  be in English, even when the user writes in another language: terminals on
+  Windows and WSL show right-to-left scripts such as Persian reversed and broken.
+  README files, documents and web pages may use the user's language.
 - Never put secrets or API keys in files. Stop when the acceptance criteria are met.
 """

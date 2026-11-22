@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-22 — M16: خروجی ترمینال انگلیسی و فایل‌های متنی خوانا (D174)
+- **انجام‌شده:** نقش developer حالا پیام‌های ترمینالی برنامه‌ها رو انگلیسی می‌نویسه (ترمینال Windows/WSL فارسی رو برعکس نشون می‌ده)؛ README و صفحه‌ها می‌تونن فارسی بمونن. در صفحهٔ «فایل‌ها»، `.md` و `.txt` با فونت خود صفحه و جهت جدا برای هر پاراگراف نشون داده می‌شن.
+- **فایل‌ها:** `src/automa/roles/builtin/developer.toml`، `src/automa/webui/render.py` (`_PROSE_SUFFIXES`، `pre.prose`)؛ تست‌ها: `tests/test_roles.py`، `tests/test_webui_files.py`.
+- **تست‌ها:** `pytest` ← ۶۲۳۹ سبز، ۲ رد شده (Docker واقعی)؛ حالت شبیه CI هم سبز؛ `ruff check` و `ruff format --check` سبز. بررسی بصری با Chrome headless در ۱۲۸۰ و ۳۹۰ پیکسل.
+- **مشکلات:** BudgetGuard و Policy دست نخوردن.
+- **برای صاحب مخزن:** کاری لازم نیست.
+- **قدم بعدی:** بازطراحی ظاهر (۳).
+
 ## 2026-11-22 — M16: پیش‌بینی هزینهٔ واقع‌بینانه‌تر، بخش ۱ (D173)
 - **انجام‌شده:** پیش‌بینی پیش‌فرض یک تلاش از اجراهای واقعی دوباره کالیبره شد (قبلاً ۷ تا ۱۰ برابر کم بود)؛ آستانهٔ «قبل از شروع بپرس» از ۰٫۳۰ به ۱ دلار رفت تا پرسیدن معنی‌دار بمونه؛ صفحهٔ پروژه اگه بالای بازه از نصف سقف پروژه بیشتر باشه، قبل از شروع می‌گه «ممکنه به سقف بخوره؛ project_usd رو بیشتر کن». مورد شکسته شد؛ کالیبرهٔ خودکار از Ledger بخش ۲ه.
 - **فایل‌ها:** `src/automa/finance/estimate.py` (`DEFAULT_TOKEN_PROFILES`)، `src/automa/config.py` (`confirm_above_usd`)، `src/automa/cli.py` (`_near_cap`، `_WebIdeaPlanner.near_cap`)، `src/automa/webui/server.py`، `src/automa/webui/render.py`، `src/automa/webui/i18n.py`، `src/automa/webui/ideas.py`، `automa.toml.example`؛ تست‌ها: `tests/test_finance_cost_range.py`، `tests/test_run_confirm.py`، `tests/test_webui_ideas.py`، و پروفایل کوچیک برای تست‌های ترمز (`small_profiles`).
