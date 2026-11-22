@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-22 — M16: کش پرامپت اختیاری (D167)
+- **انجام‌شده:** گزینهٔ `[provider] prompt_cache` که برای مدل‌های Claude پیشوند ثابت هر درخواست (پیام سیستم تا آخرین پیام) رو قابل کش علامت می‌زنه؛ خوندن توکن‌های کش‌شده از پاسخ درگاه؛ حساب هزینهٔ محافظه‌کارانه (BudgetGuard هرگز کم‌شماری نمی‌کنه)؛ اگه درگاه نشانه‌ها رو نپذیرفت، خودش بدون اون‌ها ادامه می‌ده.
+- **فایل‌ها:** `src/automa/config.py` (`ProviderConfig.prompt_cache`، `prompt_cache_models`، `caches`، `cache_read_per_mtok`)، `src/automa/llm/types.py` (`ChatRequest.cache`، `Usage.cached_input_tokens`)، `src/automa/llm/gateway.py` (`compute_cost(cache=)`، `CACHE_WRITE_FACTOR`، برگشت بدون کش)، `src/automa/llm/openai_compat.py` (نشانه‌ها و خوندن کش)، `automa.toml.example`؛ تست: `tests/test_prompt_cache.py`.
+- **تست‌ها:** `pytest` ← ۶۱۳۰ سبز، ۲ رد شده (Docker واقعی)؛ حالت شبیه CI هم سبز؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** پیش‌فرض خاموشه تا روی درگاه صاحب مخزن آزموده بشه.
+- **برای صاحب مخزن:** در `automa.toml` زیر `[provider]` بذار `prompt_cache = true` و برای هر مدل Claude در بخش `[models."..."]` بذار `cache_read_per_mtok` (یک‌دهم `input_per_mtok`)؛ بعد یک اجرا و مقایسهٔ هزینه.
+- **قدم بعدی:** بازبینی نهایی محصول.
+
 ## 2026-11-22 — M16: کم‌خرج‌تر بدون افت کیفیت (D165، D166)
 - **انجام‌شده:** بعد از اولین آزمون واقعی صاحب مخزن (صفحهٔ معرفی شخصی؛ ترمز خرج بعد از ۲۹ فراخوانی و ۰٫۶۲ دلار در یک وظیفه). تحلیل دفتر هزینه: (۱) بازنویسی کامل HTML برای هر اصلاح (خروجی‌های ۳۰۰۰ تا ۴۰۰۰ توکنی، یکی بریده)، (۲) شروع تلاش از صفر بعد از هر توقف، (۳) قدم‌های ریز تک‌ابزاری. راه‌حل‌ها: ابزار `edit_file` و `write_file` با `append`؛ چهار قانون صرفه‌جویی در پرامپت Worker؛ ادامهٔ همون تلاش بعد از جواب کاربر (`SuspendedAttempt`).
 - **فایل‌ها:** `src/automa/tools/files.py` (`EditFile`، `append`)، `src/automa/tools/__init__.py`، `src/automa/roles/builtin/*.toml`، `src/automa/agents/worker.py` (پروتکل، `resume`، بازسازی حلقه)، `src/automa/suspend.py` (تازه)، `src/automa/tools/ask.py`، `src/automa/orchestrator.py`؛ تست‌ها: `tests/test_tools.py`، `tests/test_user_input.py` و به‌روزرسانی فهرست ابزارها و سه سقف تنظیم‌شدهٔ تست بودجه.

@@ -187,6 +187,14 @@ selector = false
 max_retries = 3
 retry_delays_s = [3.0, 10.0, 30.0]
 timeout_s = 180.0
+# Prompt caching (D167): most of a worker's cost is the same conversation sent again
+# every step. With prompt_cache = true, requests to models whose id contains one of
+# prompt_cache_models mark that stable start as cacheable (Anthropic-style
+# cache_control). If the gateway refuses the markers, Automa retries once without
+# them and stops sending them to that model. To see the saving in the ledger, give
+# the model a cache read price, e.g. cache_read_per_mtok = 0.3 for a 3.0 input price.
+# prompt_cache = false
+# prompt_cache_models = ["claude"]
 
 # Plain web reads. Off by default: every fetch_url call needs approval.
 # With auto_approve_reads = true, fetch_url runs without asking ONLY for URLs that

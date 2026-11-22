@@ -79,11 +79,15 @@ class ChatRequest(_Strict):
     # None = not sent (some models, e.g. GPT-5.x reasoning models, reject it; D111).
     temperature: float | None = Field(default=0.2, ge=0, le=2)
     tools: tuple[ToolSpec, ...] = ()
+    # Mark the stable prefix as cacheable (D167); only set by the gateway.
+    cache: bool = False
 
 
 class Usage(_Strict):
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
+    # Input tokens served from the prompt cache (part of ``input_tokens``; D167).
+    cached_input_tokens: int = Field(default=0, ge=0)
     # Cost reported by the gateway itself (e.g. OpenRouter ``usage.cost``), if any.
     reported_cost_usd: float | None = Field(default=None, ge=0)
 

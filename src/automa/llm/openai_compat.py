@@ -46,11 +46,33 @@ def _message_to_wire(msg: Message) -> dict[str, Any]:
     return out
 
 
+_CACHE_CONTROL = {"type": "ephemeral"}
+
+
+def _cached_parts(text: str) -> list[dict[str, Any]]:
+    return [{"type": "text", "text": text, "cache_control": dict(_CACHE_CONTROL)}]
+
+
+def _mark_cache(messages: list[dict[str, Any]]) -> None:
+    """Prompt-cache markers (D167): the system message and the last user/tool
+    message become one text part with ``cache_control``, so the conversation up to
+    there is cached and the next step only pays full price for what is new."""
+    if messages and messages[0]["role"] == "system" and isinstance(messages[0]["content"], str):
+        messages[0]["content"] = _cached_parts(messages[0]["content"])
+    for m in reversed(messages[1:]):
+        if m["role"] in ("user", "tool") and isinstance(m.get("content"), str) and m["content"]:
+            m["content"] = _cached_parts(m["content"])
+            break
+
+
 def request_to_wire(request: ChatRequest) -> dict[str, Any]:
     """Build the JSON body for ``POST /chat/completions``."""
+    messages = [_message_to_wire(m) for m in request.messages]
+    if request.cache:
+        _mark_cache(messages)
     body: dict[str, Any] = {
         "model": request.model,
-        "messages": [_message_to_wire(m) for m in request.messages],
+        "messages": messages,
         "max_tokens": request.max_tokens,
         "stream": False,
     }
@@ -102,6 +124,7 @@ def response_from_wire(data: Any, *, fallback_model: str) -> ChatResponse:
         usage = Usage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cached_input_tokens=min(_cached_tokens(raw_usage), input_tokens),
             reported_cost_usd=float(cost) if cost is not None else None,
         )
         finish = _FINISH.get(str(choice.get("finish_reason")), FinishReason.OTHER)
@@ -113,6 +136,22 @@ def response_from_wire(data: Any, *, fallback_model: str) -> ChatResponse:
         )
     except (KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
         raise ProviderError(f"malformed completion response: {type(exc).__name__}") from None
+
+
+def _cached_tokens(raw_usage: Any) -> int:
+    """Prompt-cache reads, as OpenAI (``prompt_tokens_details.cached_tokens``) or
+    Anthropic-style gateways (``cache_read_input_tokens``) report them; else 0."""
+    if not isinstance(raw_usage, dict):
+        return 0
+    details = raw_usage.get("prompt_tokens_details")
+    candidates = [
+        details.get("cached_tokens") if isinstance(details, dict) else None,
+        raw_usage.get("cache_read_input_tokens"),
+    ]
+    for v in candidates:
+        if isinstance(v, int) and not isinstance(v, bool) and v > 0:
+            return v
+    return 0
 
 
 class OpenAICompatProvider:

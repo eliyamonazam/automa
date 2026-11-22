@@ -59,6 +59,21 @@ def _rejects_temperature(e: ProviderError) -> bool:
     return e.status == 400 and "temperature" in str(e).lower() and not e.maybe_billed
 
 
+def _rejects_cache(e: ProviderError) -> bool:
+    """A 4xx (not billed) that blames the prompt-cache markers or the content parts
+    they need (a gateway without prompt caching, D167)."""
+    text = str(e).lower()
+    return (
+        e.status is not None
+        and 400 <= e.status < 500
+        and e.status not in (401, 403, 429)
+        and not e.maybe_billed
+        and "temperature" not in text
+        and "max_tokens" not in text
+        and ("cache" in text or "content" in text)
+    )
+
+
 def _unanswered(request: ChatRequest, tier: Tier, estimate: CallEstimate) -> LLMResult:
     """A placeholder result for a sent-but-unanswered call, charged at the worst case."""
     response = ChatResponse(
@@ -112,10 +127,30 @@ class CallGuard(Protocol):
     def release(self, estimate: CallEstimate) -> None: ...
 
 
-def compute_cost(usage: Usage, price: ModelPrice) -> float:
-    """Cost in USD of ``usage`` at ``price`` (per million tokens)."""
+# Anthropic bills writing to the prompt cache at 1.25x the input price. With caching
+# on, input not read from the cache is charged at this factor (it may have been
+# written), so the guard never under-counts (D167).
+CACHE_WRITE_FACTOR = 1.25
+
+
+def compute_cost(usage: Usage, price: ModelPrice, *, cache: bool = False) -> float:
+    """Cost in USD of ``usage`` at ``price`` (per million tokens).
+
+    ``cache``: the request carried prompt-cache markers (D167). Cached input is
+    charged at ``cache_read_per_mtok`` (full price if unknown), the rest of the
+    input at ``CACHE_WRITE_FACTOR`` times the input price.
+    """
+    if not cache:
+        return (
+            usage.input_tokens * price.input_per_mtok + usage.output_tokens * price.output_per_mtok
+        ) / 1_000_000
+    cached = min(usage.cached_input_tokens, usage.input_tokens)
+    fresh = usage.input_tokens - cached
+    read = price.input_per_mtok if price.cache_read_per_mtok is None else price.cache_read_per_mtok
     return (
-        usage.input_tokens * price.input_per_mtok + usage.output_tokens * price.output_per_mtok
+        fresh * price.input_per_mtok * CACHE_WRITE_FACTOR
+        + cached * read
+        + usage.output_tokens * price.output_per_mtok
     ) / 1_000_000
 
 
@@ -138,7 +173,7 @@ def estimate_max_cost(request: ChatRequest, price: ModelPrice) -> tuple[int, flo
     """Pessimistic (input_tokens, cost_usd) upper estimate for ``request``."""
     input_tokens = _estimate_input_tokens(request)
     usage = Usage(input_tokens=input_tokens, output_tokens=request.max_tokens)
-    return input_tokens, compute_cost(usage, price)
+    return input_tokens, compute_cost(usage, price, cache=request.cache)
 
 
 _GUARD_METHODS = ("authorize", "record", "release")
@@ -167,6 +202,8 @@ class LLMGateway:
         # Models that rejected the temperature parameter (HTTP 400); later calls to
         # them omit it (D111).
         self._no_temperature: set[str] = set()
+        # Models whose requests were refused with prompt-cache markers (D167).
+        self._no_cache: set[str] = set()
 
     @classmethod
     def from_config(cls, config: AutomaConfig, *, guard: CallGuard) -> LLMGateway:
@@ -199,6 +236,7 @@ class LLMGateway:
             max_tokens=max_tokens,
             temperature=temperature,
             tools=tuple(tools),
+            cache=self._config.provider.caches(model),
         )
 
     def check_model(self, model: str) -> str:
@@ -258,6 +296,8 @@ class LLMGateway:
         )
         if request.model in self._no_temperature:
             request = request.model_copy(update={"temperature": None})
+        if request.cache and request.model in self._no_cache:
+            request = request.model_copy(update={"cache": False})
         estimate = self.estimate(request, tier, context or CallContext())
         policy = self._config.provider
         retry = 0
@@ -278,6 +318,13 @@ class LLMGateway:
                     request = request.model_copy(
                         update={"max_tokens": min(request.max_tokens * 2, MAX_GROWN_OUTPUT_TOKENS)}
                     )
+                    estimate = self.estimate(request, tier, estimate.context)
+                    continue
+                if request.cache and _rejects_cache(e):
+                    # The gateway does not take cache markers: one more guarded
+                    # attempt without them, remembered for this model (D167).
+                    self._no_cache.add(request.model)
+                    request = request.model_copy(update={"cache": False})
                     estimate = self.estimate(request, tier, estimate.context)
                     continue
                 if _rejects_temperature(e) and request.temperature is not None:
@@ -307,7 +354,7 @@ class LLMGateway:
             self._guard.release(estimate)
             raise
         try:
-            cost = self._actual_cost(response.usage, request.model, estimate)
+            cost = self._actual_cost(response.usage, request.model, estimate, cache=request.cache)
             result = LLMResult(tier=tier, response=response, cost_usd=cost)
         except Exception:
             # The provider answered, so money was (probably) spent. Never leave it
@@ -318,7 +365,9 @@ class LLMGateway:
         self._guard.record(estimate, result)
         return result
 
-    def _actual_cost(self, usage: Usage, model: str, estimate: CallEstimate) -> float:
+    def _actual_cost(
+        self, usage: Usage, model: str, estimate: CallEstimate, *, cache: bool = False
+    ) -> float:
         # Always price against the *requested* model: a gateway may report a
         # different model id we have no price for, and we must not under-count.
         price = self._config.price_for(model)
@@ -331,9 +380,10 @@ class LLMGateway:
             computed = compute_cost(
                 Usage(input_tokens=estimate.max_input_tokens, output_tokens=usage.output_tokens),
                 price,
+                cache=cache,
             )
         else:
-            computed = compute_cost(usage, price)
+            computed = compute_cost(usage, price, cache=cache)
         if usage.reported_cost_usd is not None:
             return max(computed, usage.reported_cost_usd)
         return computed

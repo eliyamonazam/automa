@@ -71,10 +71,16 @@ class _Strict(BaseModel):
 
 
 class ModelPrice(_Strict):
-    """Price in USD per one million tokens."""
+    """Price in USD per one million tokens.
+
+    ``cache_read_per_mtok`` (optional, D167): price of input tokens read from the
+    gateway's prompt cache. Without it cached tokens are charged at the full input
+    price (the safe side).
+    """
 
     input_per_mtok: float = Field(ge=0)
     output_per_mtok: float = Field(ge=0)
+    cache_read_per_mtok: float | None = Field(default=None, ge=0)
 
 
 class Capability(StrEnum):
@@ -137,6 +143,8 @@ class ModelInfo(_Strict):
     capabilities: tuple[Capability, ...] = Field(min_length=1)
     input_per_mtok: float = Field(ge=0)
     output_per_mtok: float = Field(ge=0)
+    # Price of input tokens read from the prompt cache (D167); None = full price.
+    cache_read_per_mtok: float | None = Field(default=None, ge=0)
     # USD per generated image (``generate_image``, D100); only for ``image_out`` models.
     per_image_usd: float | None = Field(default=None, ge=0)
     # Chat-based image models (D103): ``image_api = "chat"`` with ``image_max_tokens``,
@@ -208,7 +216,11 @@ class ModelInfo(_Strict):
 
     @property
     def price(self) -> ModelPrice:
-        return ModelPrice(input_per_mtok=self.input_per_mtok, output_per_mtok=self.output_per_mtok)
+        return ModelPrice(
+            input_per_mtok=self.input_per_mtok,
+            output_per_mtok=self.output_per_mtok,
+            cache_read_per_mtok=self.cache_read_per_mtok,
+        )
 
     def has(self, capability: Capability) -> bool:
         return capability in self.capabilities
@@ -320,6 +332,16 @@ class ProviderConfig(_Strict):
         default=(3.0, 10.0, 30.0), min_length=1, max_length=10
     )
     timeout_s: float = Field(default=180.0, gt=0, le=900)
+    # Prompt caching (D167): mark the stable start of each request as cacheable for
+    # models whose id contains one of ``prompt_cache_models``. Off by default: the
+    # gateway must accept Anthropic-style ``cache_control`` parts.
+    prompt_cache: bool = False
+    prompt_cache_models: tuple[str, ...] = Field(default=("claude",), max_length=20)
+
+    def caches(self, model: str) -> bool:
+        """Whether requests to ``model`` carry prompt-cache markers."""
+        m = model.lower()
+        return self.prompt_cache and any(p.lower() in m for p in self.prompt_cache_models if p)
 
     @field_validator("retry_delays_s")
     @classmethod
