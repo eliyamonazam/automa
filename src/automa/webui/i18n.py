@@ -179,6 +179,11 @@ _RAW: dict[str, dict[Language, str]] = {
         "fa": "ممکنه قبل از تموم شدن به سقف خرج پروژه بخوره. اگه می‌خوای تا آخر بره، قبل از "
         "شروع project_usd رو زیر [limits] در automa.toml بیشتر کن.",
     },
+    "wizard.label": {"en": "Steps of a new idea", "fa": "قدم‌های ایدهٔ تازه"},
+    "wizard.idea": {"en": "Idea", "fa": "ایده"},
+    "wizard.ask": {"en": "Questions and what is needed", "fa": "سؤال‌ها و چیزهای لازم"},
+    "wizard.plan": {"en": "Plan and cost", "fa": "برنامه و هزینه"},
+    "files.folder": {"en": "folder", "fa": "پوشه"},
     "progress.heading": {"en": "Progress", "fa": "پیشرفت"},
     "progress.passed": {"en": "tasks passed:", "fa": "مرحله‌های تموم‌شده:"},
     "progress.live": {
@@ -490,8 +495,6 @@ _RAW: dict[str, dict[Language, str]] = {
     "files.none": {"en": "No files yet.", "fa": "هنوز فایلی ساخته نشده."},
     "files.up": {"en": "↑ up", "fa": "↑ پوشهٔ بالاتر"},
     "files.empty": {"en": "Empty directory.", "fa": "این پوشه خالیه."},
-    "files.col.name": {"en": "Name", "fa": "نام"},
-    "files.col.size": {"en": "Size", "fa": "اندازه"},
     "files.download": {"en": "download", "fa": "دانلود"},
     "files.open": {"en": "▶ open", "fa": "▶ باز کردن"},
     "files.symlink": {"en": "symlink, not followed", "fa": "میان‌بر؛ دنبالش نمی‌کنیم"},

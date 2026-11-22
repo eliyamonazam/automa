@@ -222,13 +222,16 @@ def test_new_idea_and_clarify_forms_are_cards() -> None:
     assert '<p dir="auto"><label>1. چه لحنی؟' in doc
 
 
-def test_files_table_is_in_a_scrolling_card(store: ProjectStore) -> None:
+def test_files_are_card_rows(store: ProjectStore) -> None:
+    # D176: one card row per entry (icon, name, size, buttons) instead of a table.
     files = store.project_dir("p1") / "files"
     files.mkdir(exist_ok=True)
     (files / "شعر.txt").write_text("باران", encoding="utf-8")
+    (files / "site").mkdir()
     doc = rd.render_files(build_listing(store, "p1"))
-    assert '<div class="card scroll"><table>' in doc
-    assert 'dir="auto">شعر.txt</a>' in doc
+    assert '<ul class="files-list"><li class="file-row">' in doc and "<table>" not in doc
+    assert 'dir="auto">📄 شعر.txt</a>' in doc and 'dir="auto">📁 site</a>' in doc
+    assert 'class="button small secondary"' in doc
 
 
 def test_rendering_keeps_files_untouched(store: ProjectStore, tmp_path: Path) -> None:
@@ -250,3 +253,24 @@ def test_labels_never_decide_the_direction_of_recorded_text(store: ProjectStore)
         for m in re.finditer(r'dir="auto">([^<]*)<', doc):
             assert not m.group(1).startswith(("Goal", "reason", "Last result")), m.group(0)
         assert f'<p class="goal" dir="auto">{PERSIAN}</p>' in doc
+
+
+def test_idea_pages_show_the_three_wizard_steps() -> None:
+    # D176: idea → questions and what is needed → plan and cost.
+    from automa.webui.render import ActionForms
+
+    new = rd.render_new_idea(ActionForms("t"), lang="fa")
+    assert 'class="steps wizard"' in new
+    assert new.count('class="s-now"') == 1 and "ایده" in new and "برنامه و هزینه" in new
+    clarify = rd.render_clarify("p1", "g", ["q?"], ActionForms("t"), lang="fa")
+    assert clarify.count('class="s-done"') == 1 and clarify.count('class="s-now"') == 1
+    plan = rd.render_thinking("p1", "plan", 3, lang="fa")
+    assert plan.count('class="s-done"') == 2
+    assert 'class="steps wizard"' not in rd.render_thinking("p1", "change", 3, lang="fa")
+
+
+def test_back_links_point_the_way_the_page_reads(store: ProjectStore) -> None:
+    fa = rd.render_files(build_listing(store, "p1"), lang="fa")
+    assert '<p class="back"><a href="/projects/p1">→ <bdi dir="ltr">p1</bdi></a></p>' in fa
+    en = rd.render_files(build_listing(store, "p1"))
+    assert '<p class="back"><a href="/projects/p1">← p1</a></p>' in en

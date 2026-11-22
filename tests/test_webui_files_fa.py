@@ -62,7 +62,7 @@ def test_persian_file_list_has_no_english_interface() -> None:
     doc = rd.render_files(_listing(), actions=True, lang="fa")
     assert '<html lang="fa" dir="rtl">' in doc
     assert "فایل‌های پروژهٔ" in doc and "↑ پوشهٔ بالاتر" in doc
-    assert "<th>نام</th><th>اندازه</th>" in doc
+    assert '<ul class="files-list">' in doc and ">پوشه</span>" in doc  # cards (D176)
     assert "۲٫۰ کیلوبایت" in doc and "۱۲ بایت" in doc and "۳٫۰ مگابایت" in doc
     assert "دانلود" in doc and "▶ باز کردن" in doc
     assert "میان‌بر؛ دنبالش نمی‌کنیم" in doc and "فایل معمولی نیست" in doc
@@ -84,7 +84,7 @@ def test_persian_missing_and_empty_directory(kw: dict[str, object], expected: st
 def test_english_file_list_is_unchanged() -> None:
     doc = rd.render_files(_listing())
     assert '<html lang="en">' in doc
-    assert f"Files of {PID}" in doc and "↑ up" in doc and "<th>Name</th><th>Size</th>" in doc
+    assert f"Files of {PID}" in doc and "↑ up" in doc and '<ul class="files-list">' in doc
     assert "2.0 KiB" in doc and "12 B" in doc and "3.0 MiB" in doc
     assert "(symlink, not followed)" in doc and "(not a regular file)" in doc
     assert "Showing 6 of 9 entries." in doc

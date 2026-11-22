@@ -44,6 +44,7 @@ from automa.webui.cards import EMPTY_ART, ICONS, CardState, card_hint, card_labe
 from automa.webui.files import (
     MAX_IMAGE_BYTES,
     FileContent,
+    FileEntryView,
     FileListing,
     FilesRoute,
     files_href,
@@ -217,6 +218,8 @@ border:3px solid var(--line);font-weight:800}
 .steps .s-now .dot{border-color:var(--busyline);background:var(--busy);color:var(--busyfg)}
 .steps .s-now .name{font-weight:800}
 .steps .s-fail .dot{background:var(--badline);border-color:var(--badline);color:#fff}
+.steps.wizard{flex-wrap:nowrap;margin:6px 0 14px}
+.steps.wizard li{flex:1 1 0;min-width:0}
 .deliver{border:1px solid var(--line);border-top:6px solid var(--accent);padding:18px 22px}
 .deliver.ready{border-top-color:var(--okline);
 background:linear-gradient(180deg,color-mix(in srgb,var(--ok) 55%,var(--card)),var(--card) 140px)}
@@ -356,6 +359,9 @@ background:var(--soft);color:var(--fg);text-decoration:none}
 .steps{flex-direction:column}.steps li{flex:none;text-align:start;padding:0 0 8px 0;
 min-width:0}
 .steps li::before{display:none}.steps .name,.steps .when{display:inline;margin:0 8px}
+.steps.wizard{flex-direction:row}.steps.wizard li{flex:1 1 0;text-align:center;padding:0 2px}
+.steps.wizard .dot{width:30px;height:30px}.steps.wizard .name{display:block;margin:4px 0 0;
+font-size:.8em}
 .file-row .acts{margin-inline-start:0}}
 @media (max-width:430px){.topbar nav a.newidea{padding:6px 9px}
 .topbar .newidea .lbl{position:absolute;width:1px;height:1px;overflow:hidden;
@@ -1584,12 +1590,39 @@ def _technical_log(run: RunPanel, lang: Language = "en") -> str:
     return "".join(parts)
 
 
+_WIZARD_STEPS = ("wizard.idea", "wizard.ask", "wizard.plan")
+
+
+def _wizard(step: int, lang: Language) -> str:
+    """The three steps of a new idea (D176): idea → questions and what is needed →
+    plan and cost; earlier steps done, ``step`` current. Fixed labels only."""
+    items = []
+    for i, key in enumerate(_WIZARD_STEPS):
+        state = "done" if i < step else ("now" if i == step else "todo")
+        mark = _STEP_MARK["done"] if i < step else localize_digits(str(i + 1), lang)
+        items.append(
+            f'<li class="s-{state}"><span class="dot">{text(mark)}</span>'
+            f'<span class="name">{text(t(key, lang))}</span></li>'
+        )
+    label = text(t("wizard.label", lang))
+    return f'<ol class="steps wizard" aria-label="{label}">{"".join(items)}</ol>'
+
+
+def _back(href: str, label: str, lang: Language, *, ltr: bool = False) -> str:
+    """A back link whose arrow points the way the page reads (D176). ``ltr`` keeps
+    a recorded Latin label (a project id) left-to-right inside Persian text."""
+    shown = f'<bdi dir="ltr">{text(label)}</bdi>' if ltr and lang != "en" else text(label)
+    arrow = "←" if lang == "en" else "→"
+    return f'<p class="back"><a href="{text(href)}">{arrow} {shown}</a></p>'
+
+
 def render_new_idea(forms: ActionForms, lang: Language = "en", *, goal: str = "") -> str:
     """The "New idea" form (D124): the goal and whether to ask questions first.
     ``goal`` pre-fills the text (a welcome example, D160); it is escaped."""
     body = (
         f'<p><a href="/">{text(jt("nav.back", lang))}</a></p>'
         f"<h1>{text(t('idea.heading', lang))}</h1>"
+        f"{_wizard(0, lang)}"
         f"<p>{text(t('idea.intro', lang))}</p>"
         '<form class="card" method="post" action="/new" enctype="multipart/form-data">'
         f"{_hidden('csrf', forms.csrf_token)}"
@@ -1618,10 +1651,11 @@ def render_thinking(project_id: str, phase: str, elapsed_s: int, lang: Language 
         phase, "thinking.plan"
     )
     elapsed = t("thinking.elapsed", lang, seconds=max(0, elapsed_s))
+    steps = {"questions": _wizard(1, lang), "plan": _wizard(2, lang)}.get(phase, "")
     body = (
         f'<p><a href="/">{text(jt("nav.back", lang))}</a></p>'
-        f'<div class="card"><h1>{text(t("thinking.heading", lang))}</h1>'
-        f"<p>{text(t(what, lang))}</p>"
+        f'<div class="card"><h1>{text(t("thinking.heading", lang))}</h1>{steps}'
+        f'<p class="now"><span class="pulse" aria-hidden="true"></span> {text(t(what, lang))}</p>'
         f'<p class="muted">{text(elapsed)} {_project_id_html(project_id, lang)}</p></div>'
     )
     return page(t("thinking.title", lang), body, actions=True, refresh=3, lang=lang)
@@ -1699,6 +1733,7 @@ def render_clarify(
     body = (
         f'<p><a href="{text(_project_href(project_id))}">{back}</a></p>'
         f"<h1>{text(t('clarify.heading', lang))} {pid}</h1>"
+        f"{_wizard(1, lang)}"
         f'<p class="meta"><strong>{text(t("clarify.goal", lang))}</strong></p>'
         f'<p class="goal" dir="auto">{text(goal)}</p>'
         f"<p>{text(t('clarify.intro', lang))}</p>"
@@ -1736,9 +1771,9 @@ def render_files(listing: FileListing, *, actions: bool = False, lang: Language 
     pid = listing.project_id
     title = t("files.title", lang, project=pid)
     parts = [
-        f'<p><a href="{text(_project_href(pid))}">← {text(pid)}</a></p>',
+        _back(_project_href(pid), pid, lang, ltr=True),
         f"<h1>{text(t('files.heading', lang, project=pid))}</h1>",
-        f"<p>{_crumbs(pid, listing.dir, lang)}</p>",
+        f'<p class="crumbs">{_crumbs(pid, listing.dir, lang)}</p>',
     ]
     if listing.missing:
         parts.append(f"<p>{text(t('files.none', lang))}</p>")
@@ -1749,38 +1784,47 @@ def render_files(listing: FileListing, *, actions: bool = False, lang: Language 
     if not listing.entries:
         parts.append(f"<p>{text(t('files.empty', lang))}</p>")
     else:
-        download, open_ = text(t("files.download", lang)), text(t("files.open", lang))
-        rows = []
-        for e in listing.entries:
-            name = text(e.name)
-            if e.kind == "dir":
-                href = text(files_href(pid, FilesRoute.LIST, e.path))
-                cell, size, extra = f'<a href="{href}" dir="auto">{name}/</a>', "-", ""
-            elif e.kind == "file":
-                view = text(files_href(pid, FilesRoute.VIEW, e.path))
-                down = text(files_href(pid, FilesRoute.DOWNLOAD, e.path))
-                cell = f'<a href="{view}" dir="auto">{name}</a>'
-                size, extra = _size_text(e.size, lang), f'<a href="{down}">{download}</a>'
-                if is_previewable(e.path):
-                    show = text(preview_href(pid, e.path))
-                    extra += (
-                        f' · <a href="{show}" target="_blank" rel="noopener noreferrer">{open_}</a>'
-                    )
-            else:
-                key = "files.symlink" if e.kind == "symlink" else "files.special"
-                label = text(t(key, lang))
-                cell = f'<span dir="auto">{name}</span> <span class="warn">({label})</span>'
-                size, extra = "-", ""
-            rows.append(f"<tr><td>{cell}</td><td>{text(size)}</td><td>{extra}</td></tr>")
-        name_h, size_h = text(t("files.col.name", lang)), text(t("files.col.size", lang))
-        parts.append(
-            f'<div class="card scroll"><table><thead><tr><th>{name_h}</th><th>{size_h}</th>'
-            f"<th></th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
-        )
+        rows = [_listing_row(pid, e, lang) for e in listing.entries]
+        parts.append(f'<ul class="files-list">{"".join(rows)}</ul>')
         if listing.total > len(listing.entries):
             shown = t("files.showing", lang, shown=len(listing.entries), total=listing.total)
             parts.append(f"<p>{text(shown)}</p>")
     return page(title, "".join(parts), actions=actions, lang=lang)
+
+
+def _listing_row(pid: str, e: FileEntryView, lang: Language) -> str:
+    """One entry of a files listing as a card row (D176): icon, name, size and
+    buttons. Symlinks and special files are shown, never linked."""
+    name = text(e.name)
+    if e.kind == "dir":
+        href = text(files_href(pid, FilesRoute.LIST, e.path))
+        return (
+            f'<li class="file-row"><a class="fname" href="{href}" dir="auto">📁 {name}</a>'
+            f'<span class="fmeta">{text(t("files.folder", lang))}</span></li>'
+        )
+    if e.kind != "file":
+        key = "files.symlink" if e.kind == "symlink" else "files.special"
+        return (
+            f'<li class="file-row missing"><span class="fname" dir="auto">{name}</span>'
+            f'<span class="fmeta warn">({text(t(key, lang))})</span></li>'
+        )
+    view = text(files_href(pid, FilesRoute.VIEW, e.path))
+    down = text(files_href(pid, FilesRoute.DOWNLOAD, e.path))
+    acts = []
+    if is_previewable(e.path):
+        acts.append(
+            f'<a class="button small" href="{text(preview_href(pid, e.path))}" '
+            f'target="_blank" rel="noopener noreferrer">{text(t("files.open", lang))}</a>'
+        )
+    acts.append(
+        f'<a class="button small secondary" href="{down}">{text(t("files.download", lang))}</a>'
+    )
+    icon = "🌐" if is_previewable(e.path) else "📄"
+    return (
+        f'<li class="file-row"><a class="fname" href="{view}" dir="auto">{icon} {name}</a>'
+        f'<span class="fmeta">{text(_size_text(e.size, lang))}</span>'
+        f'<span class="acts">{"".join(acts)}</span></li>'
+    )
 
 
 def _file_note(content: FileContent, lang: Language) -> str:
@@ -1809,8 +1853,8 @@ def render_file(
     down = text(files_href(pid, FilesRoute.DOWNLOAD, path))
     download = text(t("files.download", lang))
     parts = [
-        f'<p><a href="{text(_project_href(pid))}">← {text(pid)}</a> · '
-        f"{_crumbs(pid, parent, lang)}</p>",
+        _back(_project_href(pid), pid, lang, ltr=True),
+        f'<p class="crumbs">{_crumbs(pid, parent, lang)}</p>',
         f'<h1 dir="auto">{text(path.rsplit("/", 1)[-1])}</h1>',
         f'<p>{text(_size_text(content.size, lang))} · <a href="{down}">{download}</a></p>',
     ]
