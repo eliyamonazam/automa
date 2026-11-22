@@ -92,7 +92,7 @@ from automa.webui.files import (
     parse_path_query,
     read_file,
 )
-from automa.webui.i18n import MESSAGES, t
+from automa.webui.i18n import MESSAGES, WELCOME_EXAMPLE_KEYS, t
 from automa.webui.ideas import (
     ANSWER_FIELDS,
     IDEA_FIELDS,
@@ -831,7 +831,10 @@ class WebApp:
             if thinking_pid is not None:
                 return self._thinking(thinking_pid)
             if path == NEW_PATH:
-                return _html(200, render_new_idea(forms, self._lang), security=self._security)
+                document = render_new_idea(
+                    forms, self._lang, goal=example_goal(parts.query, self._lang)
+                )
+                return _html(200, document, security=self._security)
             clarify_pid = parse_clarify_path(path)
             if clarify_pid is not None:
                 try:
@@ -911,6 +914,26 @@ class WebApp:
             *_replace_csp(self._security, FILE_CONTENT_SECURITY_POLICY),
         )
         return Response(200, data, headers)
+
+
+def example_goal(query: str, lang: Language) -> str:
+    """The welcome example named by ``?example=N`` (1-based, D160), else ``""``.
+
+    Only the index comes from the URL; the text is one of the fixed examples, so a link
+    can never put arbitrary text into the idea form."""
+    try:
+        pairs = parse_qsl(query, max_num_fields=2)
+    except ValueError:
+        return ""
+    if len(pairs) != 1 or pairs[0][0] != "example":
+        return ""
+    raw = pairs[0][1]
+    if not (raw.isascii() and raw.isdigit() and len(raw) <= 2):
+        return ""
+    index = int(raw)
+    if not 1 <= index <= len(WELCOME_EXAMPLE_KEYS):
+        return ""
+    return t(WELCOME_EXAMPLE_KEYS[index - 1], lang)
 
 
 def _task_costs(entries: Sequence[LedgerEntry]) -> dict[str, float]:

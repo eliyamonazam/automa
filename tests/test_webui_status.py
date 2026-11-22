@@ -105,11 +105,9 @@ def test_messages_have_both_languages_and_no_fields() -> None:
 
 def test_home_card_shows_chip_and_sentence() -> None:
     doc = rd.render_overview(Overview(projects=(_row("paused"),)), lang="fa")
-    assert (
-        '<span class="badge ps-paused tone-paused" title="وسط کار ایستاده؛ می‌شه ادامه داد.">'
-        '<span class="ico" aria-hidden="true">⏸️</span> متوقف شد</span>'
-    ) in doc
-    assert '<p class="hint">وسط کار ایستاده؛ می‌شه ادامه داد.</p>' in doc
+    assert '<article class="card project cs-paused">' in doc
+    assert "</svg>متوقف</span>" in doc
+    assert '<p class="hint" dir="auto">وسط کار ایستاده؛ می‌شه ادامه داد.</p>' in doc
 
 
 def test_project_page_hero_and_task_cards_use_chips() -> None:
@@ -126,7 +124,8 @@ def test_project_page_hero_and_task_cards_use_chips() -> None:
 def test_unknown_status_is_escaped_and_has_no_tooltip() -> None:
     doc = rd.render_overview(Overview(projects=(_row('"><x>'),)), lang="fa")
     assert "<x>" not in doc and "&quot;&gt;&lt;x&gt;" in doc
-    assert 'class="badge ps-none tone-none">' in doc
+    assert '<article class="card project cs-unknown">' in doc
+    assert '<p class="hint"' not in doc  # an unknown status gets no guessed sentence
     doc = rd.render_project(_project('"><x>', ('"><y>',)), lang="en")
     assert "<x>" not in doc and "<y>" not in doc
     assert 'class="badge st-none tone-none">' in doc

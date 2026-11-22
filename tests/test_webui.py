@@ -328,4 +328,5 @@ def test_welcome_when_empty_in_action_mode() -> None:
     from automa.webui.views import Overview
 
     doc = render_overview(Overview(), actions=True, ideas=True)
-    assert "Welcome" in doc and 'href="/new"' in doc and "For example" in doc
+    assert "build your first idea" in doc and 'href="/new"' in doc
+    assert "start from an example" in doc and 'href="/new?example=1"' in doc

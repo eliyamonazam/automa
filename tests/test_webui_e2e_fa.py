@@ -149,7 +149,8 @@ def _interface(doc: str, site: Site) -> str:
     """Interface text only: recorded data and technical details removed."""
     doc = re.sub(r"<title>.*?</title>", "", doc, flags=re.S)
     doc = re.sub(r"<(pre|code|bdi)\b[^>]*>.*?</\1>", "", doc, flags=re.S)
-    doc = re.sub(r'<(a|span|h1|h2|li|p|td|div)\b[^>]*dir="auto"[^>]*>.*?</\1>', "", doc, flags=re.S)
+    recorded = r'<(a|span|h1|h2|h3|li|p|td|div)\b[^>]*dir="auto"[^>]*>.*?</\1>'
+    doc = re.sub(recorded, "", doc, flags=re.S)
     for value in (*site.ids.values(), site.request_id):
         doc = doc.replace(value, "")
     doc = EVENT_TYPE.sub("", doc)

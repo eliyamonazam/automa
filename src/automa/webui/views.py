@@ -13,6 +13,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 from automa.budget import nusd_to_usd
+from automa.delivery import try_build_delivery
 from automa.l10n import Language
 from automa.plan import Plan
 from automa.plan.models import ResultStatus
@@ -22,6 +23,8 @@ from automa.tools.github import GitHubRead, describe_github_request
 from automa.tools.missing import missing_program
 from automa.tools.request_warnings import RequestWarning
 from automa.tools.web import FetchUrl, describe_fetch_request
+from automa.userinput import UserRequestError
+from automa.webui.cards import CardState, card_state
 from automa.webui.i18n import t
 
 GOAL_PREVIEW_CHARS = 120
@@ -54,6 +57,23 @@ class ProjectRow(_View):
     created_at: datetime
     cost_usd: float
     pending_approvals: int
+    # Home-page card (M16, D160): delivery state, step progress and what waits for the user.
+    delivery: str | None = None  # DeliveryState value; None before a plan / unreadable
+    tasks_total: int = 0
+    tasks_passed: int = 0
+    open_asks: int = 0  # unanswered ask_user questions (D159)
+    questions_waiting: bool = False  # the Executive's questions before the plan (D124)
+
+    @property
+    def card(self) -> CardState:
+        """The home-page card state, always derived from the fields above."""
+        return card_state(
+            self.status,
+            self.delivery,
+            open_asks=self.open_asks,
+            pending_approvals=self.pending_approvals,
+            questions_waiting=self.questions_waiting,
+        )
 
 
 class Overview(_View):
@@ -195,6 +215,16 @@ def _pending(store: ProjectStore, project_id: str) -> list[ApprovalRequest]:
     return store.approvals(project_id).list(ApprovalStatus.PENDING)
 
 
+def _questions_waiting(store: ProjectStore, project_id: str) -> bool:
+    """The Executive asked questions before the plan and they are not answered (D124)."""
+    try:
+        if store.has_plan(project_id) or store.has_clarifications(project_id):
+            return False
+        return bool(store.load_questions(project_id))
+    except (ProjectStoreError, OSError):
+        return False
+
+
 def build_overview(
     store: ProjectStore, spent_nusd: dict[str, int], *, include_tests: bool = True
 ) -> Overview:
@@ -221,6 +251,14 @@ def build_overview(
         except _READ_ERRORS as e:
             errors.append(f"{p.id}: approvals unreadable ({e})")
             pending = 0
+        try:
+            asks = len(store.user_requests(p.id).pending())
+        except (UserRequestError, ProjectStoreError, OSError) as e:
+            errors.append(f"{p.id}: questions unreadable ({e})")
+            asks = 0
+        delivery = try_build_delivery(store, p.id)
+        questions = delivery is None and _questions_waiting(store, p.id)
+        state = delivery.state.value if delivery is not None else None
         rows.append(
             ProjectRow(
                 id=p.id,
@@ -230,6 +268,11 @@ def build_overview(
                 created_at=p.created_at,
                 cost_usd=nusd_to_usd(spent_nusd.get(p.id, 0)),
                 pending_approvals=pending,
+                delivery=state,
+                tasks_total=len(delivery.tasks) if delivery is not None else 0,
+                tasks_passed=delivery.passed_tasks if delivery is not None else 0,
+                open_asks=asks,
+                questions_waiting=questions,
             )
         )
     return Overview(

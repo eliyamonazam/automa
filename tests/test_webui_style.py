@@ -122,16 +122,17 @@ def test_style_is_not_mistaken_for_an_action_word() -> None:
 
 def test_overview_shows_projects_as_cards(store: ProjectStore) -> None:
     doc = rd.render_overview(build_overview(store, {}))
-    assert '<div class="cards"><article class="card project ps-' in doc
-    assert f'<p class="goal" dir="auto">{PERSIAN}</p>' in doc
+    assert '<div class="cards"><article class="card project cs-' in doc
+    assert f'<h3 dir="auto">{PERSIAN}</h3>' in doc
     assert "<table" not in doc
-    assert 'href="/projects/p1"' in doc and "cost: $" in doc and "approvals: 0" in doc
+    assert 'href="/projects/p1"' in doc and "cost: $" in doc and 'class="steps-text"' in doc
 
 
 def test_overview_card_marks_pending_approvals(store: ProjectStore) -> None:
     _request(store, "p1")
     doc = rd.render_overview(build_overview(store, {}))
-    assert '<span class="badge warn">1 pending</span>' in doc
+    assert "Waiting for your answer" in doc and "1 request(s) to approve" in doc
+    assert '<a class="button" href="/projects/p1#approvals">' in doc
 
 
 def test_overview_card_escapes_goal(tmp_path: Path) -> None:

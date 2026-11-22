@@ -103,7 +103,8 @@ def test_overview_page_with_ledger_spending(workspace: Path) -> None:
     r = _app(workspace).handle("GET", "/", GOOD_HOST)
     assert r.status == 200
     body = r.body.decode()
-    assert "p1" in body and "$0.75" in body and "1 pending" in body
+    assert 'href="/projects/p1"' in body and "$0.75" in body
+    assert "1 request(s) to approve" in body and 'href="/projects/p1#approvals"' in body
     assert "<b>a</b>" not in body and "&lt;b&gt;a&lt;/b&gt;" in body
 
 

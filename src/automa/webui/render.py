@@ -35,6 +35,7 @@ from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.tools.missing import install_command
 from automa.userinput import UserRequest
 from automa.webui.bundle import bundle_href
+from automa.webui.cards import EMPTY_ART, ICONS, CardState, card_hint, card_label, ct
 from automa.webui.files import (
     MAX_IMAGE_BYTES,
     FileContent,
@@ -61,7 +62,14 @@ from automa.webui.stops import MESSAGES as STOP_MESSAGES
 from automa.webui.stops import StopInfo, StopLine, describe_stop
 from automa.webui.stops import st as stop_text
 from automa.webui.upload import request_action_href
-from automa.webui.views import ApprovalView, Overview, ProjectView, TaskRow, project_title
+from automa.webui.views import (
+    ApprovalView,
+    Overview,
+    ProjectRow,
+    ProjectView,
+    TaskRow,
+    project_title,
+)
 
 # Joiners needed by Persian text; every other Cf character (incl. bidi controls) is escaped.
 _ALLOWED_FORMAT_CHARS = frozenset({"‌", "‍"})
@@ -244,9 +252,63 @@ button:hover,.button:hover{filter:brightness(1.08);transform:translateY(-1px)}
 .button.secondary{background:var(--card);color:var(--fg);border-color:var(--line);box-shadow:none}
 .button.small{padding:3px 12px;font-size:.88em;border-radius:10px}
 details>summary{cursor:pointer;color:var(--muted)}
-@media (prefers-color-scheme: dark){button,.button{color:#0d0f16}
+.home-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 18px;margin:6px 0 4px}
+.home-head h1{margin:0;flex:1 1 auto}.home-head .mode{flex-basis:100%;margin:0;font-size:.9em}
+.spend{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin:0;
+background:var(--card);border:1px solid var(--line);border-radius:999px;padding:4px 14px}
+.spend .icon{color:var(--accent)}
+.icon{flex:none;vertical-align:middle}
+.topbar nav a.newidea{margin-inline-start:6px;color:#fff;background:var(--accent)}
+.topbar nav a.newidea:hover{color:#fff;background:var(--accent)}
+.waiting{background:linear-gradient(180deg,color-mix(in srgb,var(--info) 70%,var(--card)),
+var(--card));border:1px solid var(--line);border-top:5px solid var(--accent);
+border-radius:var(--radius);padding:14px 18px;margin:14px 0}
+.waiting h2{display:flex;align-items:center;gap:8px;margin:0;color:var(--infofg)}
+.waiting>p{margin:.2em 0 .6em}
+.waiting-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.waiting-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;background:var(--card);
+border:1px solid var(--line);border-radius:12px;padding:10px 14px}
+.wr-text{display:flex;flex-direction:column;flex:1 1 220px;min-width:0}
+.wr-title{font-weight:800;color:var(--fg);text-decoration:none;overflow-wrap:anywhere}
+.waiting-row .button{min-height:44px}
+.project{padding:0}.project .cover{display:block;padding:14px 18px 12px;color:inherit;
+text-decoration:none;height:100%}
+.project h3{font-size:1.08em;margin:.35em 0 .1em;overflow-wrap:anywhere}
+.project .hint{margin:0 0 .5em}
+.project .goal{font-size:.9em;margin:0 0 .2em;display:-webkit-box;-webkit-line-clamp:2;
+-webkit-box-orient:vertical;overflow:hidden;white-space:normal}
+.state{display:inline-flex;align-items:center;gap:6px;font-weight:800;font-size:.85em;
+padding:2px 12px 2px 10px;border-radius:999px;background:var(--chip);color:var(--muted)}
+.cs-ready .state{background:var(--ok);color:var(--okfg)}
+.cs-partial .state{background:var(--busy);color:var(--busyfg)}
+.cs-waiting .state{background:var(--info);color:var(--infofg)}
+.cs-working .state{background:var(--busy);color:var(--busyfg)}
+.cs-ready::before{background:var(--okline)}.cs-partial::before{background:var(--busyline)}
+.cs-working::before{background:var(--busyline)}.cs-paused::before{background:#98a2b3}
+.cs-to_start::before{background:var(--line)}
+.progress-line{display:flex;align-items:center;gap:10px;font-size:.85em;color:var(--muted)}
+.mini-bar{flex:1 1 auto;height:8px;border-radius:999px;background:var(--chip);overflow:hidden}
+.mini-bar span{display:block;height:100%;border-radius:999px;
+background:linear-gradient(90deg,var(--accent),var(--accentb))}
+.cs-ready .mini-bar span{background:var(--okline)}
+.steps-text{white-space:nowrap}
+.card-foot{display:flex;flex-wrap:wrap;gap:4px 16px;margin:.6em 0 0;color:var(--muted);
+font-size:.85em}.card-foot span{display:inline-flex;align-items:center;gap:5px}
+.card-foot .icon{width:16px;height:16px}
+.empty{text-align:center;padding:28px 20px}.empty h2{margin:.4em 0 .2em;font-size:1.35em}
+.empty>p{max-width:36em;margin:.4em auto}
+.button.big{padding:12px 26px;font-size:1.05em;min-height:48px}
+.examples{list-style:none;margin:8px auto 0;padding:0;display:grid;gap:8px;max-width:40em;
+text-align:start}
+.example{display:block;padding:12px 16px;border:1px solid var(--line);border-radius:12px;
+background:var(--soft);color:var(--fg);text-decoration:none}
+.example:hover{border-color:var(--accent)}
+@media (prefers-color-scheme: dark){button,.button,.topbar nav a.newidea,
+.topbar nav a.newidea:hover{color:#0d0f16}
 .button.secondary{color:var(--fg)}}
 @media (max-width:640px){body{font-size:15px}.wrap{padding:12px 10px 40px}
+.topbar{gap:10px}.brand{font-size:1em}.topbar nav a{padding:4px 8px}
+.waiting-row .button{width:100%;justify-content:center}
 .hero{padding:16px 18px;border-radius:18px}.hero h1{font-size:1.35em}
 .cards{grid-template-columns:1fr}
 .steps{flex-direction:column}.steps li{flex:none;text-align:start;padding:0 0 8px 0;
@@ -316,10 +378,12 @@ def page(
     refresh: int | None = None,
     img_src: str | None = None,
     lang: Language = "en",
+    new_idea: bool = False,
 ) -> str:
     """A complete HTML document around already-safe ``body``.
 
     ``lang`` (D140) sets ``<html lang>``; Persian pages are ``dir="rtl"``.
+    ``new_idea`` (D160) puts the "+ New idea" button in the top bar.
 
     In action mode the CSP allows forms to post to this server only, and the referrer
     policy is ``same-origin`` so the browser sends a real ``Origin`` with each post
@@ -343,16 +407,21 @@ def page(
         '<meta name="color-scheme" content="light dark">'
         f'<meta name="referrer" content="{referrer}">{reload}'
         f"<title>{text(title)}</title><style>{_STYLE}</style></head>"
-        f'<body>{_topbar(lang)}<main class="wrap">{body}</main></body></html>\n'
+        f'<body>{_topbar(lang, new_idea=new_idea)}<main class="wrap">{body}</main></body></html>\n'
     )
 
 
-def _topbar(lang: Language) -> str:
-    """The app bar on every page: the name (home link) and the project list."""
+def _topbar(lang: Language, *, new_idea: bool = False) -> str:
+    """The app bar on every page: the name (home link), the project list and, when
+    ideas can be planned from the browser, "+ New idea" (D160)."""
+    idea = ""
+    if new_idea:
+        label = text(t("overview.new_idea", lang).lstrip("+ "))
+        idea = f'<a class="button small newidea" href="/new">{ICONS["plus"]}{label}</a>'
     return (
         '<header class="topbar"><a class="brand" href="/">'
         '<span class="logo" aria-hidden="true">A</span>Automa</a>'
-        f'<nav><a href="/">{text(t("nav.projects", lang))}</a></nav></header>'
+        f'<nav><a href="/">{text(t("nav.projects", lang))}</a>{idea}</nav></header>'
     )
 
 
@@ -383,29 +452,43 @@ def render_overview(
     tz: tzinfo | None = None,
     now: datetime | None = None,
 ) -> str:
-    """The project list. ``ideas`` (action mode with a planner, D124) adds the
-    "New idea" link; ``rate`` (toman per USD) shows costs first in toman (D133);
+    """The home page (D160): projects waiting for the user's answer first (with an
+    "Answer" button), then every project as a card with its delivery state, step
+    progress and cost. ``ideas`` (action mode with a planner, D124) adds "+ New idea"
+    to the top bar; ``rate`` (toman per USD) shows costs first in toman (D133);
     ``totals`` is (spent today, this month); ``lang`` translates the page and
     ``now``/``tz`` show times relative and local (D140)."""
+    can_plan = actions and ideas
     mode = t("overview.mode.actions" if actions else "overview.mode.readonly", lang)
     title = t("overview.title", lang)
-    new_idea = text(t("overview.new_idea", lang))
-    hero = [f'<header class="hero"><h1>{text(title)}</h1>', f"<p>{text(mode)}</p>"]
-    if actions and ideas and view.projects:
-        hero.append(f'<p><a class="button" href="/new"><strong>{new_idea}</strong></a></p>')
-    hero.append("</header>")
-    parts = ["".join(hero)]
-    if totals is not None:
+    head = [f'<header class="home-head"><h1>{text(title)}</h1>']
+    if totals is not None and (view.projects or totals[1] > 0):
         today, month = totals
         spent_today = text(t("overview.spent_today", lang))
         this_month = text(t("overview.this_month", lang))
-        parts.append(
-            f'<div class="stats"><div class="stat"><span class="label">{spent_today}</span> '
-            f'<span class="value"><strong>{text(money(today, rate, lang=lang))}</strong>'
-            f'</span></div><div class="stat"><span class="label">{this_month}</span> '
-            f'<span class="value"><strong>{text(money(month, rate, lang=lang))}</strong>'
-            "</span></div></div>"
+        head.append(
+            f'<p class="spend">{ICONS["wallet"]}<span>{this_month} '
+            f"<strong>{text(money(month, rate, lang=lang))}</strong></span>"
+            f'<span class="muted">{spent_today} {text(money(today, rate, lang=lang))}</span></p>'
         )
+    head.append(f'<p class="muted mode">{text(mode)}</p></header>')
+    parts = ["".join(head)]
+    if not view.projects:
+        parts.append(_welcome(actions=actions, ideas=ideas, lang=lang))
+    else:
+        when = _when_fn(lang, tz, now)
+        waiting = [p for p in view.projects if p.card is CardState.WAITING]
+        if waiting:
+            items = "".join(_waiting_row(p, can_plan, lang) for p in waiting)
+            parts.append(
+                f'<section class="waiting"><h2>{ICONS[CardState.WAITING]}'
+                f"{text(ct('waiting.heading', lang))}</h2>"
+                f'<p class="muted">{text(ct("waiting.lead", lang))}</p>'
+                f'<ul class="waiting-list">{items}</ul></section>'
+            )
+        cards = "".join(_project_card(p, rate, lang, when) for p in view.projects)
+        parts.append(f"<h2>{text(ct('all.heading', lang))}</h2>")
+        parts.append(f'<div class="cards">{cards}</div>')
     if view.showing_tests:
         parts.append(f'<p class="muted"><a href="/">{text(t("overview.hide_tests", lang))}</a></p>')
     elif view.hidden_tests:
@@ -414,52 +497,110 @@ def render_overview(
             f'<p class="muted">{text(hidden)} · '
             f'<a href="/?tests=1">{text(t("overview.show_tests", lang))}</a></p>'
         )
-    if not view.projects:
-        parts.append(_welcome(actions=actions, ideas=ideas, lang=lang))
-    else:
-        cards = []
-        for p in view.projects:
-            waiting = (
-                '<span class="badge warn">'
-                f"{text(t('overview.pending', lang, count=p.pending_approvals))}</span>"
-                if p.pending_approvals
-                else text(t("overview.no_pending", lang))
-            )
-            cost = t("overview.cost", lang, amount=money(p.cost_usd, rate, lang=lang))
-            created = t("overview.created", lang, when=_when(p.created_at, lang, tz, now))
-            cards.append(
-                f'<article class="card project ps-{_ps_class(p.status)}">'
-                f'<h2 dir="auto"><a href="{text(_project_href(p.id))}">{text(p.title or p.id)}</a> '
-                f"{_chip_html(project_chip(p.status, lang), f'ps-{_ps_class(p.status)}')}</h2>"
-                f'<p class="muted"><code>{text(p.id)}</code></p>'
-                f'<p class="goal" dir="auto">{text(p.goal_preview)}</p>'
-                f"{_hint_html(project_chip(p.status, lang))}"
-                f'<p class="chips"><span>{text(cost)}</span>'
-                f"<span>{waiting}</span>"
-                f"<span>{text(created)}</span></p></article>"
-            )
-        parts.append('<div class="cards">' + "".join(cards) + "</div>")
     parts.append(_errors(view.errors, lang))
-    return page(title, "".join(parts), actions=actions, lang=lang)
+    return page(title, "".join(parts), actions=actions, lang=lang, new_idea=can_plan)
+
+
+def _answer_href(p: ProjectRow, can_plan: bool) -> str:
+    """Where "Answer" goes: the idea's question form, the open question card, or the
+    approvals of the project page (D160)."""
+    base = _project_href(p.id)
+    if p.questions_waiting:
+        return base + "/clarify" if can_plan else base
+    if p.open_asks:
+        return base + "#ask"
+    return base + "#approvals"
+
+
+def _waiting_reasons(p: ProjectRow, lang: Language) -> str:
+    reasons = []
+    if p.questions_waiting:
+        reasons.append(ct("card.why.questions", lang))
+    if p.open_asks:
+        reasons.append(ct("card.why.asks", lang, count=p.open_asks))
+    if p.pending_approvals:
+        reasons.append(ct("card.why.approvals", lang, count=p.pending_approvals))
+    return " · ".join(reasons)
+
+
+def _waiting_row(p: ProjectRow, can_plan: bool, lang: Language) -> str:
+    href = text(_answer_href(p, can_plan))
+    return (
+        f'<li class="waiting-row"><div class="wr-text">'
+        f'<a class="wr-title" dir="auto" href="{text(_project_href(p.id))}">'
+        f"{text(p.title or p.id)}</a>"
+        f'<span class="muted">{text(_waiting_reasons(p, lang))}</span></div>'
+        f'<a class="button" href="{href}">{ICONS["reply"]}{text(ct("card.answer", lang))}</a></li>'
+    )
+
+
+def _project_card(p: ProjectRow, rate: float | None, lang: Language, when: When) -> str:
+    """One project card: state (icon, label, plain sentence), step progress, cost."""
+    state = p.card
+    label = text(card_label(state, lang, p.status))
+    hint = card_hint(state, lang)
+    if state is CardState.WAITING:
+        hint = _waiting_reasons(p, lang) or hint
+    hint_html = f'<p class="hint" dir="auto">{text(hint)}</p>' if hint else ""
+    if p.tasks_total:
+        pct = round(100 * p.tasks_passed / p.tasks_total)
+        steps = ct("card.steps", lang, done=p.tasks_passed, total=p.tasks_total)
+        progress = (
+            f'<div class="mini-bar" role="img" aria-label="{text(steps)}">'
+            f'<span style="width:{pct}%"></span></div>'
+            f'<span class="steps-text">{text(steps)}</span>'
+        )
+    else:
+        progress = f'<span class="steps-text">{text(ct("card.no_plan", lang))}</span>'
+    cost = text(t("overview.cost", lang, amount=money(p.cost_usd, rate, lang=lang)))
+    created = text(t("overview.created", lang, when=when(p.created_at)))
+    goal = ""
+    if p.goal_preview and p.goal_preview != p.title:
+        goal = f'<p class="goal muted" dir="auto">{text(p.goal_preview)}</p>'
+    return (
+        f'<article class="card project cs-{state.value}">'
+        f'<a class="cover" href="{text(_project_href(p.id))}">'
+        f'<span class="state">{ICONS[state]}{label}</span>'
+        f'<h3 dir="auto">{text(p.title or p.id)}</h3>'
+        f"{goal}"
+        f"{hint_html}"
+        f'<div class="progress-line">{progress}</div>'
+        f'<p class="card-foot"><span>{ICONS["wallet"]}{cost}</span>'
+        f"<span>{ICONS['clock']}{created}</span></p></a></article>"
+    )
 
 
 WELCOME_EXAMPLES = tuple(MESSAGES[k]["en"] for k in WELCOME_EXAMPLE_KEYS)
 
 
+def example_href(index: int) -> str:
+    """The "New idea" form pre-filled with welcome example ``index`` (1-based, D160)."""
+    if not 1 <= index <= len(WELCOME_EXAMPLE_KEYS):
+        raise ValueError(f"no welcome example {index}")
+    return f"/new?example={index}"
+
+
 def _welcome(*, actions: bool, ideas: bool, lang: Language = "en") -> str:
-    """The empty home page: what Automa does and how to start (D138)."""
+    """The empty home page (D138, D160): a friendly picture, what Automa does and,
+    in action mode with a planner, three examples that open a pre-filled idea form."""
     if not (actions and ideas):
         return (
-            f'<div class="card"><h2>{text(t("welcome.none.heading", lang))}</h2>'
+            f'<div class="card empty">{EMPTY_ART}'
+            f"<h2>{text(t('welcome.none.heading', lang))}</h2>"
             f"<p>{text(t('welcome.none.body', lang))}</p></div>"
         )
-    examples = "".join(f'<li dir="auto">{text(t(k, lang))}</li>' for k in WELCOME_EXAMPLE_KEYS)
-    new_idea = text(t("overview.new_idea", lang))
+    examples = "".join(
+        f'<li><a class="example" dir="auto" href="{text(example_href(i))}">'
+        f"{text(t(k, lang))}</a></li>"
+        for i, k in enumerate(WELCOME_EXAMPLE_KEYS, start=1)
+    )
+    new_idea = text(t("overview.new_idea", lang).lstrip("+ "))
     return (
-        f'<div class="card"><h2>{text(t("welcome.heading", lang))}</h2>'
-        f"<p>{text(t('welcome.body', lang))}</p>"
-        f'<p><a class="button" href="/new"><strong>{new_idea}</strong></a></p>'
-        f'<p class="muted">{text(t("welcome.examples", lang))}</p><ul>{examples}</ul></div>'
+        f'<div class="card empty">{EMPTY_ART}<h2>{text(ct("empty.heading", lang))}</h2>'
+        f"<p>{text(ct('empty.body', lang))}</p>"
+        f'<p><a class="button big" href="/new">{ICONS["plus"]}{new_idea}</a></p>'
+        f'<p class="muted">{text(ct("empty.try", lang))}</p>'
+        f'<ul class="examples">{examples}</ul></div>'
     )
 
 
@@ -580,6 +721,8 @@ def render_project(
     if notice:
         parts.append(f'<p class="badge" dir="auto">{text(notice)}</p>')
     parts.append(_hero_and_journey(view, journey, lang))
+    if asks:
+        parts.append('<div id="ask"></div>')  # target of the home page's "Answer" (D160)
     for ask in asks:
         confirm = run is not None and run.needs_confirm
         parts.append(_ask_card(view.id, ask, forms, confirm, lang))
@@ -633,7 +776,8 @@ def render_project(
         parts.append(_run_panel(view.id, run, forms, lang, when))
     count = len(view.pending)
     if view.pending:
-        parts.append(f"<h2>{text(t('approvals.heading', lang, count=count))}</h2>")
+        heading = text(t("approvals.heading", lang, count=count))
+        parts.append(f'<h2 id="approvals">{heading}</h2>')
         parts.append("".join(_approval(view.id, a, forms, lang, when) for a in view.pending))
     if view.plan_version is None:
         parts.append(f"<h2>{text(t('plan.heading', lang))}</h2><p>{text(t('plan.none', lang))}</p>")
@@ -1234,15 +1378,17 @@ def _technical_log(run: RunPanel, lang: Language = "en") -> str:
     return "".join(parts)
 
 
-def render_new_idea(forms: ActionForms, lang: Language = "en") -> str:
-    """The "New idea" form (D124): the goal and whether to ask questions first."""
+def render_new_idea(forms: ActionForms, lang: Language = "en", *, goal: str = "") -> str:
+    """The "New idea" form (D124): the goal and whether to ask questions first.
+    ``goal`` pre-fills the text (a welcome example, D160); it is escaped."""
     body = (
         f'<p><a href="/">{text(jt("nav.back", lang))}</a></p>'
         f"<h1>{text(t('idea.heading', lang))}</h1>"
         f"<p>{text(t('idea.intro', lang))}</p>"
         f'<form class="card" method="post" action="/new">{_hidden("csrf", forms.csrf_token)}'
         f'<p><textarea name="goal" rows="8" cols="80" maxlength="{MAX_GOAL_CHARS}" '
-        f'dir="auto" required placeholder="{text(t("idea.placeholder", lang))}"></textarea></p>'
+        f'dir="auto" required placeholder="{text(t("idea.placeholder", lang))}">'
+        f"{text(goal)}</textarea></p>"
         f'<p><label><input type="checkbox" name="ask" value="{ASK_VALUE}" checked> '
         f"{text(t('idea.ask', lang))}</label></p>"
         f'<p><button type="submit">{text(t("idea.submit", lang))}</button></p></form>'
