@@ -1,5 +1,7 @@
 """Human status chips (M13): each project status and task state as an icon, a short
-word and one plain sentence, in a fixed colour tone.
+word and one plain sentence, in a fixed colour tone. The icon is the name of a fixed
+inline SVG in :data:`STATUS_ICONS` (M16, D161; emoji before), drawn the same on
+every computer and loading nothing.
 
 Pure: a mapping from the recorded status value to display text. An unknown value
 is shown as recorded with a neutral tone and no sentence (never guessed). Text comes
@@ -20,29 +22,58 @@ from automa.webui.i18n import check_messages, status_label, task_state_label
 
 ChipTone = Literal["ok", "busy", "paused", "bad", "info", "none"]
 
-# status value -> (icon, tone)
+# Inline SVG icons (24x24, stroke = currentColor), the same style as the home-page
+# cards (D160). Fixed strings, never recorded text.
+_SVG = (
+    '<svg class="icon" viewBox="0 0 24 24" width="16" height="16" fill="none" '
+    'stroke="currentColor" stroke-width="2.2" stroke-linecap="round" '
+    'stroke-linejoin="round" aria-hidden="true" focusable="false">{}</svg>'
+)
+STATUS_ICONS: Mapping[str, str] = MappingProxyType(
+    {
+        "sparkle": _SVG.format(
+            '<path d="M12 4v4M12 16v4M4 12h4M16 12h4"/><path d="m7 7 2 2"/>'
+            '<path d="m15 15 2 2"/><path d="m17 7-2 2"/><path d="m9 15-2 2"/>'
+        ),
+        "pencil": _SVG.format('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>'),
+        "clock": _SVG.format('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+        "pause": _SVG.format(
+            '<circle cx="12" cy="12" r="9"/><path d="M10 9v6"/><path d="M14 9v6"/>'
+        ),
+        "check": _SVG.format('<circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/>'),
+        "cross": _SVG.format(
+            '<circle cx="12" cy="12" r="9"/><path d="m9 9 6 6"/><path d="m15 9-6 6"/>'
+        ),
+        "search": _SVG.format('<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/>'),
+        "ban": _SVG.format('<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>'),
+        "queue": _SVG.format('<circle cx="12" cy="12" r="9" stroke-dasharray="3 3"/>'),
+        "dot": _SVG.format('<circle cx="12" cy="12" r="3"/>'),
+    }
+)
+
+# status value -> (icon name in STATUS_ICONS, tone)
 PROJECT_LOOK: Mapping[str, tuple[str, ChipTone]] = MappingProxyType(
     {
-        "new": ("✨", "info"),
-        "planning": ("📝", "info"),
-        "running": ("⏳", "busy"),
-        "paused": ("⏸️", "paused"),
-        "done": ("✅", "ok"),
-        "failed": ("❌", "bad"),
+        "new": ("sparkle", "info"),
+        "planning": ("pencil", "info"),
+        "running": ("clock", "busy"),
+        "paused": ("pause", "paused"),
+        "done": ("check", "ok"),
+        "failed": ("cross", "bad"),
     }
 )
 TASK_LOOK: Mapping[str, tuple[str, ChipTone]] = MappingProxyType(
     {
-        "none": ("🕒", "info"),
-        "pending": ("🕒", "info"),
-        "running": ("⏳", "busy"),
-        "verifying": ("🔍", "busy"),
-        "passed": ("✅", "ok"),
-        "failed": ("❌", "bad"),
-        "blocked": ("⛔", "bad"),
+        "none": ("queue", "info"),
+        "pending": ("queue", "info"),
+        "running": ("clock", "busy"),
+        "verifying": ("search", "busy"),
+        "passed": ("check", "ok"),
+        "failed": ("cross", "bad"),
+        "blocked": ("ban", "bad"),
     }
 )
-UNKNOWN_ICON = "•"
+UNKNOWN_ICON = "dot"
 
 _RAW: dict[str, dict[Language, str]] = {
     "hint.project.new": {
@@ -98,7 +129,7 @@ MESSAGES: Mapping[str, Mapping[Language, str]] = MappingProxyType(
 
 @dataclass(frozen=True)
 class Chip:
-    icon: str  # fixed value from the tables above
+    icon: str  # fixed name in STATUS_ICONS (from the tables above)
     label: str  # plain text (unknown status: as recorded; the caller escapes it)
     hint: str  # plain text, "" for an unknown status
     tone: ChipTone  # fixed value

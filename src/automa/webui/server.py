@@ -113,6 +113,7 @@ from automa.webui.render import (
     CONTENT_SECURITY_POLICY,
     ActionForms,
     RunPanel,
+    TopBar,
     page,
     page_csp,
     render_clarify,
@@ -123,6 +124,7 @@ from automa.webui.render import (
     render_project,
     render_thinking,
     text,
+    top_bar,
     visible,
 )
 from automa.webui.runs import (
@@ -137,6 +139,7 @@ from automa.webui.runs import (
     parse_start_path,
     parse_stop_path,
 )
+from automa.webui.static import STATIC_HEADERS, is_static_path, static_asset
 from automa.webui.upload import (
     DECLINE_FIELDS,
     FILE_FIELD,
@@ -474,10 +477,30 @@ class WebApp:
             return refused.with_headers(("Allow", ", ".join(self._methods)))
         if host is None or host.strip().lower() not in self._allowed:
             return self.error(421, "error.title.unexpected_host", code="open_printed_address")
-        if method == "POST":
-            return self._post(target, headers, body)
-        # HEAD gets the same status and headers; the handler omits the body.
-        return self._route(target, host.strip().lower())
+        if method != "POST" and is_static_path(urlsplit(target).path):
+            return self._static(urlsplit(target).path)
+        totals = self._totals()
+        with top_bar(self._top_bar(totals)):
+            if method == "POST":
+                return self._post(target, headers, body)
+            # HEAD gets the same status and headers; the handler omits the body.
+            return self._route(target, host.strip().lower(), totals)
+
+    def _top_bar(self, totals: tuple[float, float] | None) -> TopBar:
+        """The app bar of this request's pages (D161)."""
+        return TopBar(
+            new_idea=self._ideas is not None and self._actions is not None,
+            month_usd=None if totals is None else totals[1],
+            rate=self._rate,
+        )
+
+    def _static(self, path: str) -> Response:
+        """A fixed asset (the font and its licence, D161); anything else is 404."""
+        asset = static_asset(path)
+        if asset is None:
+            return self.error(404, "error.title.not_found")
+        data, mime = asset
+        return Response(200, data, (("Content-Type", mime), *STATIC_HEADERS))
 
     def _post(self, target: str, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
         if self._actions is None:  # POST is only allowed in action mode (never reached)
@@ -792,7 +815,9 @@ class WebApp:
         )
         return Response(200, data, headers)
 
-    def _route(self, target: str, host: str = "") -> Response:
+    def _route(
+        self, target: str, host: str = "", totals: tuple[float, float] | None = None
+    ) -> Response:
         parts = urlsplit(target)
         path = parts.path
         actions = self._actions is not None
@@ -819,7 +844,7 @@ class WebApp:
                 actions=actions,
                 ideas=self._ideas is not None,
                 rate=self._rate,
-                totals=self._totals(),
+                totals=totals,
                 lang=self._lang,
                 tz=self._tz,
                 now=self._clock(),

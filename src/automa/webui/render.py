@@ -3,9 +3,9 @@
 Every piece of recorded text (goals, titles, reasons, arguments — some of it written by
 a model) goes through :func:`text`: control, format and bidi characters are shown as
 visible escapes (so they cannot reorder or hide what is being reviewed) and the result
-is HTML-escaped. Pages have no scripts and no external resources, and a strict
-Content-Security-Policy; forms appear only in action mode (D123) and post only to
-this server. Nothing here reads files or the network.
+is HTML-escaped. Pages have no scripts and no external resources (the one font is
+served by this server, D161), and a strict Content-Security-Policy; forms appear only
+in action mode (D123) and post only to this server. Nothing here reads files or the network.
 """
 
 from __future__ import annotations
@@ -13,7 +13,9 @@ from __future__ import annotations
 import html
 import json
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, tzinfo
 from string import Formatter
@@ -54,10 +56,11 @@ from automa.webui.i18n import (
 from automa.webui.ideas import ASK_VALUE
 from automa.webui.journey import MESSAGES as JOURNEY_MESSAGES
 from automa.webui.journey import Journey, build_journey, jt
-from automa.webui.money import money, money_range, nusd_money
+from automa.webui.money import dollars, money, money_range, nusd_money, toman_text
 from automa.webui.preview import is_previewable, preview_href
 from automa.webui.progress import REFRESH_SECONDS, CostProgress, ProgressView, UnusualSpending
-from automa.webui.status import Chip, project_chip, task_chip
+from automa.webui.static import FONT_FACE
+from automa.webui.status import STATUS_ICONS, Chip, project_chip, task_chip
 from automa.webui.stops import MESSAGES as STOP_MESSAGES
 from automa.webui.stops import StopInfo, StopLine, describe_stop
 from automa.webui.stops import st as stop_text
@@ -75,7 +78,7 @@ from automa.webui.views import (
 _ALLOWED_FORMAT_CHARS = frozenset({"‌", "‍"})
 
 CONTENT_SECURITY_POLICY = (
-    "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; "
+    "default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; font-src 'self'; "
     "form-action 'none'; base-uri 'none'"
 )
 # Action mode (D123): forms may post only to this server; nothing else changes.
@@ -83,8 +86,9 @@ ACTION_CONTENT_SECURITY_POLICY = CONTENT_SECURITY_POLICY.replace(
     "form-action 'none'", "form-action 'self'"
 )
 
-# Local fonts only (the CSP loads nothing): Persian-capable faces first — Vazirmatn if
-# installed, Segoe UI/Tahoma on Windows, Noto on Linux — then the system UI face (D129).
+# Vazirmatn first: the font file shipped with Automa and served from /static/ (D161);
+# if it cannot load, Persian-capable local faces — Segoe UI/Tahoma on Windows, Noto on
+# Linux — then the system UI face (D129).
 FONT_STACK = (
     '"Vazirmatn","Segoe UI",Tahoma,"Noto Sans Arabic","Noto Naskh Arabic",'
     '"Noto Sans",system-ui,-apple-system,sans-serif'
@@ -258,6 +262,12 @@ details>summary{cursor:pointer;color:var(--muted)}
 background:var(--card);border:1px solid var(--line);border-radius:999px;padding:4px 14px}
 .spend .icon{color:var(--accent)}
 .icon{flex:none;vertical-align:middle}
+.topbar nav{align-items:center}
+.topbar .month{display:inline-flex;align-items:center;gap:6px;color:var(--muted);
+font-size:.88em;padding:3px 12px;border:1px solid var(--line);border-radius:999px;
+white-space:nowrap}.topbar .month strong{color:var(--fg)}.topbar .month .icon{color:var(--accent);
+width:16px;height:16px}
+.badge .icon{width:15px;height:15px}
 .topbar nav a.newidea{margin-inline-start:6px;color:#fff;background:var(--accent)}
 .topbar nav a.newidea:hover{color:#fff;background:var(--accent)}
 .waiting{background:linear-gradient(180deg,color-mix(in srgb,var(--info) 70%,var(--card)),
@@ -308,6 +318,8 @@ background:var(--soft);color:var(--fg);text-decoration:none}
 .button.secondary{color:var(--fg)}}
 @media (max-width:640px){body{font-size:15px}.wrap{padding:12px 10px 40px}
 .topbar{gap:10px}.brand{font-size:1em}.topbar nav a{padding:4px 8px}
+.topbar nav{gap:4px}.topbar .month{padding:3px 8px}.topbar .month .lbl{display:none}
+.topbar nav a.projects{display:none}.topbar{padding-inline:12px}
 .waiting-row .button{width:100%;justify-content:center}
 .hero{padding:16px 18px;border-radius:18px}.hero h1{font-size:1.35em}
 .cards{grid-template-columns:1fr}
@@ -315,6 +327,9 @@ background:var(--soft);color:var(--fg);text-decoration:none}
 min-width:0}
 .steps li::before{display:none}.steps .name,.steps .when{display:inline;margin:0 8px}
 .file-row .acts{margin-inline-start:0}}
+@media (max-width:430px){.topbar nav a.newidea{padding:6px 9px}
+.topbar .newidea .lbl{position:absolute;width:1px;height:1px;overflow:hidden;
+clip-path:inset(50%);white-space:nowrap}}
 """
 )
 
@@ -353,6 +368,32 @@ def _project_href(project_id: str) -> str:
 
 
 @dataclass(frozen=True)
+class TopBar:
+    """What the app bar shows on every page (D161): "+ New idea" when ideas can be
+    planned from the browser, and this month's spending (USD; ``None``: not shown)
+    in toman first when ``rate`` is known."""
+
+    new_idea: bool = False
+    month_usd: float | None = None
+    rate: float | None = None
+
+
+_TOP_BAR: ContextVar[TopBar] = ContextVar("automa_top_bar", default=TopBar())  # noqa: B039
+
+
+@contextmanager
+def top_bar(bar: TopBar) -> Iterator[None]:
+    """Render every page inside this block with ``bar`` (D161): the server sets it once
+    per request, so error pages, redirects and every view share the same bar without
+    each render function carrying it."""
+    token = _TOP_BAR.set(bar)
+    try:
+        yield
+    finally:
+        _TOP_BAR.reset(token)
+
+
+@dataclass(frozen=True)
 class ActionForms:
     """What the action-mode forms need (D123): the per-session CSRF token."""
 
@@ -383,7 +424,8 @@ def page(
     """A complete HTML document around already-safe ``body``.
 
     ``lang`` (D140) sets ``<html lang>``; Persian pages are ``dir="rtl"``.
-    ``new_idea`` (D160) puts the "+ New idea" button in the top bar.
+    ``new_idea`` (D160) puts the "+ New idea" button in the top bar; the rest of the
+    bar comes from the current :func:`top_bar` (D161).
 
     In action mode the CSP allows forms to post to this server only, and the referrer
     policy is ``same-origin`` so the browser sends a real ``Origin`` with each post
@@ -406,22 +448,41 @@ def page(
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         '<meta name="color-scheme" content="light dark">'
         f'<meta name="referrer" content="{referrer}">{reload}'
-        f"<title>{text(title)}</title><style>{_STYLE}</style></head>"
-        f'<body>{_topbar(lang, new_idea=new_idea)}<main class="wrap">{body}</main></body></html>\n'
+        f"<title>{text(title)}</title><style>{FONT_FACE}{_STYLE}</style></head>"
+        f"<body>{_topbar(lang, _TOP_BAR.get(), new_idea=new_idea)}"
+        f'<main class="wrap">{body}</main></body></html>\n'
     )
 
 
-def _topbar(lang: Language, *, new_idea: bool = False) -> str:
-    """The app bar on every page: the name (home link), the project list and, when
-    ideas can be planned from the browser, "+ New idea" (D160)."""
+def _topbar(lang: Language, bar: TopBar, *, new_idea: bool = False) -> str:
+    """The app bar on every page: the name (home link), the project list, this month's
+    spending when anything was spent (D161) and, when ideas can be planned from the
+    browser, "+ New idea" (D160)."""
     idea = ""
-    if new_idea:
+    if new_idea or bar.new_idea:
         label = text(t("overview.new_idea", lang).lstrip("+ "))
-        idea = f'<a class="button small newidea" href="/new">{ICONS["plus"]}{label}</a>'
+        idea = (
+            f'<a class="button small newidea" href="/new" title="{label}">{ICONS["plus"]}'
+            f'<span class="lbl">{label}</span></a>'
+        )
+    month = ""
+    if bar.month_usd is not None and bar.month_usd > 0:
+        this_month = text(t("overview.this_month", lang))
+        full = text(money(bar.month_usd, bar.rate, lang=lang))
+        short = (
+            dollars(bar.month_usd, lang=lang)
+            if bar.rate is None
+            else toman_text(bar.month_usd, bar.rate, lang=lang)
+        )
+        month = (
+            f'<span class="month" title="{this_month} {full}">{ICONS["wallet"]}'
+            f'<span class="lbl">{this_month}</span> <strong>{text(short)}</strong></span>'
+        )
     return (
         '<header class="topbar"><a class="brand" href="/">'
         '<span class="logo" aria-hidden="true">A</span>Automa</a>'
-        f'<nav><a href="/">{text(t("nav.projects", lang))}</a>{idea}</nav></header>'
+        f'<nav><a class="projects" href="/">{text(t("nav.projects", lang))}</a>{month}{idea}</nav>'
+        "</header>"
     )
 
 
@@ -830,7 +891,7 @@ def _chip_html(chip: Chip, cls: str) -> str:
     title = f' title="{text(chip.hint)}"' if chip.hint else ""
     return (
         f'<span class="badge {cls} tone-{chip.tone}"{title}>'
-        f'<span class="ico" aria-hidden="true">{text(chip.icon)}</span> '
+        f'<span class="ico" aria-hidden="true">{STATUS_ICONS[chip.icon]}</span> '
         f"{text(chip.label)}</span>"
     )
 

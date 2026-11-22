@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import pytest
 
 from automa.webui import journey as jy
+from automa.webui.status import STATUS_ICONS
 from automa.webui.views import ApprovalView, ProjectView, TaskRow
 
 T0 = datetime(2026, 11, 19, 12, 0, tzinfo=UTC)
@@ -128,7 +129,8 @@ def test_project_page_shows_hero_now_bar_and_steps() -> None:
     doc = rd.render_project(view, lang="fa")
     assert '<html lang="fa" dir="rtl">' in doc
     assert '<header class="hero"><h1 dir="auto">Build a &lt;tool&gt;' in doc
-    assert '<span class="ico" aria-hidden="true">⏳</span> در حال کار</span>' in doc
+    clock = STATUS_ICONS["clock"]
+    assert f'<span class="ico" aria-hidden="true">{clock}</span> در حال کار</span>' in doc
     assert '<p class="now info" dir="auto">' in doc
     assert 'class="fill" style="width:' in doc and "٪ انجام شده" in doc
     assert doc.count('<li class="s-done">') == 4  # idea, questions, plan, task 0

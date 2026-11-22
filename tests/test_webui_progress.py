@@ -25,6 +25,7 @@ from automa.tools.base import RiskLevel
 from automa.webui import progress as pg
 from automa.webui import render as rd
 from automa.webui import server as ws
+from automa.webui.status import STATUS_ICONS
 from automa.webui.views import build_project_view
 from test_ledger import FixedClock, make_pair
 from test_webui import _task
@@ -432,8 +433,9 @@ def test_render_task_state_columns(store: ProjectStore) -> None:
     _state(store, "a", TaskStatus.PASSED, model="m-<b>")
     doc = rd.render_project(_view(store))
     assert '<article class="card task t-passed">' in doc and "Model: " in doc
-    assert '<span class="ico" aria-hidden="true">✅</span> passed</span>' in doc
-    assert '<span class="ico" aria-hidden="true">🕒</span> not started</span>' in doc
+    check, queue = STATUS_ICONS["check"], STATUS_ICONS["queue"]
+    assert f'<span class="ico" aria-hidden="true">{check}</span> passed</span>' in doc
+    assert f'<span class="ico" aria-hidden="true">{queue}</span> not started</span>' in doc
     assert "m-&lt;b&gt;" in doc
 
 

@@ -162,7 +162,8 @@ def test_persian_home_page() -> None:
     )
     assert '<html lang="fa" dir="rtl">' in doc
     assert "<title>پروژه‌های Automa</title>" in doc and "<h1>پروژه‌های Automa</h1>" in doc
-    assert 'class="button small newidea" href="/new">' in doc and "ایدهٔ جدید</a>" in doc
+    assert 'class="button small newidea" href="/new"' in doc
+    assert '<span class="lbl">ایدهٔ جدید</span></a>' in doc
     assert "۴ آزمون پنهان شده" in doc and 'href="/?tests=1">نمایش آزمون‌ها<' in doc
     assert "منتظر جواب تو" in doc and "جواب بده" in doc
     assert "۳ درخواست برای تأیید" in doc

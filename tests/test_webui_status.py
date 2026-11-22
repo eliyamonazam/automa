@@ -65,15 +65,15 @@ def test_every_known_value_has_icon_word_and_sentence(lang: str) -> None:
 
 def test_the_four_main_states_read_as_asked() -> None:
     assert stt.project_chip("done", "fa") == stt.Chip(
-        "✅", "تموم شد", "همهٔ مرحله‌ها انجام شد.", "ok"
+        "check", "تموم شد", "همهٔ مرحله‌ها انجام شد.", "ok"
     )
     running = stt.project_chip("running", "fa")
     paused = stt.project_chip("paused", "fa")
     failed = stt.project_chip("failed", "fa")
-    assert (running.icon, running.label, running.tone) == ("⏳", "در حال کار", "busy")
-    assert (paused.icon, paused.label, paused.tone) == ("⏸️", "متوقف شد", "paused")
-    assert (failed.icon, failed.label, failed.tone) == ("❌", "ناموفق", "bad")
-    assert stt.task_chip("passed", "fa").icon == "✅"
+    assert (running.icon, running.label, running.tone) == ("clock", "در حال کار", "busy")
+    assert (paused.icon, paused.label, paused.tone) == ("pause", "متوقف شد", "paused")
+    assert (failed.icon, failed.label, failed.tone) == ("cross", "ناموفق", "bad")
+    assert stt.task_chip("passed", "fa").icon == "check"
     assert stt.task_chip("running", "fa").label == "در حال کار"
     assert stt.task_chip("failed", "en").label == "failed"
 
