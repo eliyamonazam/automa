@@ -190,6 +190,7 @@ from automa.finance import (
     estimate_plan,
     spending_report,
 )
+from automa.finance.history import workspace_task_totals
 from automa.ideafiles import MAX_IDEA_FILE_BYTES as IDEA_FILE_LIMIT
 from automa.ideafiles import (
     IdeaFileError,
@@ -911,7 +912,22 @@ def _new_estimate(config: AutomaConfig, store: ProjectStore, pid: str) -> PlanEs
             stats = log.stats()
             costs = attempt_costs(log.records())
     router = Router(config, stats) if config.router.enabled else None
-    return estimate_plan(plan, config, roles, stats, settings=settings, router=router, costs=costs)
+    return estimate_plan(
+        plan,
+        config,
+        roles,
+        stats,
+        settings=settings,
+        router=router,
+        costs=costs,
+        task_totals=_task_totals(config, store),
+    )
+
+
+def _task_totals(config: AutomaConfig, store: ProjectStore) -> dict[str, list[int]]:
+    """Real total cost of every passed task of the workspace, by role (D175): it can
+    only widen the high end of the cost range. Read-only; unreadable data gives ``{}``."""
+    return workspace_task_totals(store, config.workspace / LEDGER_FILENAME)
 
 
 _ESTIMATE_ERRORS = (
@@ -1367,6 +1383,7 @@ def _task_brake(
                 settings=EstimateSettings.from_settings(run_settings),
                 router=router,
                 costs=costs,
+                task_totals=_task_totals(config, store),
             )
             highs = {t.task_id: t.range_high_nusd for t in fresh.tasks}
         except (ConfigError, ValueError, KeyError):
@@ -1741,6 +1758,7 @@ def _run_estimate(
             skip=set(excluded),
             progress=progress,
             costs=costs,
+            task_totals=_task_totals(config, store),
         )
     except (ProjectStoreError, ConfigError, ValueError, KeyError) as e:
         reason = _safe(str(e)).replace("\n", " ")
@@ -2449,6 +2467,7 @@ def estimate(
             skip=set(excluded),
             progress=progress,
             costs=costs,
+            task_totals=_task_totals(config, store),
         )
     except (ConfigError, ValueError) as e:
         raise _fail(_safe(str(e)), EXIT_CONFIG) from None

@@ -45,6 +45,7 @@ from __future__ import annotations
 import math
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from enum import StrEnum
+from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -331,6 +332,37 @@ class PlanEstimate(_Frozen):
 _FRESH = TaskProgress()
 
 
+class SpentCall(Protocol):
+    """What :func:`task_totals_by_role` reads of a ledger entry (no ledger import)."""
+
+    @property
+    def project_id(self) -> str | None: ...
+    @property
+    def task_id(self) -> str | None: ...
+    @property
+    def cost_nusd(self) -> int: ...
+
+
+def task_totals_by_role(
+    entries: Iterable[SpentCall], roles_of: Mapping[tuple[str, str], str]
+) -> dict[str, list[int]]:
+    """Real total cost of every task in ``roles_of`` ((project, task) -> role), from
+    the ledger ``entries``, grouped by role (D175). Tasks without entries are left
+    out (nothing was spent on them, e.g. an imported result)."""
+    sums: dict[tuple[str, str], int] = {}
+    for e in entries:
+        if e.project_id is None or e.task_id is None:
+            continue
+        key = (e.project_id, e.task_id)
+        if key in roles_of:
+            sums[key] = sums.get(key, 0) + e.cost_nusd
+    out: dict[str, list[int]] = {}
+    for key, total in sums.items():
+        if total > 0:
+            out.setdefault(roles_of[key], []).append(total)
+    return out
+
+
 def _tier_schedule(
     start: Tier, available: set[Tier], s: EstimateSettings, *, length: int, at_tier: int = 0
 ) -> list[Tier]:
@@ -448,6 +480,7 @@ def estimate_plan(
     skip: Collection[str] = (),
     progress: Mapping[str, TaskProgress] | None = None,
     costs: Mapping[tuple[str, str], Sequence[int]] | None = None,
+    task_totals: Mapping[str, Sequence[int]] | None = None,
 ) -> PlanEstimate:
     """Estimate the cost of running ``plan`` (tasks in ``skip`` are left out).
 
@@ -458,6 +491,12 @@ def estimate_plan(
     ``costs`` maps (role, model) to the worker cost of every judged attempt
     (``attempt_costs(log.records())``); it feeds the history end of the realistic
     range (D119). Without it the range uses the default token profiles only.
+
+    ``task_totals`` maps a role to the real total cost of every passed task of that
+    role (all its attempts, worker, verifier and evaluator; ``task_totals_by_role``).
+    With at least ``min_samples`` of them, the high end of a *fresh* task of that
+    role is at least their ``RANGE_HIGH_PERCENTILE`` (D175): it can only widen the
+    range, never narrow it, and stays clamped to the worst case.
 
     Raises ``ConfigError`` if a task's requested tier has no configured model
     (the orchestrator would stop before any call), ``ValueError`` for duplicate
@@ -563,6 +602,13 @@ def estimate_plan(
             images_per_attempt=config.images.max_per_task if images else 0,
             image_nusd=image_nusd,
         )
+        totals = (task_totals or {}).get(task.role, ())
+        if prog.fresh and len(totals) >= s.min_samples:
+            floor = percentile_nusd(totals, RANGE_HIGH_PERCENTILE)
+            if floor > r_high:
+                r_high = floor
+                if r_basis is RangeBasis.DEFAULTS:
+                    r_basis = RangeBasis.MIXED
         r_high = min(r_high, worst)
         r_low = min(r_low, r_high)
         out.append(
