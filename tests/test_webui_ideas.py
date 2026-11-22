@@ -1000,3 +1000,59 @@ def test_change_refusals(tmp_path: Path) -> None:
 def test_no_change_form_without_change_planner(env: Env) -> None:
     pid = _done_project(env)
     assert '/change"' not in env.get(f"/projects/{pid}").body.decode()
+
+
+# -- near the project cap (D173) --------------------------------------------------------
+
+
+class NearCapPlanner(FakePlanner):
+    near = True
+
+    def near_cap(self, project_id: str) -> bool:
+        self.calls.append(("near_cap", project_id))
+        if isinstance(self.near, Exception):
+            raise self.near
+        return self.near
+
+
+def _near_env(tmp_path: Path, near: object, language: str = "en") -> Env:
+    e = Env(tmp_path, language=language)
+    planner = NearCapPlanner(e.store)
+    planner.near = near  # type: ignore[assignment]
+    e.planner = planner
+    e.app = ws.WebApp(
+        tmp_path,
+        tmp_path / LEDGER,
+        ws.allowed_hosts("127.0.0.1", PORT),
+        actions=_settings(),
+        planner=planner,
+        language=language,  # type: ignore[arg-type]
+    )
+    return e
+
+
+def test_near_cap_warning_before_start(tmp_path: Path) -> None:
+    e = _near_env(tmp_path, True, "fa")
+    e.store.create("g", project_id="p1")
+    e.planner.plan("p1", [])
+    body = _body(e.get("/projects/p1"))
+    assert "ممکنه قبل از تموم شدن به سقف خرج پروژه بخوره" in body and "project_usd" in body
+
+
+def test_no_near_cap_warning_when_far_or_broken_or_done(tmp_path: Path) -> None:
+    for i, near in enumerate((False, RuntimeError("boom"))):
+        e = _near_env(tmp_path / str(i), near)
+        e.store.create("g", project_id="p1")
+        e.planner.plan("p1", [])
+        assert "spending cap" not in _body(e.get("/projects/p1"))
+    e = _near_env(tmp_path / "done", True)
+    e.store.create("g", project_id="p1")
+    e.planner.plan("p1", [])
+    e.store.set_status("p1", ProjectStatus.DONE)
+    assert "spending cap" not in _body(e.get("/projects/p1"))
+
+
+def test_planner_without_near_cap_shows_no_warning(env: Env) -> None:
+    env.store.create("g", project_id="p1")
+    env.planner.plan("p1", [])
+    assert "spending cap" not in _body(env.get("/projects/p1"))

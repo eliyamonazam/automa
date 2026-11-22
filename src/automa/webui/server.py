@@ -847,6 +847,21 @@ class WebApp:
         )
         return self._redirect(location, "redirect.recorded")
 
+    def _near_cap(self, pid: str, view: ProjectView) -> bool:
+        """Whether the planned, not yet finished project may stop at the project cap
+        (D173); only with a planner that offers ``near_cap``."""
+        if self._ideas is None or view.plan_version is None:
+            return False
+        if view.status in (ProjectStatus.DONE.value, ProjectStatus.FAILED.value):
+            return False
+        check = getattr(self._ideas.planner, "near_cap", None)
+        if check is None:
+            return False
+        try:
+            return bool(check(pid))
+        except Exception:  # noqa: BLE001 - advisory only, never breaks the page
+            return False
+
     def _idea_lines(self, pid: str, planned: bool) -> tuple[str | None, bool]:
         """Cost range of a planned project and whether questions wait (D124)."""
         if self._ideas is None:
@@ -1034,6 +1049,7 @@ class WebApp:
                 forms,
                 notice,
                 cost_range=cost_range,
+                near_cap=self._near_cap(pid, pview),
                 questions_waiting=waiting,
                 run=self._run_panel(pid),
                 progress=self._progress(pview, own),

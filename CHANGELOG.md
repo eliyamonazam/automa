@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-22 — M16: پیش‌بینی هزینهٔ واقع‌بینانه‌تر، بخش ۱ (D173)
+- **انجام‌شده:** پیش‌بینی پیش‌فرض یک تلاش از اجراهای واقعی دوباره کالیبره شد (قبلاً ۷ تا ۱۰ برابر کم بود)؛ آستانهٔ «قبل از شروع بپرس» از ۰٫۳۰ به ۱ دلار رفت تا پرسیدن معنی‌دار بمونه؛ صفحهٔ پروژه اگه بالای بازه از نصف سقف پروژه بیشتر باشه، قبل از شروع می‌گه «ممکنه به سقف بخوره؛ project_usd رو بیشتر کن». مورد شکسته شد؛ کالیبرهٔ خودکار از Ledger بخش ۲ه.
+- **فایل‌ها:** `src/automa/finance/estimate.py` (`DEFAULT_TOKEN_PROFILES`)، `src/automa/config.py` (`confirm_above_usd`)، `src/automa/cli.py` (`_near_cap`، `_WebIdeaPlanner.near_cap`)، `src/automa/webui/server.py`، `src/automa/webui/render.py`، `src/automa/webui/i18n.py`، `src/automa/webui/ideas.py`، `automa.toml.example`؛ تست‌ها: `tests/test_finance_cost_range.py`، `tests/test_run_confirm.py`، `tests/test_webui_ideas.py`، و پروفایل کوچیک برای تست‌های ترمز (`small_profiles`).
+- **تست‌ها:** `pytest` ← ۶۲۳۷ سبز، ۲ رد شده (Docker واقعی)؛ حالت شبیه CI هم سبز؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** BudgetGuard و Policy دست نخوردن. ترمزها (ضریبی از بالای بازه) به همون نسبت گشادتر شدن، که درسته: ترمز قبلی روی کار عادی (۰٫۶۲ دلار برای صفحهٔ معرفی) می‌کشید.
+- **برای صاحب مخزن:** اگه در `automa.toml` خودت `confirm_above_usd = 0.3` داری، می‌تونی به ۱ تغییرش بدی (اختیاری).
+- **قدم بعدی:** پیش‌بینی هزینه (۲): کالیبرهٔ خودکار از Ledger.
+
 ## 2026-11-22 — M16: ترمز خرج کل اجرا (D172)
 - **انجام‌شده:** اگه یک اجرا در مجموع بیشتر از ۲ برابر بالای پیش‌بینی همون اجرا خرج کنه (حداقل ۰٫۳۰ دلار)، بین دو فراخوانی می‌ایسته و همون سؤال «ادامه بدم؟» رو می‌پرسه: در وب کارت با مبلغ به تومان و دکمه‌های «ادامه» و «توقف»، در ترمینال `automa brake continue <project> --run`. بدون تصمیم، اجرای دوباره هیچ خرجی نمی‌کنه.
 - **فایل‌ها:** `src/automa/budget/brake.py` (`RunBrakeStop`، `run_brake_limit`، `RUN_KEY`، `TaskBrake._check_run`)، `src/automa/config.py` (`run_brake_min_usd`، `run_brake_factor`)، `src/automa/orchestrator.py` (`StopReason.RUN_BRAKE`)، `src/automa/cli.py` (`brake continue --run`، خط ترمز و راهنمای بعدی)، `src/automa/bench.py`، `src/automa/benchmarks/results.py`، `src/automa/webui/stops.py`، `src/automa/webui/render.py`، `automa.toml.example`؛ تست‌ها: `tests/test_run_brake.py` (تازه)، `tests/test_webui_brake.py`.

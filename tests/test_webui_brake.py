@@ -33,7 +33,7 @@ from automa.webui import runs as wr
 from automa.webui import server as ws
 from automa.webui import stops as sp
 from test_e2e import E2E, PID, build_attempt, design_attempt, docs_attempt, judgment
-from test_task_brake import _brake_config, costly
+from test_task_brake import _brake_config, costly, small_profiles
 from test_webui_runs import HOST, LEDGER, PORT, TOKEN, Env, FakePreflight, FakeProcess, _settings
 
 T0 = datetime(2026, 11, 20, 20, 0, tzinfo=UTC)
@@ -359,6 +359,7 @@ class _Preflight(FakePreflight):
 def test_e2e_web_continue_after_a_real_brake(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    small_profiles(monkeypatch)
     e2e = E2E(tmp_path, monkeypatch)
     e2e.new_project()
     _brake_config(e2e)

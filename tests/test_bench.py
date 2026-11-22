@@ -491,7 +491,7 @@ def test_provider_error_during_run_pauses_and_is_recorded(env: Env) -> None:
     assert rec.project_status is ProjectStatus.PAUSED
     # the paused project can be resumed with the ordinary run command
     env.provider.push(*build_attempt())
-    r = CliRunner().invoke(cli.app, ["run", rec.project_id, "--config", str(env.config)])
+    r = CliRunner().invoke(cli.app, ["run", rec.project_id, "--yes", "--config", str(env.config)])
     assert r.exit_code == cli.EXIT_OK, r.output
 
 

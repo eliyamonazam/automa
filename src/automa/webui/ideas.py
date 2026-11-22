@@ -92,6 +92,9 @@ class IdeaPlanner(Protocol):
 
     def cost_range(self, project_id: str) -> str: ...
 
+    # Optional (D173): ``near_cap(project_id) -> bool``, whether the high end of the
+    # range is above half the project cap. Looked up with ``getattr``.
+
 
 def project_path(project_id: str) -> str:
     return "/projects/" + quote(project_id, safe="")

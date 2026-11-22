@@ -176,7 +176,7 @@ def test_parallel_option_overrides_config(env: Env) -> None:
     set_parallel(env, 1)
     env.project(task_dict("a"), task_dict("b"), task_dict("c"))
     route(env, barrier_scripts("a", "b", "c"))
-    r = env.run(PID, "--parallel", "3")
+    r = env.run(PID, "--parallel", "3", "--yes")  # three tasks: above the ask threshold
     assert r.exit_code == cli.EXIT_OK, r.output
     assert "parallel: up to 3 tasks at a time" in r.output
     assert started(env)[0]["max_parallel"] == 3

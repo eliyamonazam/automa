@@ -389,8 +389,20 @@ def _brake_config(e2e: E2E, *, minimum: float = 0.5) -> None:
     e2e.config.write_text(text, encoding="utf-8")
 
 
+def small_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The first, small token profiles (D119) for the brake's end-to-end tests: they
+    test the brake's mechanics on a tiny fake plan, not the calibration (D173)."""
+    from automa.finance import estimate as fe
+
+    old = fe._profile(8_000, 1_500, 30_000, 5_000)
+    monkeypatch.setattr(fe, "DEFAULT_PROFILE", old)
+    for role in list(fe.DEFAULT_TOKEN_PROFILES):
+        monkeypatch.setitem(fe.DEFAULT_TOKEN_PROFILES, role, old)
+
+
 @pytest.fixture
 def e2e(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> E2E:
+    small_profiles(monkeypatch)
     return E2E(tmp_path, monkeypatch)
 
 

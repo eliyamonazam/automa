@@ -36,7 +36,16 @@ from automa.plan.models import TASK_ID_PATTERN
 from automa.project import ProjectStatus
 from automa.webui import stops as sp
 from test_e2e import E2E, PID, TOML, build_attempt, design_attempt, docs_attempt, judgment
-from test_task_brake import LIMITS, STEP, T0, costly, est, ledger, spend  # noqa: F401
+from test_task_brake import (  # noqa: F401
+    LIMITS,
+    STEP,
+    T0,
+    costly,
+    est,
+    ledger,
+    small_profiles,
+    spend,
+)
 
 RUN = usd_to_nusd(0.10)
 
@@ -238,6 +247,7 @@ def _run_brake_config(e2e: E2E) -> None:
 
 @pytest.fixture
 def e2e(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> E2E:
+    small_profiles(monkeypatch)
     return E2E(tmp_path, monkeypatch)
 
 
@@ -248,8 +258,8 @@ def test_e2e_run_brake_pauses_continue_and_finish(e2e: E2E) -> None:
     e2e.script(costly(("write_file", note)), *design_attempt())
     r = e2e.cli("run", PID, "--yes")
     assert r.exit_code == cli.EXIT_PAUSED, r.output
-    # 1 x the high end of the run estimate ($0.7192) is above the $0.50 minimum.
-    assert "this run pauses once it costs more than $0.7192" in r.output
+    # 1 x the high end of the run estimate ($0.7232) is above the $0.50 minimum.
+    assert "this run pauses once it costs more than $0.7232" in r.output
     assert "status: paused (run_brake)" in r.output
     assert f"automa brake continue {PID} --run" in r.output
     # 2 planning calls + the one costly worker step; nothing after the brake.

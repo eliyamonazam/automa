@@ -172,6 +172,13 @@ _RAW: dict[str, dict[Language, str]] = {
     "activity.searched": {"en": "searched the web", "fa": "در وب جست‌وجو کرد"},
     "activity.github": {"en": "read from GitHub", "fa": "از GitHub خوند"},
     "activity.image": {"en": "made an image", "fa": "یک تصویر ساخت"},
+    "project.near_cap": {
+        "en": "It may reach the project's spending cap before it is finished. If you want "
+        "it to go all the way, raise project_usd under [limits] in automa.toml before "
+        "starting.",
+        "fa": "ممکنه قبل از تموم شدن به سقف خرج پروژه بخوره. اگه می‌خوای تا آخر بره، قبل از "
+        "شروع project_usd رو زیر [limits] در automa.toml بیشتر کن.",
+    },
     "progress.heading": {"en": "Progress", "fa": "پیشرفت"},
     "progress.passed": {"en": "tasks passed:", "fa": "مرحله‌های تموم‌شده:"},
     "progress.live": {

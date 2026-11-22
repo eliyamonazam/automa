@@ -162,16 +162,20 @@ def _profile(
     )
 
 
-# Calibrated on the first real runs on 1xAi (CHANGELOG M4/M11; D119): one attempt of
-# a writer/developer task typically used ~10-25k input and ~2-4k output tokens over
-# all its calls; research attempts read web pages and use more input.
-DEFAULT_PROFILE = _profile(8_000, 1_500, 30_000, 5_000)
+# Recalibrated on the owner's real runs (D173). The first profiles (D119: ~10-30k
+# input, 2-5k output per attempt) came from tiny tasks and fell 7-10x short on real
+# products: a C++ project with compile and test steps was estimated at $0.04-0.14
+# and cost $0.93; one web-page task made 29 calls for $0.62. Every call of an
+# attempt resends the whole conversation, so input grows with the number of steps;
+# a real product attempt is 10-30 steps. The verifier's model-judged criteria read
+# the produced files, so it uses far more than a short prompt.
+DEFAULT_PROFILE = _profile(25_000, 4_000, 200_000, 20_000, 12_000, 1_200)
 DEFAULT_TOKEN_PROFILES: dict[str, RoleTokenProfile] = {
-    "writer": _profile(6_000, 1_500, 25_000, 5_000),
-    "developer": _profile(8_000, 1_500, 30_000, 5_000),
-    "architect": _profile(8_000, 2_000, 30_000, 6_000),
-    "designer": _profile(6_000, 1_500, 25_000, 5_000),
-    "researcher": _profile(15_000, 1_500, 50_000, 5_000),
+    "writer": _profile(20_000, 4_000, 150_000, 16_000, 12_000, 1_200),
+    "developer": _profile(25_000, 4_000, 200_000, 20_000, 12_000, 1_200),
+    "architect": _profile(20_000, 4_000, 120_000, 12_000, 12_000, 1_200),
+    "designer": _profile(20_000, 4_000, 150_000, 16_000, 12_000, 1_200),
+    "researcher": _profile(40_000, 4_000, 250_000, 15_000, 12_000, 1_200),
 }
 RANGE_HIGH_ATTEMPTS = 2  # attempts the high end of the range assumes
 RANGE_LOW_PERCENTILE = 25

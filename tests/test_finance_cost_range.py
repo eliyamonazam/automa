@@ -41,13 +41,13 @@ TIERS = {"small": "s-model", "medium": "m-model", "large": "l-model"}
 ROLES = RoleRegistry.builtin()
 M = 1_000_000
 
-# writer profile at m-model (1000 nUSD per input token, 4000 per output token):
-W_LOW = 6_000 * 1_000 + 1_500 * 4_000  # 12.0M
-W_HIGH = 25_000 * 1_000 + 5_000 * 4_000  # 45.0M
-W_VERIFY = 4_000 * 1_000 + 600 * 4_000  # 6.4M
+# writer profile at m-model (1000 nUSD per input token, 4000 per output token; D173):
+W_LOW = 20_000 * 1_000 + 4_000 * 4_000  # 36.0M
+W_HIGH = 150_000 * 1_000 + 16_000 * 4_000  # 214.0M
+W_VERIFY = 12_000 * 1_000 + 1_200 * 4_000  # 16.8M
 # the same at l-model (5000 / 20000 nUSD per token)
-L_HIGH = 25_000 * 5_000 + 5_000 * 20_000  # 225M
-L_VERIFY = 4_000 * 5_000 + 600 * 20_000  # 32M
+L_HIGH = 150_000 * 5_000 + 16_000 * 20_000  # 1070M
+L_VERIFY = 12_000 * 5_000 + 1_200 * 20_000  # 84M
 
 
 def cfg(**extra: Any) -> AutomaConfig:

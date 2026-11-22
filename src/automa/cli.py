@@ -982,6 +982,21 @@ def _web_cost_range(config: AutomaConfig, store: ProjectStore, pid: str) -> str:
     )
 
 
+NEAR_CAP_SHARE = 0.5  # warn when the high end is above this share of the project cap
+
+
+def _near_cap(config: AutomaConfig, store: ProjectStore, pid: str) -> bool:
+    """Whether the high end of the plan's range is above half of ``[limits]
+    project_usd`` (D173): the run may well stop at the cap before the product is
+    done, so the web page says to raise it first. Advisory; ``False`` when no
+    estimate can be made."""
+    try:
+        result = _new_estimate(config, store, pid)
+    except _ESTIMATE_ERRORS:
+        return False
+    return result.range_high_nusd > cap_to_nusd(config.limits.project_usd) * NEAR_CAP_SHARE
+
+
 def _print_suggestions(config: AutomaConfig, goal: str) -> None:
     """Show stored templates similar to ``goal`` (suggestion only, D39).
 
@@ -4150,6 +4165,10 @@ class _WebIdeaPlanner:
     def cost_range(self, project_id: str) -> str:
         store = ProjectStore.for_workspace(self._config.workspace)
         return _web_cost_range(self._config, store, project_id)
+
+    def near_cap(self, project_id: str) -> bool:
+        store = ProjectStore.for_workspace(self._config.workspace)
+        return _near_cap(self._config, store, project_id)
 
     def change(
         self,

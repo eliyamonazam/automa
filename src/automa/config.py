@@ -234,7 +234,7 @@ class BudgetLimits(_Strict):
     per_call_usd: float = Field(default=0.25, gt=0)
     # Not a cap and never read by the guard: ``automa run`` asks "continue?" before
     # spending when the upper end of the cost range is above this (0: always ask).
-    confirm_above_usd: float = Field(default=0.3, ge=0, le=1_000_000, allow_inf_nan=False)
+    confirm_above_usd: float = Field(default=1.0, ge=0, le=1_000_000, allow_inf_nan=False)
     # Task spending brake (D153), an extra stop on top of the guard, never a looser
     # one: a task is paused once it has cost more than
     # max(task_brake_factor x the high end of its estimated range, task_brake_min_usd).

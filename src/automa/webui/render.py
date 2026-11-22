@@ -764,6 +764,7 @@ def render_project(
     notice: str | None = None,
     *,
     cost_range: str | None = None,
+    near_cap: bool = False,
     questions_waiting: bool = False,
     run: RunPanel | None = None,
     progress: ProgressView | None = None,
@@ -865,6 +866,8 @@ def render_project(
             f"<p><strong>{text(t('project.cost_range', lang))}</strong> "
             f'<span dir="auto">{text(cost_range)}</span></p>'
         )
+    if near_cap:
+        parts.append(f'<p class="warn">{text(t("project.near_cap", lang))}</p>')
     parts.append("</section>")
     if progress is not None:
         parts.append(_progress(progress, rate, lang, when))

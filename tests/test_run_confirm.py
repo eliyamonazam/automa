@@ -19,10 +19,11 @@ from typer.testing import CliRunner
 import test_cli as tc
 import test_cli_run as cr
 from automa import cli
+from automa.budget import cap_to_nusd
 from automa.budget import guard as guard_module
-from automa.config import AutomaConfig, BudgetLimits
+from automa.config import AutomaConfig, BudgetLimits, load_config
 from automa.events import JsonlEventLog
-from automa.project import ProjectStatus
+from automa.project import ProjectStatus, ProjectStore
 from automa.quality import QUALITY_FILE
 
 ALWAYS = "confirm_above_usd = 0\n"  # appended under [limits]: always ask
@@ -67,9 +68,11 @@ def assert_nothing_ran(env: cr.Env) -> None:
 # --- config ------------------------------------------------------------------------
 
 
-def test_default_threshold_is_thirty_cents() -> None:
-    assert BudgetLimits().confirm_above_usd == 0.3
-    assert AutomaConfig().limits.confirm_above_usd == 0.3
+def test_default_threshold_is_one_dollar() -> None:
+    # Raised from $0.30 with the realistic token profiles (D173): almost every real
+    # product estimate is above $0.30, so asking would be the rule, not a warning.
+    assert BudgetLimits().confirm_above_usd == 1.0
+    assert AutomaConfig().limits.confirm_above_usd == 1.0
 
 
 @pytest.mark.parametrize("value", [0, 0.0, 0.3, 2, 1_000_000])
@@ -360,7 +363,9 @@ def test_new_prints_cost_range_after_the_plan(new_env: tc.Env) -> None:
     assert "from default token profiles and catalog prices (no history yet)" in line
     assert "guard cap (worst case) $" in line
     assert "start with: automa run site" in line
-    assert "will ask before starting" not in line  # cheap fake prices
+    assert ("will ask before starting (above $1.0000)" in line) == (
+        float(re.search(r"to \$(\d+\.\d{4})", line).group(1)) > 1.0  # type: ignore[union-attr]
+    )
     lines = r.output.splitlines()
     assert lines.index(line) > next(i for i, x in enumerate(lines) if x.startswith("status: "))
 
@@ -421,3 +426,22 @@ def test_cli_does_not_import_click_directly() -> None:
     # once on a direct import, so the CLI uses typer's own Abort/confirm only.
     source = inspect.getsource(cli)
     assert not re.search(r"^\s*(import click|from click)", source, re.M)
+
+
+def test_near_cap_compares_the_high_end_with_half_the_project_cap(
+    new_env: tc.Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    new_env.provider.push(tc.NO_QUESTIONS, tc.GOOD_PLAN)
+    assert new_env.run("new", "Build a site", "--id", "site").exit_code == 0
+    config = load_config(new_env.config)
+    store = ProjectStore.for_workspace(config.workspace)
+    half = cap_to_nusd(config.limits.project_usd) // 2
+    for high, near in ((half, False), (half + 1, True)):
+        monkeypatch.setattr(
+            cli, "_new_estimate", lambda *_a, h=high: SimpleNamespace(range_high_nusd=h)
+        )
+        assert cli._near_cap(config, store, "site") is near
+    monkeypatch.setattr(cli, "_new_estimate", lambda *_a: (_ for _ in ()).throw(ValueError("x")))
+    assert cli._near_cap(config, store, "site") is False
