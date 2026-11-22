@@ -315,7 +315,8 @@ def test_unreadable_questions_become_an_error_line(tmp_path: Path) -> None:
 
 
 def test_delivered_project_card_is_ready_with_full_progress(tmp_path: Path) -> None:
-    rig = Rig(tmp_path, [*write("a"), *write("b")], _plan())
+    review_ok = '{"passed": true, "issues": []}'  # the final review (D168)
+    rig = Rig(tmp_path, [*write("a"), *write("b"), review_ok], _plan())
     rig.run(max_attempts=2)
     view = build_overview(rig.store, {})
     row = view.projects[0]

@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-22 — M16: بازبینی نهایی محصول (D168)
+- **انجام‌شده:** قبل از «تموم شد»، کل محصول یک بار در برابر هدف، وعدهٔ محصول و جواب‌های خود کاربر سنجیده می‌شه (فقط ایرادهای جدی، مخصوصاً محتوای ساختگی). اگه ایراد داشت، یک وظیفهٔ رفع خودکار اضافه می‌شه و کار ادامه پیدا می‌کنه؛ اگه باز هم ایراد موند، محصول تحویل می‌شه و ایرادها در کارت محصول و گزارش تحویل نوشته می‌شن.
+- **فایل‌ها:** `src/automa/final_review.py` (تازه)، `src/automa/orchestrator.py` (`_finish`، `_final_review`، `OrchestratorSettings.final_review`)، `src/automa/delivery.py` (`reviewed`، `review_issues`)، `src/automa/webui/render.py`، `src/automa/webui/i18n.py`، `src/automa/config.py` و `src/automa/cli.py` (`[orchestrator] final_review`)، `automa.toml.example`؛ تست: `tests/test_final_review.py` و افزودن پاسخ بازبینی به چند تست تحویل.
+- **تست‌ها:** `pytest` ← ۶۱۳۷ سبز، ۲ رد شده (Docker واقعی)؛ حالت شبیه CI هم سبز؛ `ruff check` و `ruff format --check` سبز.
+- **مشکلات:** BudgetGuard و Policy دست نخوردن. موقع افزودن وظیفهٔ رفع معلوم شد ذخیرهٔ نسخهٔ تازهٔ برنامه وضعیت وظیفه‌های قبلی رو صفر می‌کنه؛ وضعیت‌ها صریحاً به نسخهٔ تازه منتقل می‌شن.
+- **برای صاحب مخزن:** کاری لازم نیست (برای خاموش کردن: `[orchestrator] final_review = false`).
+- **قدم بعدی:** درخواست تغییر بعد از تحویل.
+
 ## 2026-11-22 — M16: کش پرامپت اختیاری (D167)
 - **انجام‌شده:** گزینهٔ `[provider] prompt_cache` که برای مدل‌های Claude پیشوند ثابت هر درخواست (پیام سیستم تا آخرین پیام) رو قابل کش علامت می‌زنه؛ خوندن توکن‌های کش‌شده از پاسخ درگاه؛ حساب هزینهٔ محافظه‌کارانه (BudgetGuard هرگز کم‌شماری نمی‌کنه)؛ اگه درگاه نشانه‌ها رو نپذیرفت، خودش بدون اون‌ها ادامه می‌ده.
 - **فایل‌ها:** `src/automa/config.py` (`ProviderConfig.prompt_cache`، `prompt_cache_models`، `caches`، `cache_read_per_mtok`)، `src/automa/llm/types.py` (`ChatRequest.cache`، `Usage.cached_input_tokens`)، `src/automa/llm/gateway.py` (`compute_cost(cache=)`، `CACHE_WRITE_FACTOR`، برگشت بدون کش)، `src/automa/llm/openai_compat.py` (نشانه‌ها و خوندن کش)، `automa.toml.example`؛ تست: `tests/test_prompt_cache.py`.

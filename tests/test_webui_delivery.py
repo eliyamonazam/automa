@@ -68,7 +68,7 @@ def _env(tmp_path: Path, *, retry: bool = True, **kw: bool) -> Env:
 
 @pytest.fixture
 def done(tmp_path: Path) -> Iterator[Env]:
-    _rig(tmp_path, [*write("a"), *write("b")])
+    _rig(tmp_path, [*write("a"), *write("b"), '{"passed": true, "issues": []}'])
     yield _env(tmp_path)
 
 

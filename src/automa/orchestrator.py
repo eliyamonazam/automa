@@ -69,6 +69,20 @@ from automa.budget.brake import TaskBrakeStop
 from automa.budget.guard import BudgetError
 from automa.config import MAX_PARALLEL, AutomaConfig, ConfigError, SandboxMode, Tier
 from automa.events import Event
+from automa.final_review import (
+    MAX_FILE_CHARS as MAX_REVIEW_FILE_CHARS,
+)
+from automa.final_review import (
+    MAX_FIX_ROUNDS,
+    fix_rounds,
+    load_review,
+    run_review,
+    save_review,
+    with_fix_task,
+)
+from automa.final_review import (
+    MAX_TOTAL_CHARS as MAX_REVIEW_TOTAL_CHARS,
+)
 from automa.ideafiles import describe, list_files
 from automa.llm.gateway import CallContext
 from automa.llm.images import ImageGateway
@@ -97,7 +111,8 @@ from automa.tools.executor import ApprovalRequired, ToolExecutor, ToolLayerError
 from automa.tools.images import GenerateImage
 from automa.tools.policy import PermissionPolicy
 from automa.tools.web_reads import AutoReadPolicy
-from automa.tools.workspace import Workspace
+from automa.tools.workspace import Workspace, WorkspaceError
+from automa.userinput import UserRequestError
 
 Clock = Callable[[], datetime]
 
@@ -130,6 +145,9 @@ class OrchestratorSettings(BaseModel):
     escalate_after: int = Field(default=2, ge=1, le=MAX_TASK_ATTEMPTS)
     # Ready tasks driven at the same time; 1 keeps the sequential loop (default).
     max_parallel: int = Field(default=1, ge=1, le=MAX_PARALLEL)
+    # One model review of the whole product before ``done`` (plans with a
+    # deliverable only), with at most one automatic fix round (D168).
+    final_review: bool = True
 
 
 class StopReason(StrEnum):
@@ -858,12 +876,114 @@ class Orchestrator:
         self, project_id: str, plan: Plan, states: dict[str, TaskState], attempts_run: int
     ) -> RunReport:
         if all(s.status is TaskStatus.PASSED for s in states.values()):
+            if self._settings.final_review and plan.deliverable is not None:
+                try:
+                    fixed = self._final_review(project_id, plan)
+                except _Stop as stop:
+                    return self._pause(project_id, plan, stop, attempts_run)
+                if fixed is not None:
+                    # A fix task was added (new plan version): go on with it.
+                    report = self._run(project_id)
+                    return report.model_copy(
+                        update={"attempts_run": report.attempts_run + attempts_run}
+                    )
             status, reason = ProjectStatus.DONE, StopReason.COMPLETED
         else:
             status, reason = ProjectStatus.FAILED, StopReason.TASKS_FAILED
         self._set_project(project_id, status)
         self._emit(project_id, "orchestrator.finished", {"status": status.value})
         return self._report(project_id, plan, status, reason, attempts_run=attempts_run)
+
+    def _final_review(self, project_id: str, plan: Plan) -> Plan | None:
+        """Review the finished product (D168); the new plan if a fix task was added."""
+        store = self._store
+        project_dir = store.project_dir(project_id)
+        done = load_review(project_dir)
+        if done is not None and done.plan_version == plan.version:
+            return None  # this plan version was already reviewed
+        d = plan.deliverable
+        assert d is not None  # noqa: S101 - checked by the caller
+        files: list[tuple[str, str]] = []
+        total = 0
+        try:
+            ws = Workspace(store.files_dir(project_id))
+        except WorkspaceError:
+            ws = None
+        for path in d.main_files:
+            body = "(missing)"
+            if ws is not None:
+                try:
+                    text, cut = ws.read_text(path, max_bytes=MAX_REVIEW_FILE_CHARS * 4)
+                    body = text[:MAX_REVIEW_FILE_CHARS] + (
+                        "\n[... rest not shown]" if cut or len(text) > MAX_REVIEW_FILE_CHARS else ""
+                    )
+                except WorkspaceError:
+                    body = "(missing or not a text file)"
+            if total + len(body) > MAX_REVIEW_TOTAL_CHARS:
+                body = "(not shown: size limit)"
+            total += len(body)
+            files.append((path, body))
+        try:
+            answers = [
+                r.as_text()
+                for r in store.user_requests(project_id).list()
+                if r.status.value != "pending"
+            ]
+        except UserRequestError:
+            answers = []
+        owner = next(
+            (t for t in (plan.task_for_file(p) for p in d.main_files) if t is not None),
+            plan.tasks[-1],
+        )
+        history = store.task_history(project_id, owner.id)
+        worker_model = history[-1][0].model if history else None
+        self._emit(project_id, "final_review.started", {"plan_version": plan.version})
+        try:
+            review = run_review(
+                self._worker.gateway,
+                plan,
+                files,
+                answers,
+                project_id=project_id,
+                tier=self._verifier.settings.tier,
+                worker_model=worker_model,
+                now=self._clock(),
+            )
+        except BaseException as e:
+            stop = self._stop_for(e, owner.id)
+            if stop is None:
+                raise
+            raise stop from e
+        try:
+            save_review(project_dir, review)
+        except OSError:
+            pass  # not kept: the review simply runs again next time
+        self._emit(
+            project_id,
+            "final_review.finished",
+            {
+                "passed": review.passed,
+                "unavailable": review.unavailable,
+                "issues": len(review.issues),
+                "fix_round": review.fix_round,
+            },
+        )
+        if review.passed or fix_rounds(plan) >= MAX_FIX_ROUNDS:
+            return None
+        new = with_fix_task(plan, review)
+        before = store.task_states(project_id)
+        store.save_plan(project_id, new)
+        # The earlier tasks stay passed in the new plan version (only a task was added).
+        for state in before.values():
+            store.save_task_state(
+                project_id, state.model_copy(update={"plan_version": new.version})
+            )
+        self._emit(
+            project_id,
+            "final_review.fix_added",
+            {"task": new.tasks[-1].id, "plan_version": new.version},
+        )
+        return new
 
     def _report(
         self,

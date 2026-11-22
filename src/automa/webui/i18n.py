@@ -835,6 +835,7 @@ _RAW: dict[str, dict[Language, str]] = {
         "en": "{passed} of {total} steps passed · {checks} checks passed",
         "fa": "{passed} از {total} مرحله قبول شد · {checks} مورد بررسی قبول شد",
     },
+    "deliver.review": {"en": "Final review", "fa": "بازبینی نهایی"},
     "deliver.problems": {"en": "What is still missing", "fa": "چی هنوز کم مونده"},
     "deliver.blocked": {
         "en": "waits for an earlier step",

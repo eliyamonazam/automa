@@ -380,6 +380,9 @@ class OrchestratorConfig(_Strict):
 
     # Ready tasks driven at the same time; 1 keeps the sequential loop (default).
     max_parallel: int = Field(default=1, ge=1, le=MAX_PARALLEL)
+    # One model review of the whole product before "done" (D168); plans with a
+    # deliverable only, at most one automatic fix round.
+    final_review: bool = True
 
     def describe(self) -> str:
         """One-line description for ``automa run`` / ``automa status``."""

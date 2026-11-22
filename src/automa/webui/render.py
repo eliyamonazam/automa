@@ -1030,7 +1030,7 @@ def _delivery_card(d: Delivery, forms: ActionForms | None, lang: Language) -> st
         line = t("deliver.checked", lang, passed=d.passed_tasks, total=len(d.tasks), checks=checks)
         parts.append(f'<p class="meta">{text(line)}</p>')
     problems = d.problem_tasks if d.state is DeliveryState.PARTIAL else ()
-    if problems:
+    if problems or d.review_issues:
         items = []
         for td in problems:
             why = "; ".join(td.issues) if td.status is TaskStatus.FAILED else ""
@@ -1038,6 +1038,9 @@ def _delivery_card(d: Delivery, forms: ActionForms | None, lang: Language) -> st
             items.append(
                 f"<li><strong><bdi>{text(td.title)}</bdi></strong>: <bdi>{text(why)}</bdi></li>"
             )
+        for issue in d.review_issues:
+            label = text(t("deliver.review", lang))
+            items.append(f"<li><strong>{label}</strong>: <bdi>{text(issue)}</bdi></li>")
         parts.append(
             f'<p class="meta"><strong>{text(t("deliver.problems", lang))}</strong></p>'
             f'<ul class="problems">{"".join(items)}</ul>'

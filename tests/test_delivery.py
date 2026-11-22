@@ -32,6 +32,8 @@ def plan_with(*tasks: dict[str, Any], deliverable: dict[str, Any] | None = None)
     return Plan.model_validate(data)
 
 
+REVIEW_OK = '{"passed": true, "issues": []}'  # the final review's reply (D168)
+
 DELIVERABLE = {
     "summary": "یک فایل متنی که می‌گه ok",
     "main_files": ["b.txt"],
@@ -41,7 +43,7 @@ DELIVERABLE = {
 
 def test_ready_delivery_lists_product_files_and_checks(tmp_path: Path) -> None:
     plan = plan_with(task_dict("a"), task_dict("b", deps=["a"]), deliverable=DELIVERABLE)
-    rig = Rig(tmp_path, [*write("a"), *write("b")], plan)
+    rig = Rig(tmp_path, [*write("a"), *write("b"), REVIEW_OK], plan)
     assert build_delivery(rig.store, PID).state is DeliveryState.NOT_STARTED  # type: ignore[union-attr]
     rig.run()
     d = build_delivery(rig.store, PID)
@@ -109,7 +111,7 @@ def test_derived_main_files_without_deliverable(tmp_path: Path) -> None:
 
 def test_symlinked_main_file_is_not_a_product(tmp_path: Path) -> None:
     plan = plan_with(task_dict("a"), deliverable={"summary": "s", "main_files": ["a.txt"]})
-    rig = Rig(tmp_path, [*write("a")], plan)
+    rig = Rig(tmp_path, [*write("a"), REVIEW_OK], plan)
     rig.run()
     files = rig.store.files_dir(PID)
     secret = tmp_path / "secret.txt"
@@ -154,7 +156,7 @@ def test_cli_retry_then_run_delivers(env: Env) -> None:
     assert r.exit_code == 0, r.output
     assert "1 task(s) get 2 more attempt(s) on the large tier: b" in r.output
     assert env.store.load("p1").status is ProjectStatus.PAUSED
-    env.provider.push(*write("b", "ok"))
+    env.provider.push(*write("b", "ok"), REVIEW_OK)
     r = env.run("run", "p1", "--max-attempts", "2", "--yes")
     assert r.exit_code == 0, r.output
     assert "delivery: ready - main files: b.txt" in r.output

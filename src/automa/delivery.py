@@ -26,6 +26,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
+from automa.final_review import load_review
 from automa.plan import Plan, TaskStatus
 from automa.plan.models import AcceptanceCriterion, Verdict, checked_paths
 from automa.project.store import ProjectStatus, ProjectStore, ProjectStoreError
@@ -82,6 +83,9 @@ class Delivery(_View):
     derived: bool  # True when the plan had no deliverable (summary/main files inferred)
     main_files: tuple[DeliveryFile, ...]
     tasks: tuple[TaskDelivery, ...]
+    # Final review of the whole product (D168): None = not reviewed (yet).
+    reviewed: bool | None = None
+    review_issues: tuple[str, ...] = ()
 
     @property
     def passed_tasks(self) -> int:
@@ -207,8 +211,17 @@ def build_delivery(store: ProjectStore, project_id: str) -> Delivery | None:
         owner[p] = t.id if t is not None else None
     files = tuple(_file(store, project_id, p, owner[p]) for p in paths)
 
+    review = load_review(store.project_dir(project_id))
+    if review is not None and review.plan_version != plan.version:
+        review = None
+    reviewed = None if review is None or review.unavailable else review.passed
+    review_issues = review.issues if review is not None and not review.passed else ()
     if project.status is ProjectStatus.DONE:
-        state_ = DeliveryState.READY if all(f.exists for f in files) else DeliveryState.PARTIAL
+        state_ = (
+            DeliveryState.READY
+            if all(f.exists for f in files) and reviewed is not False
+            else DeliveryState.PARTIAL
+        )
     elif project.status is ProjectStatus.FAILED:
         state_ = DeliveryState.PARTIAL
     elif started:
@@ -225,6 +238,8 @@ def build_delivery(store: ProjectStore, project_id: str) -> Delivery | None:
         derived=derived,
         main_files=files,
         tasks=tuple(tasks),
+        reviewed=reviewed,
+        review_issues=tuple(review_issues),
     )
 
 
@@ -251,6 +266,7 @@ _MD = {
         "problems": "مشکل‌ها",
         "derived": "(برنامه شرح محصول نداشت؛ این فهرست از روی مراحل آخر برداشت شده.)",
         "goal": "درخواست",
+        "review": "بازبینی نهایی",
     },
     "en": {
         "title": "Project delivery",
@@ -266,6 +282,7 @@ _MD = {
         "problems": "Problems",
         "derived": "(The plan had no product description; this list comes from the final steps.)",
         "goal": "Request",
+        "review": "Final review",
     },
 }
 
@@ -292,10 +309,12 @@ def render_markdown(delivery: Delivery, lang: str = "fa") -> str:
             out.append(f"- {mark[c.passed]} {c.description}")
         out.append("")
     problems = delivery.problem_tasks
-    if problems:
+    if problems or delivery.review_issues:
         out += [f"## {w['problems']}", ""]
         for t in problems:
             out.append(f"- **{t.title}**: " + ("; ".join(t.issues) or t.status.value))
+        for issue in delivery.review_issues:
+            out.append(f"- {w['review']}: {issue}")
         out.append("")
     if delivery.goal.strip() != delivery.summary.strip():
         out += [f"## {w['goal']}", "", delivery.goal.strip(), ""]

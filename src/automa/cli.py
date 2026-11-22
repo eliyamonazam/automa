@@ -1051,7 +1051,10 @@ def _run_settings(
     config: AutomaConfig, *, max_attempts: int | None, parallel: int | None
 ) -> OrchestratorSettings:
     """Orchestrator settings for ``automa run``: CLI options override automa.toml (D36)."""
-    values: dict[str, int] = {"max_parallel": config.orchestrator.max_parallel}
+    values: dict[str, int | bool] = {
+        "max_parallel": config.orchestrator.max_parallel,
+        "final_review": config.orchestrator.final_review,
+    }
     for option, field, value in (
         ("--max-attempts", "max_attempts", max_attempts),
         ("--parallel", "max_parallel", parallel),

@@ -135,6 +135,9 @@ mode = "local"
 # files written by run_command are NOT checked).
 [orchestrator]
 max_parallel = 1
+# Before "done", one model call reviews the whole product against the goal and
+# the promised deliverable; serious problems get one automatic fix task (D168).
+final_review = true
 
 # Extra skills for built-in roles (names of folders in <workspace>/skills/ or built-in
 # skills). Text only: a skill adds instructions to the role's system prompt and never
