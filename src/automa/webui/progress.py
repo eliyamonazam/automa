@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import os
 import stat
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from fractions import Fraction
 from typing import Any
@@ -35,6 +35,7 @@ from automa.events import Event
 from automa.finance.anomaly import ANOMALY_EVENT, AnomalySettings
 from automa.finance.compare import ESTIMATE_EVENT, check_range, compare_estimate
 from automa.project.store import EVENTS_FILE, ProjectStore
+from automa.webui.activity import Activity, current_activity
 from automa.webui.stops import StopInfo, latest_stop
 
 MAX_EVENTS_BYTES = 16 * 1024 * 1024  # a larger event log is reported, not read
@@ -97,6 +98,7 @@ class ProgressView(_View):
     unusual: UnusualSpending | None = None
     events: tuple[EventLine, ...] = ()
     stop: StopInfo | None = None  # why the latest run paused (D151)
+    activity: Activity | None = None  # what it is doing now, while live (D171)
     errors: tuple[str, ...] = ()
 
 
@@ -246,6 +248,7 @@ def build_progress(
     running: bool,
     pending_approvals: int = 0,
     anomaly: AnomalySettings | None = None,
+    titles: Mapping[str, str] | None = None,
 ) -> ProgressView:
     """The progress part of a project page.
 
@@ -268,6 +271,7 @@ def build_progress(
             errors.append(f"cost range: {e}")
     return ProgressView(
         live=running and pending_approvals == 0,
+        activity=current_activity(events, titles) if running else None,
         passed=sum(1 for s in task_states if s == PASSED),
         total=len(task_states),
         cost=cost,

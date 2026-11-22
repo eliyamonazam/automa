@@ -38,6 +38,7 @@ from automa.retry import RETRY_ATTEMPTS
 from automa.tools.approvals import MAX_NOTE_CHARS
 from automa.tools.missing import install_command
 from automa.userinput import UserRequest
+from automa.webui.activity import Activity
 from automa.webui.bundle import bundle_href
 from automa.webui.cards import EMPTY_ART, ICONS, CardState, card_hint, card_label, ct
 from automa.webui.files import (
@@ -183,6 +184,11 @@ background:var(--chip);font-size:.82em;font-weight:700;vertical-align:middle;lin
 .badge.ps-planning,.badge.ps-new{background:var(--info);color:var(--infofg)}
 .badge.tone-paused{background:#d0d5dd;color:#1d2939}
 .hero .badge{background:#ffffff2e;color:#fff}
+.activity .now{font-size:1.08em;font-weight:600;margin:.2em 0}
+.pulse{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--busyfg);
+vertical-align:middle;animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.pulse{animation:none}}
 .hint{color:var(--muted);font-size:.9em;margin:.2em 0}
 .task{border-inline-start:4px solid var(--line)}.t-passed{border-inline-start-color:var(--okline)}
 .t-failed,.t-blocked{border-inline-start-color:var(--badline)}
@@ -807,6 +813,8 @@ def render_project(
     if notice:
         parts.append(f'<p class="badge" dir="auto">{text(notice)}</p>')
     parts.append(_hero_and_journey(view, journey, lang))
+    if progress is not None and progress.live and progress.activity is not None:
+        parts.append(_activity_card(progress.activity, lang, when))
     if asks:
         parts.append('<div id="ask"></div>')  # target of the home page's "Answer" (D160)
     for ask in asks:
@@ -879,6 +887,30 @@ def render_project(
     refresh = REFRESH_SECONDS if progress is not None and progress.live else None
     title = f"Automa — {project_title(view.goal) or view.id}"
     return page(title, "".join(parts), actions=forms is not None, refresh=refresh, lang=lang)
+
+
+def _activity_card(a: Activity, lang: Language, when: When) -> str:
+    """What it is doing right now (D171): the step and phase, then the last action
+    with its time. Every value is escaped; arguments are only file paths, program
+    names and hosts from the audit fields."""
+    if a.phase == "reviewing":
+        line = t("activity.reviewing", lang)
+    elif a.task_title:
+        line = t(f"activity.{a.phase}", lang, task=a.task_title)
+    else:
+        line = t(f"activity.{a.phase}_any", lang)
+    parts = [
+        '<section class="card activity" aria-live="polite">',
+        f'<p class="meta"><strong>{text(t("activity.heading", lang))}</strong></p>',
+        '<p class="now" dir="auto"><span class="pulse" aria-hidden="true"></span> '
+        f"{text(line)}</p>",
+    ]
+    if a.action_key is not None and a.at is not None:
+        action = t(a.action_key, lang, arg=a.action_arg)
+        last = t("activity.last", lang, when=when(a.at), action=action)
+        parts.append(f'<p class="muted" dir="auto">{text(last)}</p>')
+    parts.append("</section>")
+    return "".join(parts)
 
 
 _STEP_MARK = {"done": "✓", "fail": "✕"}

@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-22 — M16: «همین الان» زنده (D171)
+- **انجام‌شده:** در صفحهٔ پروژهٔ در حال اجرا، کارت «همین الان» با یک جملهٔ ساده: روی کدوم مرحله کار می‌کنه یا داره نتیجه رو بررسی می‌کنه یا بازبینی نهایی می‌کنه، و آخرین کارش (مثلاً «فایل index.html رو ویرایش کرد») با زمانش. هر ۵ ثانیه خودش تازه می‌شه؛ هیچ آرگومان حساسی نشون داده نمی‌شه.
+- **فایل‌ها:** `src/automa/webui/activity.py` (تازه)، `src/automa/webui/progress.py` (`ProgressView.activity`، `build_progress(titles=)`)، `src/automa/webui/server.py`، `src/automa/webui/render.py` (`_activity_card`، CSS)، `src/automa/webui/i18n.py`؛ تست‌ها: `tests/test_webui_activity.py`، `tests/test_webui_progress.py`.
+- **تست‌ها:** `pytest` ← ۶۲۱۲ سبز، ۲ رد شده (Docker واقعی)؛ حالت شبیه CI هم سبز؛ `ruff check` و `ruff format --check` سبز. بررسی بصری با Chrome headless در ۱۲۸۰ و ۳۹۰ پیکسل.
+- **مشکلات:** BudgetGuard و Policy دست نخوردن.
+- **برای صاحب مخزن:** کاری لازم نیست.
+- **قدم بعدی:** ترمز خرج وظیفه برای کل اجرا.
+
 ## 2026-11-22 — M16: به‌روزرسانی ساده با یک دستور و دابل‌کلیک (بخش ۱، D170)
 - **انجام‌شده:** دستور تازهٔ `automa update`: نسخهٔ تازه رو از GitHub می‌گیره و فقط شاخهٔ `main` رو جلو می‌بره (fast-forward)؛ اگه فایلی رو خودت تغییر داده باشی، روی شاخهٔ دیگه‌ای باشی یا commit محلی داشته باشی، هیچ چیزی رو عوض نمی‌کنه و دقیق می‌گه چی سر راهه و چه دستوری بزنی. هرگز force، reset یا stash نمی‌کنه. `pip install -e .` فقط وقتی وابستگی‌ها (`pyproject.toml`) عوض شده باشن دوباره اجرا می‌شه (`--reinstall` برای اجبار). در آخر می‌گه از کدوم نسخه به کدوم رفتی و فهرست تغییرها رو نشون می‌ده (به انگلیسی، چون ترمینال WSL فارسی رو برعکس نشون می‌ده). برای Windows: فایل دابل‌کلیکی `scripts/automa-update.bat` (+ `.ps1`) که همین رو داخل WSL اجرا می‌کنه، نتیجه رو رنگی نشون می‌ده و می‌پرسه «Open Automa now?»؛ و گزینهٔ `-Update` برای میانبر `automa-web.bat`. بخش «به‌روزرسانی Automa» در README با سه قدم.
 - **فایل‌ها:** `src/automa/update.py` (تازه)، `src/automa/tools/command.py` (`run_update_command`، `CommandResult`، `UPDATE_GIT_SUBCOMMANDS`)، `src/automa/cli.py` (`update`)، `scripts/automa-update.bat` و `.ps1` (تازه)، `scripts/automa-web.ps1` (`-Update`)، `README.md`؛ تست‌ها: `tests/test_update.py` (تازه، ۳۷ تست با مخزن‌های git موقت محلی، بدون شبکه و pip)، `tests/test_update_launcher.py` (تازه)، `tests/test_windows_launcher.py`؛ `docs/DECISIONS.md`، `docs/ARCHITECTURE.md`، `ROADMAP.md`.

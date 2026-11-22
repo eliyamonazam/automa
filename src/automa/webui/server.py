@@ -470,6 +470,7 @@ class WebApp:
             running=running,
             pending_approvals=len(view.pending),
             anomaly=self._anomaly,
+            titles={t.id: t.title for t in view.tasks if t.title},
         )
 
     def handle(

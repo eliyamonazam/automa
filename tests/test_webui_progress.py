@@ -602,3 +602,54 @@ def test_utc_timestamps_shown(store: ProjectStore) -> None:
     line = pg.EventLine(ts=datetime(2026, 1, 1, tzinfo=UTC), type="x.y")
     doc = rd.render_project(_view(store), progress=pg.ProgressView(events=(line,)))
     assert "2026-01-01T00:00:00+00:00" in doc
+
+
+# --- D171: the live "right now" card ---------------------------------------------
+
+
+def _activity() -> pg.Activity:
+    return pg.Activity(
+        phase="working",
+        task_title="Build <the> page",
+        action_key="activity.wrote",
+        action_arg="site/index.html",
+        at=T0,
+    )
+
+
+def test_render_activity_only_while_live(store: ProjectStore) -> None:
+    live = pg.ProgressView(live=True, activity=_activity())
+    doc = rd.render_project(_view(store), progress=live)
+    assert 'class="card activity"' in doc
+    assert "Working on: Build &lt;the&gt; page" in doc
+    assert "wrote site/index.html" in doc
+    still = pg.ProgressView(live=False, activity=_activity())
+    assert 'class="card activity"' not in rd.render_project(_view(store), progress=still)
+
+
+def test_render_activity_fa(store: ProjectStore) -> None:
+    a = pg.Activity(phase="reviewing")
+    doc = rd.render_project(
+        _view(store), progress=pg.ProgressView(live=True, activity=a), lang="fa"
+    )
+    assert "همین الان" in doc and "بازبینی نهایی کل محصول" in doc
+    assert "آخرین کار" not in doc
+
+
+def test_build_progress_activity_from_events_only_when_running(store: ProjectStore) -> None:
+    lines = [
+        Event(ts=T0, type="worker.started", project_id="p1", data={"task": "a"}),
+        Event(
+            ts=T0 + timedelta(seconds=1),
+            type="tool.call",
+            project_id="p1",
+            data={"tool": "write_file", "ok": True, "path": "out.md"},
+        ),
+    ]
+    path = store.project_dir("p1") / EVENTS_FILE
+    path.write_text("".join(e.model_dump_json() + "\n" for e in lines), encoding="utf-8")
+    on = pg.build_progress(store, "p1", [None], [], running=True, titles={"a": "Write"})
+    assert on.activity is not None and on.activity.task_title == "Write"
+    assert on.activity.action_arg == "out.md"
+    off = pg.build_progress(store, "p1", [None], [], running=False)
+    assert off.activity is None
