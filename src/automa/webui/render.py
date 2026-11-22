@@ -831,7 +831,7 @@ def render_project(
     if (
         stop is not None
         and brake is not None
-        and brake.kind == "task_brake"
+        and brake.kind in ("task_brake", "run_brake")
         and brake.task is not None
         and brake.awaiting
         and journey.now == stop.text
@@ -1391,16 +1391,23 @@ def _brake_card(
     ``/projects/<pid>/brake`` (same CSRF and same-origin checks). "Continue" carries
     the start form's cost confirmation box; after "Stop" only "Continue" is left."""
     task = brake.task or ""
+    whole = brake.kind == "run_brake"  # the whole-run brake (D172)
     title = next((r.title for r in view.tasks if r.id == task and r.title.strip()), task)
+    ask = "stop.brake.run_ask" if whole else "stop.brake.ask"
     if brake.spent_nusd is not None and brake.limit_nusd is not None:
         values = {
-            "task": title,
             "spent": nusd_money(brake.spent_nusd, rate, lang=lang),
             "limit": nusd_money(brake.limit_nusd, rate, lang=lang),
         }
-        question = _filled(STOP_MESSAGES["stop.brake.ask"][lang], values)
+        if not whole:
+            values["task"] = title
+        question = _filled(STOP_MESSAGES[ask][lang], values)
+    elif whole:
+        question = text(STOP_MESSAGES["stop.brake.run_ask_plain"][lang])
     else:
         question = _filled(STOP_MESSAGES["stop.brake.ask_plain"][lang], {"task": title})
+    go_key = "stop.brake.run_continue" if whole else "stop.brake.continue"
+    help_key = "stop.brake.run_help" if whole else "stop.brake.help"
     action = text(_project_href(view.id) + "/brake")
     hidden = _hidden("csrf", forms.csrf_token) + _hidden("task", task)
     confirm = (
@@ -1412,8 +1419,8 @@ def _brake_card(
     go = (
         f'<form method="post" action="{action}">{hidden}'
         f"{_hidden('decision', 'continue')}{confirm}"
-        f'<p><button type="submit">{text(stop_text("stop.brake.continue", lang))}</button> '
-        f'<span class="muted">{text(stop_text("stop.brake.help", lang))}</span></p></form>'
+        f'<p><button type="submit">{text(stop_text(go_key, lang))}</button> '
+        f'<span class="muted">{text(stop_text(help_key, lang))}</span></p></form>'
     )
     halt = (
         ""

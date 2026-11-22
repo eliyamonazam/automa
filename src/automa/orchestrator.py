@@ -43,7 +43,8 @@ What the orchestrator never does:
 - mark a task passed by itself: only a stored ``pass`` verdict can (enforced by the
   ``ProjectStore``, D22);
 - retry or work around a budget stop: ``BudgetError`` pauses the project at once
-  (a task spending brake, ``TaskBrakeStop``, with reason ``task_brake``, D153);
+  (a task spending brake, ``TaskBrakeStop``, with reason ``task_brake``, D153;
+  the whole-run brake, ``RunBrakeStop``, with reason ``run_brake``, D172);
 - run a tool that needs approval without it: ``ApprovalRequired`` records a request
   in ``approvals/`` and pauses the project; only a user decision for exactly that
   call (same task, tool and arguments) lets it run once on a later run;
@@ -65,7 +66,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from automa.agents.model_selector import ModelSelectorAgent, needs_selection
 from automa.agents.verifier import VerificationFailed, VerifierAgent, verifier_policy
 from automa.agents.worker import WorkerAgent
-from automa.budget.brake import TaskBrakeStop
+from automa.budget.brake import RunBrakeStop, TaskBrakeStop
 from automa.budget.guard import BudgetError
 from automa.config import MAX_PARALLEL, AutomaConfig, ConfigError, SandboxMode, Tier
 from automa.events import Event
@@ -160,6 +161,7 @@ class StopReason(StrEnum):
     CONFIG = "config"  # e.g. no model configured for the task's tier
     USER = "user"  # stop requested by the user between steps (web UI "Stop", D126)
     TASK_BRAKE = "task_brake"  # a task cost far more than estimated (TaskBrake, D153)
+    RUN_BRAKE = "run_brake"  # the whole run cost far more than estimated (D172)
     USER_INPUT = "user_input"  # a task asked the user for something (ask_user, D159)
 
 
@@ -1024,6 +1026,8 @@ class Orchestrator:
     @staticmethod
     def _stop_for(e: BaseException, task_id: str) -> _Stop | None:
         """Map an agent error to a pause reason; anything else propagates unchanged."""
+        if isinstance(e, RunBrakeStop):
+            return _Stop(StopReason.RUN_BRAKE, str(e), task_id)
         if isinstance(e, TaskBrakeStop):
             return _Stop(StopReason.TASK_BRAKE, str(e), task_id)
         if isinstance(e, BudgetError):

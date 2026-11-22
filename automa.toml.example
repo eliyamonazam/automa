@@ -111,6 +111,11 @@ confirm_above_usd = 0.3
 # step of the same size with: automa brake continue <project> <task>
 task_brake_min_usd = 0.15
 task_brake_factor = 3.0
+# Whole-run brake (D172): a run that has cost more than max(run_brake_factor x the
+# high end of the run's estimated range, run_brake_min_usd) pauses between two model
+# calls. Go on with: automa brake continue <project> --run (or the web's "Continue").
+run_brake_min_usd = 0.30
+run_brake_factor = 2.0
 
 # Where run_command runs. "local" (default): on this machine, with your privileges,
 # NOT isolated. "docker": each call in a fresh container with no network, read-only

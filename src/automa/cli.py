@@ -132,11 +132,13 @@ from automa.benchmarks import (
     write_result,
 )
 from automa.budget.brake import (
+    RUN_KEY,
     BrakeError,
     TaskBrake,
     brake_steps,
     continue_task,
     pending_brake,
+    run_brake_limit,
 )
 from automa.budget.guard import BudgetError, BudgetExceeded, BudgetGuard, cap_to_nusd
 from automa.budget.ledger import (
@@ -370,6 +372,7 @@ RUN_EXIT_CODES: dict[StopReason, int] = {
     StopReason.TOOL_LAYER: EXIT_PAUSED,
     StopReason.USER: EXIT_STOPPED,
     StopReason.TASK_BRAKE: EXIT_PAUSED,
+    StopReason.RUN_BRAKE: EXIT_PAUSED,
     StopReason.USER_INPUT: EXIT_NEEDS_INPUT,
 }
 
@@ -1225,6 +1228,8 @@ def run(
             budget_guard,
             ledger,
             _quality_costs(quality) if stats is not None else None,
+            run_high_nusd=est.high_nusd,
+            run_baseline_nusd=spent_before,
         )
         typer.echo(f"spending brake: {_describe_brake(guard, config)}")
         gateway = LLMGateway(config, provider, guard=guard)
@@ -1319,6 +1324,9 @@ def _task_brake(
     inner: BudgetGuard,
     ledger: CostLedger,
     costs: dict[tuple[str, str], list[int]] | None,
+    *,
+    run_high_nusd: int | None = None,
+    run_baseline_nusd: int = 0,
 ) -> TaskBrake:
     """The task spending brake of ``automa run`` (D153).
 
@@ -1326,6 +1334,11 @@ def _task_brake(
     had run yet), so a resumed run brakes at the same place; when no estimate can
     be made every task gets ``[limits] task_brake_min_usd`` (the brake never turns
     off). Continues granted earlier are read from the project's events.
+
+    The whole-run brake (D172) measures this run from ``run_baseline_nusd`` (the
+    project's cost when the run started) against ``run_high_nusd``, the high end of
+    this run's estimate; while the last run brake stop waits for a decision, the
+    run is refused at its first model call.
     """
     plan = store.load_plan(pid)
     highs: dict[str, int] | None = None
@@ -1359,6 +1372,9 @@ def _task_brake(
         continues=continues,
         offsets=offsets,
         events=events,
+        run_limit_nusd=run_brake_limit(config.limits, run_high_nusd),
+        run_baseline_nusd=run_baseline_nusd,
+        run_waiting=pending_brake(recorded, RUN_KEY) is not None,
     )
 
 
@@ -1369,6 +1385,12 @@ def _describe_brake(brake: TaskBrake, config: AutomaConfig) -> str:
         f"a task pauses once it costs more than max({lim.task_brake_factor:g} x the high "
         f"end of its range, {_usd(cap_to_nusd(lim.task_brake_min_usd))}); allow one more "
         "step with: automa brake continue <project> <task>"
+        + (
+            f"; this run pauses once it costs more than {_usd(brake.run_limit_nusd)} "
+            "(go on with: automa brake continue <project> --run)"
+            if brake.run_limit_nusd is not None
+            else ""
+        )
     )
 
 
@@ -1548,16 +1570,24 @@ def change(
 @brake_app.command("continue")
 def brake_continue(
     project_id: Annotated[str, typer.Argument(help="Project paused by the brake.")],
-    task_id: Annotated[str, typer.Argument(help="Task the brake stopped.")],
+    task_id: Annotated[
+        str | None, typer.Argument(help="Task the brake stopped (omit with --run).")
+    ] = None,
+    whole_run: Annotated[
+        bool, typer.Option("--run", help="Go on after the whole-run brake (D172).")
+    ] = False,
     config_path: Annotated[
         Path | None, typer.Option("--config", help="Path to automa.toml.")
     ] = None,
 ) -> None:
-    """Allow a braked task one more step of spending of the same size (D153).
+    """Allow a braked task one more step of spending of the same size (D153), or,
+    with ``--run``, let the next run start after the whole-run brake (D172).
 
-    Only accepted while the task's latest brake stop has not been continued yet;
-    the BudgetGuard caps still apply. Then resume with: automa run <project>.
+    Only accepted while the latest brake stop has not been continued yet; the
+    BudgetGuard caps still apply. Then resume with: automa run <project>.
     """
+    if whole_run == (task_id is not None):
+        raise _fail("give either a task id or --run", EXIT_USER)
     config = _load(config_path)
     store = ProjectStore.for_workspace(config.workspace)
     try:
@@ -1568,11 +1598,18 @@ def brake_continue(
         raise _fail(str(e), EXIT_USER) from None
     except (OSError, ValueError) as e:
         raise _fail(f"cannot read the events of {project.id}: {_safe(str(e))}", EXIT_USER) from None
-    stop = pending_brake(recorded, task_id)
+    key = RUN_KEY if task_id is None else task_id
+    stop = pending_brake(recorded, key)
     try:
-        event = continue_task(recorded, events, project.id, task_id, via="cli")
-    except BrakeError as e:
-        raise _fail(str(e), EXIT_USER) from None
+        event = continue_task(recorded, events, project.id, key, via="cli")
+    except BrakeError:
+        what = "the last run" if task_id is None else f"task {task_id!r}"
+        raise _fail(f"{what} is not stopped by the spending brake", EXIT_USER) from None
+    if task_id is None:
+        typer.echo(
+            f"the next run may start with a fresh run brake; resume with: automa run {project.id}"
+        )
+        return
     step = stop.data.get("step_nusd") if stop is not None else None
     size = f" of {_usd(step)}" if isinstance(step, int) else ""
     typer.echo(
@@ -2058,6 +2095,13 @@ def _report_lines(report: RunReport) -> list[str]:
                 f'next: automa answer {pid} {rid} --text "..." [--file PATH] '
                 f"(or, if you cannot provide it: automa decline {pid} {rid}), "
                 f"then: automa run {pid}"
+            )
+            return lines
+        if report.reason is StopReason.RUN_BRAKE:
+            lines.append(
+                "next: this run cost far more than estimated; if going on is worth it: "
+                f"automa brake continue {report.project_id} --run, then: "
+                f"automa run {report.project_id}"
             )
             return lines
         if report.reason is StopReason.TASK_BRAKE and report.task_id:

@@ -19,6 +19,7 @@ from automa.budget.brake import (
     BRAKE_CONTINUED,
     BRAKE_DECLINED,
     BRAKE_STOP,
+    RUN_KEY,
     BrakeError,
     continue_task,
     decline_task,
@@ -397,3 +398,38 @@ def test_e2e_web_continue_after_a_real_brake(
     assert e2e.status_json()["status"] == ProjectStatus.DONE.value
     continued = [e for e in store.events(PID).read() if e.type == BRAKE_CONTINUED]
     assert len(continued) == 1 and continued[0].data["via"] == "web"
+
+
+# -- the whole-run brake (D172) -------------------------------------------------------
+
+
+def _run_braked(env: Env) -> str:
+    pid = env.project(status=ProjectStatus.PAUSED)
+    sink = env.store.events(pid)
+    for e in (
+        _ev("orchestrator.started", 0, plan_version=1),
+        _ev(BRAKE_STOP, 1, task=RUN_KEY, scope="run", spent_nusd=SPENT, limit_nusd=LIMIT),
+        _ev("orchestrator.paused", 2, reason="run_brake", task="build"),
+    ):
+        sink.emit(e.model_copy(update={"project_id": pid}))
+    return pid
+
+
+def test_run_brake_page_asks_about_the_run(env: Env) -> None:
+    pid = _run_braked(env)
+    body = _page(_fa_app(env), pid)
+    assert "این اجرا" in body and "ادامه بدم؟" in body and "تومان" in body
+    assert f'name="task" value="{RUN_KEY}"' in body
+    assert ">توقف</button>" in body and "ترمز تازه" in body
+    assert "<bdi>Build</bdi>" not in body.split('class="card brake"')[1].split("</section>")[0]
+
+
+def test_run_brake_continue_and_stop_from_the_web(env: Env) -> None:
+    pid = _run_braked(env)
+    r = env.post(f"/projects/{pid}/brake", {"csrf": TOKEN, "task": RUN_KEY, "decision": "stop"})
+    assert r.status == 303 and env.spawned == []
+    assert "به انتخاب تو متوقف موند: این اجرا" in _page(_fa_app(env), pid)
+    r = env.post(f"/projects/{pid}/brake", {"csrf": TOKEN, "task": RUN_KEY, "decision": "continue"})
+    assert r.status == 303 and len(env.spawned) == 1
+    continued = [e for e in env.events(pid) if e["type"] == BRAKE_CONTINUED]
+    assert [c["data"]["task"] for c in continued] == [RUN_KEY]  # type: ignore[index]

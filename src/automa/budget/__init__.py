@@ -3,7 +3,9 @@
 from automa.budget.brake import (
     BRAKE_CONTINUED,
     BRAKE_STOP,
+    RUN_KEY,
     BrakeError,
+    RunBrakeStop,
     TaskBrake,
     TaskBrakeStop,
     brake_continues,
@@ -31,7 +33,9 @@ from automa.budget.ledger import (
 __all__ = [
     "BRAKE_CONTINUED",
     "BRAKE_STOP",
+    "RUN_KEY",
     "BrakeError",
+    "RunBrakeStop",
     "TaskBrake",
     "TaskBrakeStop",
     "brake_continues",

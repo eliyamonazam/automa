@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-22 — M16: ترمز خرج کل اجرا (D172)
+- **انجام‌شده:** اگه یک اجرا در مجموع بیشتر از ۲ برابر بالای پیش‌بینی همون اجرا خرج کنه (حداقل ۰٫۳۰ دلار)، بین دو فراخوانی می‌ایسته و همون سؤال «ادامه بدم؟» رو می‌پرسه: در وب کارت با مبلغ به تومان و دکمه‌های «ادامه» و «توقف»، در ترمینال `automa brake continue <project> --run`. بدون تصمیم، اجرای دوباره هیچ خرجی نمی‌کنه.
+- **فایل‌ها:** `src/automa/budget/brake.py` (`RunBrakeStop`، `run_brake_limit`، `RUN_KEY`، `TaskBrake._check_run`)، `src/automa/config.py` (`run_brake_min_usd`، `run_brake_factor`)، `src/automa/orchestrator.py` (`StopReason.RUN_BRAKE`)، `src/automa/cli.py` (`brake continue --run`، خط ترمز و راهنمای بعدی)، `src/automa/bench.py`، `src/automa/benchmarks/results.py`، `src/automa/webui/stops.py`، `src/automa/webui/render.py`، `automa.toml.example`؛ تست‌ها: `tests/test_run_brake.py` (تازه)، `tests/test_webui_brake.py`.
+- **تست‌ها:** `pytest` ← ۶۲۳۳ سبز، ۲ رد شده (Docker واقعی)؛ حالت شبیه CI هم سبز؛ `ruff check` و `ruff format --check` سبز. بررسی بصری کارت با Chrome headless در ۱۲۸۰ و ۳۹۰ پیکسل.
+- **مشکلات:** BudgetGuard و Policy دست نخوردن؛ ترمز فقط بیشتر رد می‌کنه و تست‌های تازه نشون می‌دن سقف پروژه همچنان بعد از «ادامه» اعمال می‌شه.
+- **برای صاحب مخزن:** کاری لازم نیست (تنظیم در `[limits]`: `run_brake_min_usd`، `run_brake_factor`).
+- **قدم بعدی:** پیش‌بینی هزینهٔ واقع‌بینانه‌تر.
+
 ## 2026-11-22 — M16: «همین الان» زنده (D171)
 - **انجام‌شده:** در صفحهٔ پروژهٔ در حال اجرا، کارت «همین الان» با یک جملهٔ ساده: روی کدوم مرحله کار می‌کنه یا داره نتیجه رو بررسی می‌کنه یا بازبینی نهایی می‌کنه، و آخرین کارش (مثلاً «فایل index.html رو ویرایش کرد») با زمانش. هر ۵ ثانیه خودش تازه می‌شه؛ هیچ آرگومان حساسی نشون داده نمی‌شه.
 - **فایل‌ها:** `src/automa/webui/activity.py` (تازه)، `src/automa/webui/progress.py` (`ProgressView.activity`، `build_progress(titles=)`)، `src/automa/webui/server.py`، `src/automa/webui/render.py` (`_activity_card`، CSS)، `src/automa/webui/i18n.py`؛ تست‌ها: `tests/test_webui_activity.py`، `tests/test_webui_progress.py`.

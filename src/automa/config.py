@@ -240,6 +240,10 @@ class BudgetLimits(_Strict):
     # max(task_brake_factor x the high end of its estimated range, task_brake_min_usd).
     task_brake_min_usd: float = Field(default=0.15, gt=0, le=1_000_000, allow_inf_nan=False)
     task_brake_factor: float = Field(default=3.0, ge=1, le=100, allow_inf_nan=False)
+    # Whole-run brake (D172): a run pauses once it costs more than
+    # max(run_brake_factor x the high end of the run's estimated range, run_brake_min_usd).
+    run_brake_min_usd: float = Field(default=0.30, gt=0, le=1_000_000, allow_inf_nan=False)
+    run_brake_factor: float = Field(default=2.0, ge=1, le=100, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _per_call_within_caps(self) -> BudgetLimits:
