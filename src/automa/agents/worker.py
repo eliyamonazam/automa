@@ -39,6 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from automa.budget.ledger import usd_to_nusd
 from automa.config import Tier
 from automa.events import Event, EventSink
+from automa.feasibility import worker_note
 from automa.llm.gateway import MAX_GROWN_OUTPUT_TOKENS, CallContext, LLMGateway
 from automa.llm.types import FinishReason, Message, ToolCall, ToolSpec
 from automa.llm.types import Role as MsgRole
@@ -279,6 +280,9 @@ def task_message(
             line += f"  (checked automatically: {c.check.model_dump_json()})"
         criteria.append(line)
     parts.append("## Acceptance criteria\n" + "\n".join(criteria))
+    note = worker_note(task)  # D164: what the plan allowed this task to depend on
+    if note:
+        parts.append(note)
     if attachments.strip():
         parts.append(attachments.strip())
     if answers:

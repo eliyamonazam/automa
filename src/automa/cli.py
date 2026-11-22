@@ -158,6 +158,7 @@ from automa.config import (
 )
 from automa.delivery import DeliveryState, build_delivery, render_markdown, try_build_delivery
 from automa.events import Event, JsonlEventLog
+from automa.feasibility import cli_lines as feasibility_lines
 from automa.finance import (
     ACTUAL_EVENT,
     ANOMALY_EVENT,
@@ -623,7 +624,9 @@ def _plan_lines(plan: Plan) -> list[str]:
     lines = [f"plan v{plan.version}: {len(plan.tasks)} task(s)"]
     for i, task in enumerate(plan.topological_order(), start=1):
         deps = f" (after: {', '.join(task.depends_on)})" if task.depends_on else ""
-        lines.append(f"  {i}. [{task.role}] {task.id}: {task.title}{deps}")
+        needs = f" [needs: {', '.join(task.needs)}]" if task.needs else ""
+        lines.append(f"  {i}. [{task.role}] {task.id}: {task.title}{deps}{needs}")
+    lines.extend(feasibility_lines(plan))  # D164: warned before anything is run
     return lines
 
 

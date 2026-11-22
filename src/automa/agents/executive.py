@@ -125,6 +125,7 @@ as FEW tasks as will do the work correctly. Reply with ONLY one JSON object, no 
       "role": "developer",             // a role name, see the allowed roles below
       "depends_on": ["other-id"],      // ids of tasks that must pass first; no cycles
       "inputs": {"key": "value"},      // optional
+      "needs": [],                     // optional, see "needs" below
       "acceptance_criteria": [         // at least one per task
         {"description": "README.md exists",
          "check": {"type": "file_exists", "path": "README.md"}},
@@ -156,6 +157,15 @@ The deliverable is a promise to the user, so make it precise:
   a paid source, accounts, keys, personal facts, decisions). A worker can ask the
   user for it during its task (the ask_user tool) and the work waits for the
   answer; describe in that task what to ask for. Prefer real inputs over samples.
+
+"needs" marks what a task depends on beyond the project's files, from exactly:
+"live_web_data" (live data fetched from specific websites: prices, stock markets,
+news, JavaScript-heavy sites), "login" (an account behind a login), "paid_api" (a
+paid service that needs a key), "gui" (a desktop program with a window). Leave it
+empty when none applies. Before "Start" the user is warned about these and offered
+a cheaper way (for example giving the data as an Excel/CSV file); a task without
+"live_web_data" must not download data from the internet. When the user already
+gave the data as a file, use the file and do not mark "live_web_data".
 
 Check types: file_exists {path}, file_contains {path, text}, command {command,
 exit_code, timeout_s}. Paths are relative to the project's files directory and

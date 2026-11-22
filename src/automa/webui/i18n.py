@@ -220,6 +220,71 @@ _RAW: dict[str, dict[Language, str]] = {
             "خودش نمی‌سازه و آخر کار دقیق می‌گه چی کم مونده."
         ),
     },
+    # Feasibility warning before "Start" (D164): fixed texts, chosen by code.
+    "list.sep": {"en": ", ", "fa": "، "},
+    "run.feas.heading": {
+        "en": "Before you start: some parts depend on things outside Automa",
+        "fa": "قبل از شروع: بعضی بخش‌ها به چیزهایی بیرون از Automa وابسته‌ان",
+    },
+    "run.feas.tasks": {"en": "(in: {tasks})", "fa": "(در: {tasks})"},
+    "run.feas.live_web_data": {
+        "en": "Live data from websites.",
+        "fa": "دادهٔ زنده از سایت‌ها.",
+    },
+    "run.feas.live_web_data.alt": {
+        "en": (
+            "Some sites (stock markets, prices, heavy JavaScript) may not give reliable "
+            "data to these tools, and retries cost money. Cheaper and surer: give the "
+            "data yourself as an Excel or CSV file."
+        ),
+        "fa": (
+            "بعضی سایت‌ها (بورس، قیمت‌ها، سایت‌های پرجاوااسکریپت) ممکنه با ابزارهای فعلی "
+            "دادهٔ قابل اعتماد ندن و تلاش دوباره خرج داره. راه ارزون‌تر و مطمئن‌تر: داده "
+            "رو خودت به‌صورت فایل Excel یا CSV بده."
+        ),
+    },
+    "run.feas.login": {"en": "An account behind a login.", "fa": "حسابی که ورود می‌خواد."},
+    "run.feas.login.alt": {
+        "en": (
+            "Automa never takes your password. Export the data from that account "
+            "yourself and give it as a file."
+        ),
+        "fa": (
+            "Automa هیچ‌وقت رمزت رو نمی‌گیره. داده رو خودت از اون حساب خروجی بگیر و به‌صورت فایل بده."
+        ),
+    },
+    "run.feas.paid_api": {"en": "A paid service.", "fa": "یک سرویس پولی."},
+    "run.feas.paid_api.alt": {
+        "en": (
+            "It works only if you set up its key yourself (never in the idea text). "
+            "Otherwise give the data as a file."
+        ),
+        "fa": (
+            "فقط وقتی کار می‌کنه که کلیدش رو خودت تنظیم کرده باشی (هیچ‌وقت در متن "
+            "ایده ننویس). وگرنه داده رو به‌صورت فایل بده."
+        ),
+    },
+    "run.feas.gui": {"en": "A desktop program with a window.", "fa": "یک برنامهٔ پنجره‌دار."},
+    "run.feas.gui.alt": {
+        "en": (
+            "Automa cannot click in it. It makes the files or a script, and you do "
+            "that step yourself."
+        ),
+        "fa": (
+            "Automa نمی‌تونه داخلش کلیک کنه؛ فایل‌ها یا اسکریپت رو می‌سازه و اون قدم "
+            "رو خودت انجام می‌دی."
+        ),
+    },
+    "run.feas.body": {
+        "en": (
+            "You can still start: if a part cannot get real data, Automa asks you or "
+            "says what is missing, and never invents it."
+        ),
+        "fa": (
+            "باز هم می‌تونی شروع کنی: اگه بخشی دادهٔ واقعی نگیره، Automa ازت می‌پرسه "
+            "یا دقیق می‌گه چی کم مونده؛ هیچ‌وقت از خودش نمی‌سازه."
+        ),
+    },
     "run.not_startable": {
         "en": "Not startable now (no plan, already running or done).",
         "fa": "الان نمی‌شه شروع کرد (برنامه‌ای نیست، در حال اجراست یا تموم شده).",

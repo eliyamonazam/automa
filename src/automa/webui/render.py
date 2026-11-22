@@ -22,6 +22,7 @@ from string import Formatter
 from urllib.parse import quote
 
 from automa.delivery import Delivery, DeliveryFile, DeliveryState, TaskDelivery
+from automa.feasibility import FeasibilityWarning
 from automa.l10n import (
     DEFAULT_TIMEZONE,
     Language,
@@ -251,6 +252,7 @@ padding:10px 14px;margin:10px 0;background:color-mix(in srgb,var(--warn) 9%,var(
 .missing-needs h3{display:flex;align-items:center;gap:8px;margin:0 0 .3em;font-size:1em;
 color:var(--warn)}
 .missing-needs ul{margin:.3em 0;padding-inline-start:1.3em}
+.feas li{margin:.45em 0;overflow-wrap:anywhere}
 .ask .question{font-size:1.12em;font-weight:700;white-space:pre-line;overflow-wrap:anywhere}
 .upload{background:var(--soft);border:1px dashed var(--line);border-radius:12px;
 padding:10px 14px;margin:12px 0}
@@ -1389,6 +1391,8 @@ class RunPanel:
     stopping: bool = False
     # Required needs (D163) the user did not give: warned about before "Start".
     missing_needs: tuple[str, ...] = ()
+    # What the plan's tasks depend on beyond the workspace (D164), warned before "Start".
+    feasibility: tuple[FeasibilityWarning, ...] = ()
 
 
 def _run_state(run: RunPanel, lang: Language) -> str:
@@ -1436,6 +1440,8 @@ def _run_panel(
             )
     if run.can_start and run.missing_needs:
         parts.append(_missing_needs(run.missing_needs, lang))
+    if run.can_start and run.feasibility:
+        parts.append(_feasibility(run.feasibility, lang))
     if run.can_start:
         parts.append(
             _start_form(
@@ -1456,6 +1462,25 @@ def _missing_needs(missing: tuple[str, ...], lang: Language) -> str:
         '<div class="missing-needs" role="note">'
         f"<h3>{ICONS[CardState.PARTIAL]}{text(t('run.missing.heading', lang))}</h3>"
         f'<ul>{items}</ul><p class="hint">{text(t("run.missing.body", lang))}</p></div>'
+    )
+
+
+def _feasibility(warnings: tuple[FeasibilityWarning, ...], lang: Language) -> str:
+    """The warning before "Start" (D164): tasks that need live web data, a login, a
+    paid service or a desktop program, each kind with its cheaper, honest way. The
+    texts are fixed translations; only the task titles are model output (escaped)."""
+    items = []
+    for w in warnings:
+        tasks = t("run.feas.tasks", lang, tasks=t("list.sep", lang).join(w.tasks))
+        items.append(
+            f"<li><strong>{text(t('run.feas.' + w.need, lang))}</strong> "
+            f'<span class="hint" dir="auto">{text(tasks)}</span><br>'
+            f"{text(t('run.feas.' + w.need + '.alt', lang))}</li>"
+        )
+    return (
+        '<div class="missing-needs feas" role="note">'
+        f"<h3>{ICONS[CardState.PARTIAL]}{text(t('run.feas.heading', lang))}</h3>"
+        f'<ul>{"".join(items)}</ul><p class="hint">{text(t("run.feas.body", lang))}</p></div>'
     )
 
 

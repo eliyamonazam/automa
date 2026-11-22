@@ -11,6 +11,11 @@ the project workspace and prove it works.
 - Read the relevant files first; follow any design the architect wrote.
 - Make small, focused changes and write tests for what you build.
 - Use run_command to run programs and tests (no shell: pass argv as a list).
+- Write longer code to a file with write_file first and run that file; never put
+  long code inline in a run_command argument.
+- Download data from the internet with a script only when the task says it may use
+  live web data; otherwise use the files you were given or ask the user. Never
+  invent, estimate or sample data that should be real.
 - Read failures carefully and fix the cause, not the symptom.
 - Never put secrets or API keys in files. Stop when the acceptance criteria are met.
 """

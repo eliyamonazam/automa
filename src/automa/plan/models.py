@@ -179,8 +179,19 @@ class TaskStatus(StrEnum):
     BLOCKED = "blocked"
 
 
+# What a task depends on that the tools may not reliably give (M16, D164): live data
+# from specific websites, an account behind a login, a paid API, or a desktop GUI.
+# Canonical order; the project page and ``automa new`` warn about these before
+# "Start" and offer a cheaper, honest alternative. Data only: grants nothing.
+TaskNeed = Literal["live_web_data", "login", "paid_api", "gui"]
+TASK_NEEDS: tuple[TaskNeed, ...] = ("live_web_data", "login", "paid_api", "gui")
+
+
 class Task(_Strict):
-    """One unit of work, done by a worker with ``role`` and judged by its criteria."""
+    """One unit of work, done by a worker with ``role`` and judged by its criteria.
+
+    ``needs`` (D164) names what the task depends on beyond the workspace (see
+    ``TaskNeed``); duplicates are dropped and the order is canonical."""
 
     id: TaskId
     title: Title
@@ -192,6 +203,12 @@ class Task(_Strict):
     )
     depends_on: list[TaskId] = Field(default_factory=list, max_length=MAX_TASKS)
     acceptance_criteria: list[AcceptanceCriterion] = Field(min_length=1, max_length=MAX_LIST_ITEMS)
+    needs: list[TaskNeed] = Field(default_factory=list, max_length=MAX_LIST_ITEMS)
+
+    @field_validator("needs")
+    @classmethod
+    def _canonical_needs(cls, v: list[TaskNeed]) -> list[TaskNeed]:
+        return [n for n in TASK_NEEDS if n in v]
 
     @model_validator(mode="after")
     def _deps(self) -> Task:

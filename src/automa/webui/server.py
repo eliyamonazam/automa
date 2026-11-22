@@ -44,6 +44,7 @@ from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
 from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError, nusd_to_usd
 from automa.delivery import try_build_delivery
+from automa.feasibility import FeasibilityWarning, plan_warnings
 from automa.finance.anomaly import AnomalySettings
 from automa.l10n import (
     DEFAULT_TIMEZONE,
@@ -724,12 +725,19 @@ class WebApp:
         can_start = self._runs.can_start(pid)
         needs = self._runs.needs_confirm(pid) if can_start else False
         missing = self._missing_needs(pid) if can_start else ()
+        feasibility = self._feasibility(pid) if can_start else ()
         if state is None:
-            return RunPanel(can_start=can_start, needs_confirm=needs, missing_needs=missing)
+            return RunPanel(
+                can_start=can_start,
+                needs_confirm=needs,
+                missing_needs=missing,
+                feasibility=feasibility,
+            )
         return RunPanel(
             can_start=can_start,
             needs_confirm=needs,
             missing_needs=missing,
+            feasibility=feasibility,
             can_stop=self._runs.can_stop(pid),
             state=state.summary,
             running=state.running,
@@ -750,6 +758,14 @@ class WebApp:
         if record is None:
             return ()
         return tuple(n.what for n in record.missing_required())
+
+    def _feasibility(self, pid: str) -> tuple[FeasibilityWarning, ...]:
+        """What the plan's tasks depend on beyond the workspace (D164); an unreadable
+        plan warns about nothing rather than breaking the page."""
+        try:
+            return plan_warnings(self._store.load_plan(pid))
+        except ProjectStoreError:
+            return ()
 
     def _single_headers(self, headers: Sequence[tuple[str, str]]) -> dict[str, str] | Response:
         lowered: dict[str, str] = {}
