@@ -45,6 +45,9 @@ from automa.plan import (
     TASK_ID_PATTERN,
     Clarification,
     Clarifications,
+    NeedAnswer,
+    NeedFromUser,
+    NeedsRecord,
     PendingQuestions,
     Plan,
     Task,
@@ -62,6 +65,7 @@ PROJECT_FILE = "project.json"
 PLAN_FILE = "plan.json"
 CLARIFICATIONS_FILE = "clarifications.json"
 QUESTIONS_FILE = "questions.json"
+NEEDS_FILE = "needs.json"
 STOP_REQUEST_FILE = "stop-request.json"
 EVENTS_FILE = "events.jsonl"
 TASKS_DIR = "tasks"
@@ -521,15 +525,26 @@ class ProjectStore:
     def questions_file(self, project_id: str) -> Path:
         return self.project_dir(project_id) / QUESTIONS_FILE
 
-    def save_questions(self, project_id: str, questions: list[str]) -> list[str]:
+    def save_questions(
+        self,
+        project_id: str,
+        questions: list[str],
+        needs: list[NeedFromUser] | tuple[NeedFromUser, ...] = (),
+    ) -> list[str]:
         """Write the not-yet-answered questions once (``questions.json``, D124).
 
+        ``needs`` (D163): what the user must provide, shown with the questions.
         Used by the web UI between asking and answering. Never overwritten: a second
         save raises ``ProjectConflict``; a project with answers already is refused.
         """
         self._require(project_id)
         try:
-            record = PendingQuestions.model_validate({"questions": list(questions)})
+            record = PendingQuestions.model_validate(
+                {
+                    "questions": list(questions),
+                    "needs": [NeedFromUser.model_validate(n).model_dump() for n in needs],
+                }
+            )
         except ValidationError as e:
             raise ProjectStoreError(f"invalid questions for project {project_id!r}") from e
         path = self.questions_file(project_id)
@@ -546,13 +561,18 @@ class ProjectStore:
                 ts=self._now(),
                 type="questions.saved",
                 project_id=project_id,
-                data={"count": len(record.questions)},
+                data={"count": len(record.questions), "needs": len(record.needs)},
             )
         )
         return list(record.questions)
 
     def load_questions(self, project_id: str) -> list[str] | None:
         """The stored questions, or ``None`` when none were stored."""
+        pending = self.load_pending(project_id)
+        return None if pending is None else list(pending.questions)
+
+    def load_pending(self, project_id: str) -> PendingQuestions | None:
+        """The stored questions and needs (D163), or ``None`` when none were stored."""
         self._require(project_id)
         path = self.questions_file(project_id)
         if path.is_symlink():
@@ -564,9 +584,65 @@ class ProjectStore:
         except (OSError, ValueError) as e:
             raise ProjectStoreError(f"{path}: unreadable questions file") from e
         try:
-            return list(PendingQuestions.model_validate(raw).questions)
+            return PendingQuestions.model_validate(raw)
         except ValidationError as e:
             raise ProjectStoreError(f"{path}: invalid questions file") from e
+
+    # -- needs from the user (D163) ----------------------------------------
+
+    def needs_file(self, project_id: str) -> Path:
+        return self.project_dir(project_id) / NEEDS_FILE
+
+    def save_needs(
+        self, project_id: str, items: list[NeedAnswer] | tuple[NeedAnswer, ...]
+    ) -> NeedsRecord:
+        """Write ``needs.json`` once (atomic): each need and what the user gave.
+
+        Like the answers to the questions, the record is never overwritten (a second
+        save raises ``ProjectConflict``)."""
+        self._require(project_id)
+        try:
+            record = NeedsRecord.model_validate(
+                {"items": [NeedAnswer.model_validate(i).model_dump() for i in items]}
+            )
+        except ValidationError as e:
+            raise ProjectStoreError(f"invalid needs for project {project_id!r}") from e
+        path = self.needs_file(project_id)
+        with self._lock:
+            if path.is_symlink():
+                raise ProjectStoreError(f"{path}: needs file must not be a symlink")
+            if path.exists():
+                raise ProjectConflict(f"project {project_id!r} already has needs")
+            _write_json_atomic(path, record.model_dump(mode="json"))
+        self.events(project_id).emit(
+            Event(
+                ts=self._now(),
+                type="needs.saved",
+                project_id=project_id,
+                data={
+                    "count": len(record.items),
+                    "missing_required": len(record.missing_required()),
+                },
+            )
+        )
+        return record
+
+    def load_needs(self, project_id: str) -> NeedsRecord | None:
+        """``needs.json``, or ``None`` when the Executive asked for nothing."""
+        self._require(project_id)
+        path = self.needs_file(project_id)
+        if path.is_symlink():
+            raise ProjectStoreError(f"{path}: needs file must not be a symlink")
+        if not path.exists():
+            return None
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            raise ProjectStoreError(f"{path}: unreadable needs file") from e
+        try:
+            return NeedsRecord.model_validate(raw)
+        except ValidationError as e:
+            raise ProjectStoreError(f"{path}: invalid needs file") from e
 
     # -- stop request (web UI "Stop", D126) ---------------------------------
 

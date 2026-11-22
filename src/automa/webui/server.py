@@ -97,6 +97,7 @@ from automa.webui.ideas import (
     ANSWER_FIELDS,
     IDEA_FIELDS,
     MAX_IDEA_FORM_BYTES,
+    NEED_FILE_FIELDS,
     NEW_PATH,
     IdeaFlow,
     IdeaPlanner,
@@ -556,8 +557,24 @@ class WebApp:
         try:
             check_same_origin(lowered, self._actions)
             files: list[tuple[str, bytes]] = []
+            need_files: list[tuple[str, str, bytes]] = []
             ctype = lowered.get("content-type", "").split(";", 1)[0].strip().lower()
-            if pid is None and ctype == MULTIPART:
+            if pid is not None and ctype == MULTIPART:
+                # D163: answers with files for the needs from the user.
+                upload = parse_multipart(
+                    lowered,
+                    body,
+                    fields=ANSWER_FIELDS,
+                    file_field=NEED_FILE_FIELDS,
+                    max_bytes=MAX_UPLOAD_BYTES,
+                    max_files=MAX_PARTS,
+                )
+                form = upload.fields
+                need_files = [
+                    (fld, name, data)
+                    for fld, (name, data) in zip(upload.file_fields, upload.files, strict=True)
+                ]
+            elif pid is None and ctype == MULTIPART:
                 # D162: the new-idea form with attached files.
                 upload = parse_multipart(
                     lowered,
@@ -573,7 +590,9 @@ class WebApp:
                 form = parse_form(lowered, body, fields=fields, max_bytes=MAX_IDEA_FORM_BYTES)
             check_token(form, self._actions)
             location = (
-                self._ideas.start(form, files) if pid is None else self._ideas.answer(pid, form)
+                self._ideas.start(form, files)
+                if pid is None
+                else self._ideas.answer(pid, form, need_files)
             )
         except ActionRefused as e:
             return self.refused(e)
@@ -704,11 +723,13 @@ class WebApp:
         state = self._runs.state(pid)
         can_start = self._runs.can_start(pid)
         needs = self._runs.needs_confirm(pid) if can_start else False
+        missing = self._missing_needs(pid) if can_start else ()
         if state is None:
-            return RunPanel(can_start=can_start, needs_confirm=needs)
+            return RunPanel(can_start=can_start, needs_confirm=needs, missing_needs=missing)
         return RunPanel(
             can_start=can_start,
             needs_confirm=needs,
+            missing_needs=missing,
             can_stop=self._runs.can_stop(pid),
             state=state.summary,
             running=state.running,
@@ -718,6 +739,17 @@ class WebApp:
             exit_code=state.exit_code,
             stopping=state.stop_requested,
         )
+
+    def _missing_needs(self, pid: str) -> tuple[str, ...]:
+        """Required needs (D163) the user did not give; an unreadable record warns
+        about nothing rather than breaking the page."""
+        try:
+            record = self._store.load_needs(pid)
+        except ProjectStoreError:
+            return ()
+        if record is None:
+            return ()
+        return tuple(n.what for n in record.missing_required())
 
     def _single_headers(self, headers: Sequence[tuple[str, str]]) -> dict[str, str] | Response:
         lowered: dict[str, str] = {}
@@ -884,7 +916,7 @@ class WebApp:
             clarify_pid = parse_clarify_path(path)
             if clarify_pid is not None:
                 try:
-                    questions = self._ideas.pending_questions(clarify_pid)
+                    pending = self._ideas.pending(clarify_pid)
                     goal = self._store.load(clarify_pid).goal
                 except ActionRefused as e:
                     return self.refused(e, "error.title.not_available")
@@ -892,7 +924,14 @@ class WebApp:
                     return self.error(
                         500, "error.title.project_unreadable", str(e), lead="lead.store"
                     )
-                document = render_clarify(clarify_pid, goal, questions, forms, self._lang)
+                document = render_clarify(
+                    clarify_pid,
+                    goal,
+                    list(pending.questions),
+                    forms,
+                    self._lang,
+                    needs=pending.needs,
+                )
                 return _html(200, document, security=self._security)
         if path.startswith(_PROJECT_PREFIX):
             raw = unquote(path[len(_PROJECT_PREFIX) :])

@@ -378,7 +378,11 @@ def test_clarify_returns_questions(tmp_path: Path) -> None:
     req = rig.provider.requests[0]
     assert req.max_tokens == ExecutiveSettings().questions_max_tokens
     assert "make an app" in (req.messages[1].content or "")
-    assert rig.events.of_type("executive.questions")[0].data == {"count": 2}
+    assert rig.events.of_type("executive.questions")[0].data == {
+        "count": 2,
+        "needs": 0,
+        "required_needs": 0,
+    }
 
 
 def test_clarify_no_questions(tmp_path: Path) -> None:

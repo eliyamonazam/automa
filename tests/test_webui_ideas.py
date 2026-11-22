@@ -23,7 +23,7 @@ from automa import cli
 from automa.config import AutomaConfig, load_config
 from automa.llm import FakeProvider, ProviderError
 from automa.plan import Clarification
-from automa.plan.models import MAX_ANSWER_CHARS, MAX_CLARIFICATIONS
+from automa.plan.models import MAX_ANSWER_CHARS, MAX_CLARIFICATIONS, MAX_NEEDS
 from automa.project import ProjectStatus, ProjectStore
 from automa.project.store import MAX_GOAL_CHARS, ProjectConflict, ProjectStoreError
 from automa.webui import actions as wa
@@ -531,7 +531,7 @@ def test_paths() -> None:
 def test_parse_answers_counts() -> None:
     items = wi.parse_answers({"csrf": "t"}, ["q1", "q2"])
     assert [(c.question, c.answer) for c in items] == [("q1", ""), ("q2", "")]
-    assert len(wi.ANSWER_FIELDS) == MAX_CLARIFICATIONS + 1
+    assert len(wi.ANSWER_FIELDS) == MAX_CLARIFICATIONS + 1 + MAX_NEEDS
 
 
 def test_render_pages_are_safe() -> None:

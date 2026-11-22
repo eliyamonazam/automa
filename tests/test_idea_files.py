@@ -328,12 +328,13 @@ def test_web_truncated_multipart_is_refused(web: WebEnv) -> None:
     assert web.store.list_ids() == []
 
 
-def test_web_clarify_never_takes_files(web: WebEnv) -> None:
+def test_web_clarify_takes_files_only_for_a_need(web: WebEnv) -> None:
+    """D163: files on the answer form only under a shown need's box (``nf<i>``)."""
     assert web.new().status == 303
     (pid,) = web.store.list_ids()
     body = multipart({"csrf": TOKEN, "a0": "kids"}, [("a.csv", CSV)])
     r = web.post(f"/projects/{pid}/clarify", body=body, headers=MP_HEADERS)
-    assert r.status == 415
+    assert r.status == 400
     assert idf.list_files(web.store.files_dir(pid)) == []
 
 
@@ -354,6 +355,6 @@ def test_web_planner_gets_files_through_the_cli_planner(cli_env: CliEnv, tmp_pat
     store.create("chart my sales", project_id="p1")
     idf.save_files(store.files_dir("p1"), [("sales.csv", CSV)])
     cli_env.provider.push(json.dumps({"questions": ["Which months?"]}))
-    assert planner.clarify("p1") == ["Which months?"]
+    assert list(planner.clarify("p1").questions) == ["Which months?"]
     user = cli_env.provider.requests[0].messages[-1].content or ""
     assert "inputs/idea/sales.csv" in user

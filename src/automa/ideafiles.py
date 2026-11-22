@@ -101,6 +101,27 @@ def check_files(files: Sequence[tuple[str, bytes]]) -> None:
         )
 
 
+def check_more(files_dir: str | Path, files: Sequence[tuple[str, bytes]]) -> None:
+    """Like :func:`check_files`, counting the files already attached (D163: files
+    given later, with the answers to the questions, go to the same folder)."""
+    check_files(files)
+    if not files:
+        return
+    existing = list_files(files_dir)
+    if len(existing) + len(files) > MAX_IDEA_FILES:
+        raise IdeaFileError(
+            f"at most {MAX_IDEA_FILES} files can be attached to an idea",
+            "idea_files_too_many",
+            max=MAX_IDEA_FILES,
+        )
+    total = sum(f.size for f in existing) + sum(len(data) for _, data in files)
+    if total > MAX_IDEA_TOTAL_BYTES:
+        mb = MAX_IDEA_TOTAL_BYTES // (1024 * 1024)
+        raise IdeaFileError(
+            f"attached files are larger than {mb} MB together", "idea_files_too_large", mb=mb
+        )
+
+
 def save_files(files_dir: str | Path, files: Sequence[tuple[str, bytes]]) -> list[str]:
     """Write ``files`` into ``files/inputs/idea/``; returns their workspace paths."""
     check_files(files)

@@ -28,6 +28,8 @@ _DISP_RE = re.compile(r'(\w+)\*?="((?:[^"\\]|\\.)*)"|(\w+)=([^;]+)')
 class Upload:
     fields: dict[str, str] = field(default_factory=dict)
     files: list[tuple[str, bytes]] = field(default_factory=list)
+    # The form field of each file, parallel to ``files`` (D163: one file box per need).
+    file_fields: list[str] = field(default_factory=list)
 
 
 def _disposition(value: str) -> dict[str, str]:
@@ -48,11 +50,14 @@ def parse_multipart(
     body: bytes,
     *,
     fields: frozenset[str],
-    file_field: str,
+    file_field: str | frozenset[str],
     max_bytes: int,
     max_files: int,
 ) -> Upload:
-    """The text fields and files of a ``multipart/form-data`` body."""
+    """The text fields and files of a ``multipart/form-data`` body.
+
+    ``file_field``: the one file field, or the set of allowed file fields (D163)."""
+    file_fields = frozenset({file_field}) if isinstance(file_field, str) else file_field
     ctype = headers.get("content-type", "")
     if ctype.split(";", 1)[0].strip().lower() != MULTIPART:
         raise ActionRefused.coded(415, "form_only")
@@ -95,7 +100,7 @@ def parse_multipart(
         if part_headers.get("content-type", "").lower().startswith("multipart/"):
             raise ActionRefused.coded(400, "malformed_form")
         if "filename" in disp:
-            if name != file_field:
+            if name not in file_fields:
                 raise ActionRefused.coded(400, "unexpected_field")
             filename = disp["filename"]
             if not filename and not data:
@@ -103,6 +108,7 @@ def parse_multipart(
             if len(out.files) >= max_files:
                 raise ActionRefused.coded(400, "unexpected_field")
             out.files.append((filename or "file", data))
+            out.file_fields.append(name)
             continue
         if name not in fields or name in out.fields or len(data) > MAX_TEXT_FIELD_BYTES:
             raise ActionRefused.coded(400, "unexpected_field")

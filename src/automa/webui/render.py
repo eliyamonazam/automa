@@ -13,7 +13,7 @@ from __future__ import annotations
 import html
 import json
 import unicodedata
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -30,7 +30,7 @@ from automa.l10n import (
     resolve_timezone,
 )
 from automa.plan import TaskStatus
-from automa.plan.models import MAX_ANSWER_CHARS
+from automa.plan.models import MAX_ANSWER_CHARS, NeedFromUser
 from automa.project.store import MAX_GOAL_CHARS
 from automa.retry import RETRY_ATTEMPTS
 from automa.tools.approvals import MAX_NOTE_CHARS
@@ -236,6 +236,21 @@ font-size:.75em;font-weight:800;content:"•";background:var(--chip);color:var(-
 .ask{border:1px solid var(--line);border-top:6px solid var(--accent);
 background:linear-gradient(180deg,color-mix(in srgb,var(--info) 60%,var(--card)),var(--card) 120px)}
 .ask h2{font-size:1.3em;margin:0 0 .3em}
+.needs{list-style:none;margin:10px 0;padding:0;display:grid;gap:12px}
+.need{border:1px solid var(--line);border-inline-start:4px solid var(--line);border-radius:12px;
+padding:12px 14px;background:var(--card);min-width:0}
+.need input[type=file]{max-width:100%}
+.need.req{border-inline-start-color:var(--warn)}
+.need h3{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:1.05em;
+margin:0 0 .3em;overflow-wrap:anywhere}
+.need .badge.req{background:color-mix(in srgb,var(--warn) 18%,var(--card));color:var(--warn)}
+.need p{margin:.3em 0;overflow-wrap:anywhere;white-space:pre-line}
+.need textarea{width:100%;box-sizing:border-box}
+.missing-needs{border:1px solid color-mix(in srgb,var(--warn) 45%,var(--line));border-radius:12px;
+padding:10px 14px;margin:10px 0;background:color-mix(in srgb,var(--warn) 9%,var(--card))}
+.missing-needs h3{display:flex;align-items:center;gap:8px;margin:0 0 .3em;font-size:1em;
+color:var(--warn)}
+.missing-needs ul{margin:.3em 0;padding-inline-start:1.3em}
 .ask .question{font-size:1.12em;font-weight:700;white-space:pre-line;overflow-wrap:anywhere}
 .upload{background:var(--soft);border:1px dashed var(--line);border-radius:12px;
 padding:10px 14px;margin:12px 0}
@@ -1372,6 +1387,8 @@ class RunPanel:
     tail: tuple[str, ...] = ()
     exit_code: int | None = None
     stopping: bool = False
+    # Required needs (D163) the user did not give: warned about before "Start".
+    missing_needs: tuple[str, ...] = ()
 
 
 def _run_state(run: RunPanel, lang: Language) -> str:
@@ -1417,6 +1434,8 @@ def _run_panel(
                 f'<p><button type="submit">{text(t("run.stop.button", lang))}</button> '
                 f"{text(t('run.stop.help', lang))}</p></form>"
             )
+    if run.can_start and run.missing_needs:
+        parts.append(_missing_needs(run.missing_needs, lang))
     if run.can_start:
         parts.append(
             _start_form(
@@ -1427,6 +1446,17 @@ def _run_panel(
         parts.append(f"<p>{text(t('run.not_startable', lang))}</p>")
     parts.append("</section>")
     return "".join(parts)
+
+
+def _missing_needs(missing: tuple[str, ...], lang: Language) -> str:
+    """The warning before "Start" (D163): required things the user did not give.
+    The items are model output (escaped)."""
+    items = "".join(f'<li dir="auto">{text(what)}</li>' for what in missing)
+    return (
+        '<div class="missing-needs" role="note">'
+        f"<h3>{ICONS[CardState.PARTIAL]}{text(t('run.missing.heading', lang))}</h3>"
+        f'<ul>{items}</ul><p class="hint">{text(t("run.missing.body", lang))}</p></div>'
+    )
 
 
 def _technical_log(run: RunPanel, lang: Language = "en") -> str:
@@ -1485,20 +1515,72 @@ def render_thinking(project_id: str, phase: str, elapsed_s: int, lang: Language 
     return page(t("thinking.title", lang), body, actions=True, refresh=3, lang=lang)
 
 
+def _need_field(i: int, need: NeedFromUser, lang: Language) -> str:
+    """One need (D163): what, why, where to get it, a text box and a file box.
+    Everything from the model is escaped."""
+    req = need.required
+    badge = (
+        f'<span class="badge req">{text(t("clarify.need.required", lang))}</span>'
+        if req
+        else f'<span class="badge">{text(t("clarify.need.optional", lang))}</span>'
+    )
+    parts = [
+        f'<li class="need{" req" if req else ""}">'
+        f'<h3 dir="auto">{text(localize_digits(str(i + 1), lang))}. {text(need.what)} {badge}</h3>'
+    ]
+    if need.why:
+        parts.append(
+            f'<p dir="auto"><strong>{text(t("clarify.need.why", lang))}</strong> '
+            f"{text(need.why)}</p>"
+        )
+    if need.where:
+        parts.append(
+            f'<p dir="auto"><strong>{text(t("clarify.need.where", lang))}</strong> '
+            f"{text(need.where)}</p>"
+        )
+    parts.append(
+        f'<p><label for="n{i}">{text(t("clarify.need.answer", lang))}</label></p>'
+        f'<textarea id="n{i}" name="n{i}" rows="2" maxlength="{MAX_ANSWER_CHARS}" '
+        'dir="auto"></textarea>'
+        f'<p class="upload"><label>{text(t("clarify.need.files", lang))} '
+        f'<input type="file" name="nf{i}" multiple></label></p>'
+    )
+    if need.kind == "access":
+        parts.append(f'<p class="hint">{text(t("clarify.need.secret", lang))}</p>')
+    parts.append("</li>")
+    return "".join(parts)
+
+
 def render_clarify(
     project_id: str,
     goal: str,
     questions: list[str],
     forms: ActionForms,
     lang: Language = "en",
+    needs: Sequence[NeedFromUser] = (),
 ) -> str:
-    """One answer field per stored question (questions are model output: escaped)."""
+    """One answer field per stored question (questions are model output: escaped).
+
+    ``needs`` (D163): what the user must provide, each with a text and a file box;
+    the form is then ``multipart/form-data``."""
     fields = "".join(
         f'<p dir="auto"><label>{text(localize_digits(str(i + 1), lang))}. {text(q)}<br>'
         f'<textarea name="a{i}" rows="3" cols="80" maxlength="{MAX_ANSWER_CHARS}" '
         'dir="auto"></textarea></label></p>'
         for i, q in enumerate(questions)
     )
+    if needs and questions:
+        fields = f"<h2>{text(t('clarify.questions', lang))}</h2>{fields}"
+    need_html = ""
+    if needs:
+        need_html = (
+            f"<h2>{text(t('clarify.needs', lang))}</h2>"
+            f'<p class="hint">{text(t("clarify.needs.intro", lang))}</p>'
+            '<ol class="needs">'
+            + "".join(_need_field(i, n, lang) for i, n in enumerate(needs))
+            + "</ol>"
+        )
+    enctype = ' enctype="multipart/form-data"' if needs else ""
     action = text(_project_href(project_id) + "/clarify")
     pid = _project_id_html(project_id, lang)
     back = f"← {pid}" if lang == "en" else f"→ {pid}"
@@ -1508,8 +1590,9 @@ def render_clarify(
         f'<p class="meta"><strong>{text(t("clarify.goal", lang))}</strong></p>'
         f'<p class="goal" dir="auto">{text(goal)}</p>'
         f"<p>{text(t('clarify.intro', lang))}</p>"
-        f'<form class="card" method="post" action="{action}">{_hidden("csrf", forms.csrf_token)}'
-        f'{fields}<p><button type="submit">{text(t("clarify.submit", lang))}</button></p></form>'
+        f'<form class="card" method="post" action="{action}"{enctype}>'
+        f"{_hidden('csrf', forms.csrf_token)}{fields}{need_html}"
+        f'<p><button type="submit">{text(t("clarify.submit", lang))}</button></p></form>'
     )
     return page(t("clarify.title", lang, project=project_id), body, actions=True, lang=lang)
 

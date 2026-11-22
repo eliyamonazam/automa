@@ -93,6 +93,7 @@ from automa.agents import (
     ExecutiveSettings,
     PlanningFailed,
     Proposal,
+    Questions,
     ReviewAgent,
     ReviewError,
     ReviewFailed,
@@ -192,6 +193,9 @@ from automa.ideafiles import (
 from automa.ideafiles import (
     check_files as check_idea_files,
 )
+from automa.ideafiles import (
+    check_more as check_more_idea_files,
+)
 from automa.ideafiles import describe as describe_idea_files
 from automa.ideafiles import list_files as list_idea_files
 from automa.ideafiles import (
@@ -220,6 +224,7 @@ from automa.model_import import (
     parse_rate,
     render_catalog_toml,
 )
+from automa.needs import need_clarifications
 from automa.orchestrator import (
     Orchestrator,
     OrchestratorError,
@@ -230,7 +235,7 @@ from automa.orchestrator import (
     usable_roles,
 )
 from automa.plan import Plan, TaskStatus
-from automa.plan.models import ROLE_PATTERN
+from automa.plan.models import MAX_ANSWER_CHARS, ROLE_PATTERN, NeedAnswer, NeedFromUser
 from automa.project import Project, ProjectStatus, ProjectStore, ProjectStoreError
 from automa.quality import (
     QUALITY_FILE,
@@ -971,9 +976,12 @@ def _match_line(m: WorkflowMatch) -> str:
 
 
 def _clarify(agent: ExecutiveAgent, store: ProjectStore, project: Project) -> list[Clarification]:
-    """Ask the Executive's questions, read answers from the user, persist them."""
+    """Ask the Executive's questions, read answers from the user, persist them.
+
+    D163: the needs from the user (same model call) are asked after the questions;
+    an answer that is the path of a file on this computer attaches that file."""
     try:
-        questions = agent.clarify(
+        round_ = agent.clarify_round(
             project.goal,
             project_id=project.id,
             attachments=describe_idea_files(list_idea_files(store.files_dir(project.id))),
@@ -984,15 +992,56 @@ def _clarify(agent: ExecutiveAgent, store: ProjectStore, project: Project) -> li
     except PlanningFailed:
         store.set_status(project.id, ProjectStatus.FAILED)
         raise
+    questions = list(round_.questions)
     items: list[Clarification] = []
     if questions:
         typer.echo("The Executive has some questions (press Enter to skip one):")
     for i, question in enumerate(questions, start=1):
-        answer = typer.prompt(f"{i}. {question}", default="", show_default=False)
+        answer = typer.prompt(f"{i}. {_safe(question)}", default="", show_default=False)
         items.append(Clarification(question=question, answer=answer))
+    answers = _ask_needs(store, project, round_.needs_from_user)
+    items.extend(need_clarifications(answers))
     if items:
         store.save_clarifications(project.id, items)
+    if answers:
+        store.save_needs(project.id, answers)
     return items
+
+
+def _ask_needs(
+    store: ProjectStore, project: Project, needs: Sequence[NeedFromUser]
+) -> list[NeedAnswer]:
+    """Ask for each need (D163): text, or the path of a file to attach."""
+    if not needs:
+        return []
+    typer.echo(
+        "To do this right without inventing anything, Automa needs these from you "
+        "(type an answer or the path of a file; press Enter to skip; never type passwords):"
+    )
+    out: list[NeedAnswer] = []
+    for i, need in enumerate(needs, start=1):
+        label = "required" if need.required else "optional"
+        typer.echo(f"{i}. [{label}] {_safe(need.what)}")
+        if need.why:
+            typer.echo(f"   why: {_safe(need.why)}")
+        if need.where:
+            typer.echo(f"   where to get it: {_safe(need.where)}")
+        raw = typer.prompt("   answer", default="", show_default=False).strip()
+        files: list[str] = []
+        candidate = Path(raw).expanduser() if raw and "\n" not in raw else None
+        if candidate is not None and candidate.is_file():
+            try:
+                data = [(candidate.name, candidate.read_bytes())]
+                check_more_idea_files(store.files_dir(project.id), data)
+                files = save_idea_files(store.files_dir(project.id), data)
+                raw = ""
+                typer.echo(f"   attached {_safe(candidate.name)}")
+            except (OSError, IdeaFileError) as e:
+                typer.echo(f"   warning: file not attached: {_safe(str(e))}", err=True)
+        if need.required and not raw and not files:
+            typer.echo("   not given: Automa will not invent it; that part may stay unfinished.")
+        out.append(NeedAnswer(need=need, answer=raw[:MAX_ANSWER_CHARS], files=files))
+    return out
 
 
 def _run_settings(
@@ -3955,9 +4004,9 @@ class _WebIdeaPlanner:
             except (ExecutiveError, ProjectStoreError) as e:
                 raise IdeaError("planning", _safe(str(e))) from None
 
-    def clarify(self, project_id: str) -> list[str]:
-        def ask(agent: ExecutiveAgent, store: ProjectStore) -> list[str]:
-            return agent.clarify(
+    def clarify(self, project_id: str) -> Questions:
+        def ask(agent: ExecutiveAgent, store: ProjectStore) -> Questions:
+            return agent.clarify_round(
                 store.load(project_id).goal,
                 project_id=project_id,
                 attachments=describe_idea_files(list_idea_files(store.files_dir(project_id))),

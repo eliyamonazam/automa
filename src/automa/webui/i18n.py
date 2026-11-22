@@ -206,6 +206,20 @@ _RAW: dict[str, dict[Language, str]] = {
             "هزینهٔ هر فراخوانی مدل حساب می‌شه."
         ),
     },
+    "run.missing.heading": {
+        "en": "Before you start: some required things were not given",
+        "fa": "قبل از شروع: چند چیز ضروری رو هنوز ندادی",
+    },
+    "run.missing.body": {
+        "en": (
+            "Without these, the parts that depend on them will stay unfinished; "
+            "Automa will not invent them and will say what is missing at the end."
+        ),
+        "fa": (
+            "بدون این‌ها بخش‌هایی که بهشون وابسته‌ان ناقص می‌مونن؛ Automa چیزی از "
+            "خودش نمی‌سازه و آخر کار دقیق می‌گه چی کم مونده."
+        ),
+    },
     "run.not_startable": {
         "en": "Not startable now (no plan, already running or done).",
         "fa": "الان نمی‌شه شروع کرد (برنامه‌ای نیست، در حال اجراست یا تموم شده).",
@@ -331,6 +345,31 @@ _RAW: dict[str, dict[Language, str]] = {
     "clarify.intro": {
         "en": "Leave an answer empty to skip it. The plan is made after you send.",
         "fa": "اگه نخواستی به سؤالی جواب بدی، خالی بذارش. برنامه بعد از فرستادن ساخته می‌شه.",
+    },
+    "clarify.questions": {"en": "Questions", "fa": "سؤال‌ها"},
+    "clarify.needs": {"en": "What I need from you", "fa": "چیزهایی که ازت لازم دارم"},
+    "clarify.needs.intro": {
+        "en": (
+            "To do this right without inventing anything, I need these. Give what you "
+            "can as text or a file; whatever you don't give, I won't make up."
+        ),
+        "fa": (
+            "برای اینکه کار درست و بدون حدس دربیاد این‌ها رو لازم دارم. هر کدوم رو "
+            "می‌تونی بنویسی یا فایلش رو بدی؛ هر چی رو ندی، از خودم نمی‌سازم."
+        ),
+    },
+    "clarify.need.required": {"en": "Required", "fa": "ضروری"},
+    "clarify.need.optional": {"en": "Optional", "fa": "اختیاری"},
+    "clarify.need.why": {"en": "Why:", "fa": "چرا:"},
+    "clarify.need.where": {"en": "Where to get it:", "fa": "از کجا بیارم:"},
+    "clarify.need.answer": {
+        "en": "Your answer (text, a link or a short note)",
+        "fa": "جوابت (متن، لینک یا یک توضیح کوتاه)",
+    },
+    "clarify.need.files": {"en": "or attach a file:", "fa": "یا فایلش رو بده:"},
+    "clarify.need.secret": {
+        "en": "Never write passwords or keys here.",
+        "fa": "رمز عبور یا کلید رو این‌جا ننویس.",
     },
     "clarify.submit": {
         "en": "Send answers and make the plan",
@@ -554,6 +593,10 @@ _RAW: dict[str, dict[Language, str]] = {
     "refusal.answer_too_long": {
         "en": "answer {n} is longer than {max} characters",
         "fa": "جواب {n} از {max} نویسه بیشتره",
+    },
+    "refusal.need_answer_too_long": {
+        "en": "the answer to needed item {n} is longer than {max} characters",
+        "fa": "جواب مورد لازم {n} از {max} نویسه بیشتره",
     },
     "refusal.executive_busy": {
         "en": "the Executive is already working on an idea; wait for it",

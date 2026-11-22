@@ -29,7 +29,9 @@ from automa.llm.types import FinishReason, LLMResult, Message
 from automa.memory.prompt import check_memory_project, memory_prompt
 from automa.memory.store import MemoryContext
 from automa.plan.models import (
+    MAX_NEEDS,
     Clarification,
+    NeedFromUser,
     Plan,
     PlanError,
     QuestionText,
@@ -64,11 +66,15 @@ class PlanningFailed(ExecutiveError):
 
 
 class Questions(BaseModel):
-    """Model reply to the clarification prompt. An empty list means "no questions"."""
+    """Model reply to the clarification prompt. An empty list means "no questions".
+
+    ``needs_from_user`` (D163): what only the user can give, asked in the same call
+    (no extra model call); optional, so a reply without it is still valid."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     questions: list[QuestionText] = Field(default_factory=list, max_length=MAX_QUESTIONS)
+    needs_from_user: list[NeedFromUser] = Field(default_factory=list, max_length=MAX_NEEDS)
 
 
 class ExecutiveSettings(BaseModel):
@@ -79,7 +85,7 @@ class ExecutiveSettings(BaseModel):
     tier: Tier = Tier.LARGE
     max_attempts: int = Field(default=3, ge=1, le=5)
     plan_max_tokens: int = Field(default=8_000, gt=0, le=32_000)
-    questions_max_tokens: int = Field(default=1_000, gt=0, le=8_000)
+    questions_max_tokens: int = Field(default=2_000, gt=0, le=8_000)
     temperature: float = Field(default=0.2, ge=0, le=1)
 
 
@@ -87,8 +93,23 @@ QUESTIONS_SYSTEM_PROMPT = f"""\
 You are the Executive of an automation system. A user gives you a goal.
 Decide whether you need clarifying questions before you can plan the work.
 Ask only questions whose answers would change the plan; ask none if the goal is clear.
-Reply with ONLY a JSON object: {{"questions": ["...", ...]}} (at most {MAX_QUESTIONS} \
-questions, an empty list if none). No prose outside the JSON."""
+
+Also list what ONLY the user can give so the work is done right without invented
+data ("needs_from_user"): their own data files, access to an account or service, a
+sample to follow, or a decision only they can make. For each need give "what" (plain
+words), "why" (what it is for), "required" (true only if the result cannot be correct
+without it; false if it only makes the result better), "where" (simple steps a
+non-technical person can follow to get it) and "kind" (one of "file", "access",
+"example", "decision", "other"). Never ask for passwords, API keys or other secrets
+as a need: tell the user where to set them up themselves instead. Do not list what
+the goal or the attached files already give, and do not repeat a question as a need.
+Write questions and needs in the language of the goal.
+
+Reply with ONLY a JSON object:
+{{"questions": ["...", ...], "needs_from_user": [{{"what": "...", "why": "...", \
+"required": true, "where": "...", "kind": "file"}}, ...]}}
+(at most {MAX_QUESTIONS} questions and {MAX_NEEDS} needs; empty lists if none).
+No prose outside the JSON."""
 
 PLAN_SYSTEM_PROMPT = """\
 You are the Executive of an automation system. Turn the user's goal into a plan of
@@ -250,6 +271,11 @@ class ExecutiveAgent:
 
         ``attachments`` (D162): the described files the user attached to the idea.
         """
+        result = self.clarify_round(goal, project_id=project_id, attachments=attachments)
+        return list(result.questions)
+
+    def clarify_round(self, goal: str, *, project_id: str, attachments: str = "") -> Questions:
+        """The questions and the needs from the user (D163), in one model call."""
         goal = self._check_goal(goal)
         result = self._run(
             system=self._with_memory(QUESTIONS_SYSTEM_PROMPT, project_id),
@@ -259,9 +285,16 @@ class ExecutiveAgent:
             parse=parse_questions,
             kind="questions",
         )
-        questions = list(result.questions)
-        self._emit("executive.questions", project_id, {"count": len(questions)})
-        return questions
+        self._emit(
+            "executive.questions",
+            project_id,
+            {
+                "count": len(result.questions),
+                "needs": len(result.needs_from_user),
+                "required_needs": sum(1 for n in result.needs_from_user if n.required),
+            },
+        )
+        return result
 
     def plan(
         self,

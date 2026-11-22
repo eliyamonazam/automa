@@ -10,6 +10,9 @@ browser flow mirrors ``automa new``:
    Questions are stored in ``questions.json`` until answered.
 2. ``POST /projects/<pid>/clarify`` (one answer per question): answers go to
    ``clarifications.json`` (the same record as the CLI) and the plan is made.
+   Needs from the user (D163, asked in the same Executive call) are answered on the
+   same form with text and/or files; files go to ``files/inputs/idea/`` and the
+   record to ``needs.json``; each need is also a clarification for the plan.
 
 Every model call goes through the planner, which uses the same guarded gateway as the
 CLI (``BudgetGuard`` and caps unchanged). At most one Executive call runs at a time in
@@ -28,9 +31,18 @@ from dataclasses import dataclass
 from typing import Protocol
 from urllib.parse import quote, unquote
 
-from automa.ideafiles import IdeaFileError, check_files, save_files
+from automa.agents.executive import Questions
+from automa.ideafiles import IdeaFileError, check_files, check_more, save_files
+from automa.needs import need_clarifications
 from automa.plan import Clarification
-from automa.plan.models import MAX_ANSWER_CHARS, MAX_CLARIFICATIONS
+from automa.plan.models import (
+    MAX_ANSWER_CHARS,
+    MAX_CLARIFICATIONS,
+    MAX_NEEDS,
+    NeedAnswer,
+    NeedFromUser,
+    PendingQuestions,
+)
 from automa.project.store import (
     MAX_GOAL_CHARS,
     ProjectStatus,
@@ -44,7 +56,9 @@ NEW_PATH = "/new"
 # A urlencoded Persian goal or answer takes ~6 bytes per character.
 MAX_IDEA_FORM_BYTES = 131_072
 IDEA_FIELDS = frozenset({"csrf", "goal", "ask"})
-ANSWER_FIELDS = frozenset({"csrf", *(f"a{i}" for i in range(MAX_CLARIFICATIONS))})
+NEED_FIELDS = frozenset(f"n{i}" for i in range(MAX_NEEDS))  # D163: text for need i
+NEED_FILE_FIELDS = frozenset(f"nf{i}" for i in range(MAX_NEEDS))  # files for need i
+ANSWER_FIELDS = frozenset({"csrf", *(f"a{i}" for i in range(MAX_CLARIFICATIONS)), *NEED_FIELDS})
 ASK_VALUE = "yes"
 _CLARIFY_RE = re.compile(r"^/projects/([^/]+)/clarify$")
 
@@ -67,11 +81,12 @@ class IdeaPlanner(Protocol):
     """What the browser flow needs from the Executive (built by the CLI).
 
     Every method raises only :class:`IdeaError`. ``clarify`` and ``plan`` call the
-    model through a gateway guarded by the ``BudgetGuard``."""
+    model through a gateway guarded by the ``BudgetGuard``. ``clarify`` returns the
+    questions, or (D163) the whole round with the needs from the user."""
 
     def prepare(self) -> None: ...
 
-    def clarify(self, project_id: str) -> list[str]: ...
+    def clarify(self, project_id: str) -> Sequence[str] | Questions: ...
 
     def plan(self, project_id: str, clarifications: Sequence[Clarification]) -> None: ...
 
@@ -114,9 +129,13 @@ def parse_idea(form: Mapping[str, str]) -> tuple[str, bool]:
     return goal, ask == ASK_VALUE
 
 
-def parse_answers(form: Mapping[str, str], questions: Sequence[str]) -> list[Clarification]:
-    """One :class:`Clarification` per stored question; an unknown answer field is refused."""
-    expected = {f"a{i}" for i in range(len(questions))}
+def parse_answers(
+    form: Mapping[str, str], questions: Sequence[str], needs: int = 0
+) -> list[Clarification]:
+    """One :class:`Clarification` per stored question; an unknown answer field is refused.
+
+    ``needs``: how many needs (D163) the form shows; their text fields are allowed."""
+    expected = {f"a{i}" for i in range(len(questions))} | {f"n{i}" for i in range(needs)}
     extra = set(form) - {"csrf"} - expected
     if extra:
         raise ActionRefused.coded(400, "questions_changed")
@@ -127,6 +146,37 @@ def parse_answers(form: Mapping[str, str], questions: Sequence[str]) -> list[Cla
             raise ActionRefused.coded(400, "answer_too_long", n=i + 1, max=MAX_ANSWER_CHARS)
         items.append(Clarification(question=question, answer=answer))
     return items
+
+
+def parse_need_answers(
+    form: Mapping[str, str],
+    needs: Sequence[NeedFromUser],
+    files: Sequence[tuple[str, str, bytes]],
+) -> tuple[list[str], list[list[tuple[str, bytes]]]]:
+    """The text and the files given for each need (D163).
+
+    ``files``: ``(field, name, data)``; a file under a field of no shown need is
+    refused (the questions changed)."""
+    texts: list[str] = []
+    for i in range(len(needs)):
+        answer = form.get(f"n{i}", "").strip()
+        if len(answer) > MAX_ANSWER_CHARS:
+            raise ActionRefused.coded(400, "need_answer_too_long", n=i + 1, max=MAX_ANSWER_CHARS)
+        texts.append(answer)
+    per_need: list[list[tuple[str, bytes]]] = [[] for _ in needs]
+    allowed = {f"nf{i}": i for i in range(len(needs))}
+    for field, name, data in files:
+        if field not in allowed:
+            raise ActionRefused.coded(400, "questions_changed")
+        per_need[allowed[field]].append((name, data))
+    return texts, per_need
+
+
+def split_round(result: Sequence[str] | Questions) -> tuple[list[str], list[NeedFromUser]]:
+    """Questions and needs of a planner's ``clarify`` result (a plain list: no needs)."""
+    if isinstance(result, Questions):
+        return list(result.questions), list(result.needs_from_user)
+    return list(result), []
 
 
 def _file_refusal(e: IdeaFileError) -> ActionRefused:
@@ -275,7 +325,7 @@ class IdeaFlow:
         """Ask questions (or plan right away); returns the next path."""
         if ask:
             try:
-                questions = self._planner.clarify(pid)
+                questions, needs = split_round(self._planner.clarify(pid))
             except IdeaError as e:
                 # Same statuses as ``automa new`` after a failed question round.
                 if e.kind == "budget":
@@ -283,14 +333,18 @@ class IdeaFlow:
                 elif e.kind == "planning":
                     self._store.set_status(pid, ProjectStatus.FAILED)
                 raise _refusal(e, pid) from None
-            if questions:
-                self._store.save_questions(pid, questions)
+            if questions or needs:
+                self._store.save_questions(pid, questions, needs)
                 return clarify_path(pid)
         self._plan(pid, [])
         return project_path(pid)
 
     def pending_questions(self, project_id: str) -> list[str]:
         """The questions still waiting for answers, or ``ActionRefused``."""
+        return list(self.pending(project_id).questions)
+
+    def pending(self, project_id: str) -> PendingQuestions:
+        """The questions and needs (D163) still waiting for answers, or ``ActionRefused``."""
         if project_id not in self._store.list_ids():
             raise ActionRefused.coded(404, "no_such_project")
         try:
@@ -298,26 +352,50 @@ class IdeaFlow:
                 raise ActionRefused.coded(409, "has_plan", id=project_id)
             if self._store.has_clarifications(project_id):
                 raise ActionRefused.coded(409, "already_answered", id=project_id)
-            questions = self._store.load_questions(project_id)
+            pending = self._store.load_pending(project_id)
         except ProjectStoreError as e:
             raise ActionRefused(500, str(e), lead="lead.store") from None
-        if not questions:
+        if pending is None or not (pending.questions or pending.needs):
             raise ActionRefused.coded(409, "no_questions", id=project_id)
-        return questions
+        return pending
 
-    def answer(self, project_id: str, form: Mapping[str, str]) -> str:
-        """Record the answers and make the plan; returns the project page path."""
+    def answer(
+        self,
+        project_id: str,
+        form: Mapping[str, str],
+        files: Sequence[tuple[str, str, bytes]] = (),
+    ) -> str:
+        """Record the answers and make the plan; returns the project page path.
+
+        ``files`` (D163): ``(field, name, data)`` given for the needs (``nf<i>``)."""
         self._acquire()
         handed_off = False
         try:
-            questions = self.pending_questions(project_id)
-            items = parse_answers(form, questions)
+            pending = self.pending(project_id)
+            needs = list(pending.needs)
+            items = parse_answers(form, pending.questions, len(needs))
+            texts, per_need = parse_need_answers(form, needs, files)
+            files_dir = self._store.files_dir(project_id)
+            try:
+                check_more(files_dir, [f for group in per_need for f in group])
+            except IdeaFileError as e:
+                raise _file_refusal(e) from None
             try:
                 self._planner.prepare()
             except IdeaError as e:
                 raise _refusal(e, project_id) from None
+            answers: list[NeedAnswer] = []
+            for need, text, group in zip(needs, texts, per_need, strict=True):
+                try:
+                    paths = save_files(files_dir, group)
+                except IdeaFileError as e:
+                    raise _file_refusal(e) from None
+                answers.append(NeedAnswer(need=need, answer=text, files=paths))
+            items = [*items, *need_clarifications(answers)]
             try:
                 self._store.save_clarifications(project_id, items)
+                if answers:
+                    self._store.save_needs(project_id, answers)
             except ProjectStoreError as e:
                 raise ActionRefused(409, str(e), lead="lead.store") from None
             if self._background:

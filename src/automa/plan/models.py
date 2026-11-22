@@ -55,6 +55,9 @@ MAX_CHECK_TIMEOUT_S = 600
 MAX_QUESTION_CHARS = 500
 MAX_ANSWER_CHARS = 2_000
 MAX_CLARIFICATIONS = 20
+MAX_NEEDS = 5  # things the user must provide, asked with the questions (D163)
+MAX_NEED_WHAT_CHARS = 300
+MAX_NEED_TEXT_CHARS = 500
 
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 
@@ -635,6 +638,69 @@ class Clarification(BaseModel):
     answer: Annotated[str, StringConstraints(strip_whitespace=True, max_length=MAX_ANSWER_CHARS)]
 
 
+NeedKind = Literal["file", "access", "example", "decision", "other"]
+
+
+class NeedFromUser(BaseModel):
+    """Something only the user can give (D163): asked together with the questions.
+
+    Model output: shown escaped, never trusted. ``what``: the thing in plain words;
+    ``why``: what it is needed for; ``required``: the product cannot be done right
+    without it (otherwise it only improves the result); ``where``: how the user can
+    get it (plain steps, for a non-technical person)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    what: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_NEED_WHAT_CHARS)
+    ]
+    why: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=MAX_NEED_TEXT_CHARS)
+    ] = ""
+    required: bool = False
+    where: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=MAX_NEED_TEXT_CHARS)
+    ] = ""
+    kind: NeedKind = "other"
+
+
+class NeedAnswer(BaseModel):
+    """What the user gave for one :class:`NeedFromUser` (``needs.json``, D163)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    need: NeedFromUser
+    answer: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=MAX_ANSWER_CHARS)
+    ] = ""
+    files: list[Annotated[str, StringConstraints(min_length=1, max_length=MAX_PATH_CHARS)]] = Field(
+        default_factory=list, max_length=MAX_LIST_ITEMS
+    )
+
+    @property
+    def provided(self) -> bool:
+        return bool(self.answer or self.files)
+
+
+class NeedsRecord(BaseModel):
+    """On-disk record of the needs and what the user gave (``needs.json``, D163)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = PLAN_SCHEMA_VERSION
+    items: list[NeedAnswer] = Field(default_factory=list, max_length=MAX_NEEDS)
+
+    @field_validator("schema_version")
+    @classmethod
+    def _known_schema(cls, v: int) -> int:
+        if v != PLAN_SCHEMA_VERSION:
+            raise ValueError(f"unsupported needs schema_version {v}")
+        return v
+
+    def missing_required(self) -> list[NeedFromUser]:
+        return [i.need for i in self.items if i.need.required and not i.provided]
+
+
 class PendingQuestions(BaseModel):
     """Questions asked by the Executive and not answered yet (``questions.json``, D124).
 
@@ -646,6 +712,7 @@ class PendingQuestions(BaseModel):
 
     schema_version: int = PLAN_SCHEMA_VERSION
     questions: list[QuestionText] = Field(default_factory=list, max_length=MAX_CLARIFICATIONS)
+    needs: list[NeedFromUser] = Field(default_factory=list, max_length=MAX_NEEDS)  # D163
 
     @field_validator("schema_version")
     @classmethod
