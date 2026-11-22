@@ -643,6 +643,34 @@ def version() -> None:
 
 
 @app.command()
+def update(
+    repo: Annotated[
+        Path | None,
+        typer.Option("--repo", help="The Automa git clone (default: the one this runs from)."),
+    ] = None,
+    reinstall: Annotated[
+        bool | None,
+        typer.Option(
+            "--reinstall/--no-reinstall",
+            help="Run 'pip install -e' always / never (default: only if pyproject.toml changed).",
+        ),
+    ] = None,
+) -> None:
+    """Update this Automa clone to the latest main (fast-forward only, D170).
+
+    Never forces, resets or stashes: with local edits, another branch or local commits
+    it changes nothing and says what to do.
+    """
+    from automa.update import report_lines, run_update
+
+    result = run_update(repo, reinstall=reinstall)
+    for line in report_lines(result):
+        typer.echo(line, err=not result.ok)
+    if not result.ok:
+        raise typer.Exit(EXIT_USER)
+
+
+@app.command()
 def new(
     goal: Annotated[str, typer.Argument(help="What the project should achieve.")],
     project_id: Annotated[
@@ -1481,7 +1509,7 @@ def change(
         Path | None, typer.Option("--config", help="Path to automa.toml.")
     ] = None,
 ) -> None:
-    """Ask for a change after delivery; the plan grows by the tasks it needs (D169).
+    """Ask for a change after delivery; the plan grows by the tasks it needs (D170).
 
     One Executive call (guarded by the budget caps). Then: automa run <project>.
     """
@@ -4087,7 +4115,7 @@ class _WebIdeaPlanner:
         *,
         via: str = "web",
     ) -> Plan:
-        """A change request after delivery (D169): the Executive adds the tasks."""
+        """A change request after delivery (D170): the Executive adds the tasks."""
 
         def make(agent: ExecutiveAgent, store: ProjectStore) -> Plan:
             try:

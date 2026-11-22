@@ -132,7 +132,7 @@ def test_readme_explains_the_launcher_and_shortcut() -> None:
         "-ReadOnly",
         "-Port 8766",
         "networkingMode=mirrored",
-        "~/automa/scripts/automa-web.*",
+        "~/automa/scripts/automa-*.bat",
     ):
         assert needle in section
 

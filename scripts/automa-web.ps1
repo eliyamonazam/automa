@@ -28,7 +28,10 @@ param(
     [switch]$ReadOnly,
 
     # Do not open the browser.
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+
+    # Update Automa first (automa-update.ps1 next to this file), then open it.
+    [switch]$Update
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,6 +69,15 @@ if (-not $Distro) {
     }
 }
 
+if ($Update) {
+    $updateArgs = @{ RepoDir = $RepoDir; NoOpen = $true }
+    if ($Distro) { $updateArgs['Distro'] = $Distro }
+    & (Join-Path $PSScriptRoot 'automa-update.ps1') @updateArgs
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'Opening the current version without the update.' -ForegroundColor Yellow
+    }
+}
+
 $Url = "http://127.0.0.1:$Port/"
 
 function Test-Port([int]$P) {
@@ -87,6 +99,9 @@ function Open-Page {
 if (Test-Port $Port) {
     Write-Host "Something already listens on port $Port (probably Automa from another window)."
     Write-Host "Opening $Url ; to start a new server use another port: -Port 8766"
+    if ($Update) {
+        Write-Host 'Close that other Automa window and open Automa again to use the updated version.' -ForegroundColor Yellow
+    }
     Open-Page
     exit 0
 }

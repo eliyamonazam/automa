@@ -31,7 +31,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
-from typing import IO, ClassVar
+from typing import IO, ClassVar, NamedTuple
 
 from pydantic import Field, field_validator
 
@@ -351,6 +351,67 @@ def run_git_read(
     if done.returncode != 0:
         raise GitReadError(f"git {args[0]} failed (exit {done.returncode})")
     return done.stdout
+
+
+#: git subcommands ``automa update`` may run (D170): reads, ``fetch`` and
+#: ``merge --ff-only``. Never reset, push, stash, rebase or clean.
+UPDATE_GIT_SUBCOMMANDS = frozenset(
+    {"rev-parse", "symbolic-ref", "status", "fetch", "log", "merge-base", "rev-list", "diff"}
+)
+
+
+class CommandResult(NamedTuple):
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+def run_update_command(argv: Sequence[str], cwd: Path, timeout_s: float) -> CommandResult:
+    """Run one command of ``automa update`` (D170) in the user's own clone.
+
+    Allowed: ``git <UPDATE_GIT_SUBCOMMANDS ...>``, ``git merge --ff-only --quiet
+    origin/main`` and ``<this python> -m pip install --quiet -e <cwd>``; anything
+    else is ``ValueError``. No shell. The user's own git config is kept (credential
+    helpers, proxy) but prompts are off so nothing ever waits for input. A missing
+    program or another start failure is exit code 127, a timeout 124."""
+    args = list(argv)
+    if args[:1] == ["git"] and len(args) >= 2:
+        sub = args[1]
+        allowed = sub in UPDATE_GIT_SUBCOMMANDS or args[1:] == [
+            "merge",
+            "--ff-only",
+            "--quiet",
+            "origin/main",
+        ]
+        if sub in {"fetch", "merge"} and any(a.startswith("--force") or a == "-f" for a in args):
+            allowed = False
+    else:
+        allowed = args == [sys.executable, "-m", "pip", "install", "--quiet", "-e", str(cwd)]
+    if not allowed:
+        raise ValueError("command not allowed for automa update")
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["LC_ALL"] = "C"
+    try:
+        done = subprocess.run(  # noqa: S603 - allow-listed argv list, no shell
+            args,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            shell=False,
+            close_fds=True,
+            timeout=timeout_s,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return CommandResult(124, "", f"{args[0]} timed out")
+    except (OSError, subprocess.SubprocessError) as e:
+        return CommandResult(127, "", f"cannot run {args[0]}: {e.__class__.__name__}")
+    return CommandResult(done.returncode, done.stdout or "", done.stderr or "")
 
 
 AUTOMA_RUN_PREFIX = ("-m", "automa", "run")

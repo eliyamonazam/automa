@@ -52,7 +52,7 @@ automa version
 
 ```bash
 mkdir -p /mnt/c/Users/<نام‌کاربری>/Documents/automa-launcher
-cp ~/automa/scripts/automa-web.* /mnt/c/Users/<نام‌کاربری>/Documents/automa-launcher/
+cp ~/automa/scripts/automa-*.bat ~/automa/scripts/automa-*.ps1 /mnt/c/Users/<نام‌کاربری>/Documents/automa-launcher/
 ```
 
 ۲. ساخت میانبر دسکتاپ: در File Explorer روی `automa-web.bat` راست‌کلیک ← «Show more options» ← «Send to» ← «Desktop (create shortcut)». اگه خواستی، در Properties میانبر اسمش رو «Automa» بذار.
@@ -62,6 +62,20 @@ cp ~/automa/scripts/automa-web.* /mnt/c/Users/<نام‌کاربری>/Documents/
 گزینه‌ها (در خط فرمان یا در قسمت Target میانبر بعد از نام فایل): `-ReadOnly` (صفحه فقط‌خواندنی، بدون دکمه‌های تأیید/شروع/توقف)، `-Port 8766` (درگاه دیگر)، `-RepoDir automa2` (کلون در پوشه دیگری از خانه WSL)، `-Distro Ubuntu-24.04` (توزیع غیرپیش‌فرض)، `-NoBrowser`.
 
 نکته‌ها: `-ExecutionPolicy Bypass` در فایل `.bat` فقط برای همون یک پردازه PowerShell اعمال می‌شه و تنظیم سیستم رو عوض نمی‌کنه. اگه پیام «No Automa install found» دیدی، اول مراحل بالا (clone و venv در `~/automa`) رو انجام بده. اگه پنجره می‌گه سرور بالا اومده ولی مرورگر صفحه رو باز نمی‌کنه، احتمالاً forwarding درگاه WSL خاموشه: در فایل `%UserProfile%\.wslconfig` زیر `[wsl2]` خط `networkingMode=mirrored` (یا `localhostForwarding=true`) رو بذار و در PowerShell `wsl --shutdown` بزن. اگه درگاه از قبل اشغال باشه (مثلاً پنجره دیگه‌ای از Automa باز باشه) اسکریپت فقط صفحه رو باز می‌کنه.
+
+### به‌روزرسانی Automa (دابل‌کلیک)
+
+نسخهٔ تازه رو این‌طوری بگیر؛ هیچ‌وقت چیزی از تو پاک یا بازنویسی نمی‌شه:
+
+۱. فقط بار اول (یا اگه فایل‌های پوشهٔ `automa-launcher` قدیمی‌ان)، دستور کپی قدم ۱ بالا رو در Ubuntu دوباره بزن تا `automa-update.bat` و `automa-update.ps1` هم کنار بقیه بیان. اگه هنوز `automa update` رو نداری، یک بار در Ubuntu بزن: `cd ~/automa && git pull --ff-only`.
+
+۲. روی `automa-update.bat` راست‌کلیک ← «Show more options» ← «Send to» ← «Desktop (create shortcut)» و اسم میانبر رو «به‌روزرسانی Automa» بذار.
+
+۳. هر وقت خواستی، روی همین میانبر دابل‌کلیک کن. پنجره نتیجه رو با رنگ نشون می‌ده (سبز: به‌روز شد یا از قبل به‌روز بود، با فهرست تغییرها؛ زرد: چیزی عوض نشد و دلیلش) و آخرش می‌پرسه «Open Automa now?»؛ با Enter خود Automa باز می‌شه.
+
+پشت صحنه همون دستور `automa update` داخل WSL اجرا می‌شه (در Ubuntu هم می‌تونی مستقیم بزنیش): فقط شاخهٔ `main` رو با `git` جلو می‌بره (fast-forward)؛ اگه فایلی رو خودت تغییر داده باشی، روی شاخهٔ دیگه‌ای باشی یا commit محلی داشته باشی، هیچ کاری نمی‌کنه و دقیق می‌گه چی سر راهه و چی کار کنی. `pip install -e .` فقط وقتی دوباره اجرا می‌شه که وابستگی‌ها عوض شده باشن (`--reinstall` برای اجرای اجباری). اگه پنجرهٔ Automa باز بود، بعد از به‌روزرسانی ببندش و دوباره بازش کن.
+
+میانبر خود Automa هم می‌تونه اول به‌روز کنه: در Properties میانبر `automa-web.bat`، قسمت Target، بعد از نام فایل ` -Update` رو اضافه کن؛ اگه به‌روزرسانی نشد، همون نسخهٔ فعلی باز می‌شه.
 
 ## راه‌اندازی
 
