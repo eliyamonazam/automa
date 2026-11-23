@@ -319,6 +319,25 @@ width:16px;height:16px}
 .badge .icon{width:15px;height:15px}
 .topbar nav a.newidea{margin-inline-start:6px;color:#fff;background:var(--accent)}
 .topbar nav a.newidea:hover{color:#fff;background:var(--accent)}
+.topbar .who{display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:.88em;
+margin-inline-start:6px;white-space:nowrap}.topbar .who .icon{width:16px;height:16px}
+.topbar form.logout{margin:0}
+.topbar form.logout button{background:transparent;color:var(--muted);border-color:var(--line);
+box-shadow:none;padding:3px 10px;font-weight:600}
+.topbar form.logout button:hover{color:var(--fg);background:var(--soft);transform:none}
+.topbar form.logout .icon{width:16px;height:16px}
+.login{max-width:25em;margin:5vh auto 0;padding:26px 24px}
+.login .lock{display:inline-flex;width:52px;height:52px;border-radius:16px;align-items:center;
+justify-content:center;background:var(--soft);color:var(--accent)}
+.login .lock .icon{width:28px;height:28px}
+.login h1{margin:.4em 0 .2em}.login label{display:block;font-weight:700;margin:14px 0 6px}
+.login input[type=text],.login input[type=password]{width:100%;box-sizing:border-box;
+font:inherit;padding:11px 12px;border:1px solid var(--line);border-radius:12px;
+background:var(--bg);color:var(--fg)}
+.login input:focus{outline:2px solid var(--accent);outline-offset:1px}
+.login button{width:100%;justify-content:center;margin-top:20px;min-height:46px;font-size:1.02em}
+.login .err{margin:12px 0 0;padding:10px 12px;border-radius:12px;background:var(--soft)}
+.login .hint{margin:18px 0 0;font-size:.88em;color:var(--muted)}
 .waiting{background:linear-gradient(180deg,color-mix(in srgb,var(--info) 70%,var(--card)),
 var(--card));border:1px solid var(--line);border-top:5px solid var(--accent);
 border-radius:var(--radius);padding:14px 18px;margin:14px 0}
@@ -379,7 +398,10 @@ min-width:0}
 .steps.wizard .dot{width:30px;height:30px}.steps.wizard .name{display:block;margin:4px 0 0;
 font-size:.8em}
 .file-row .acts{margin-inline-start:0}}
+@media (max-width:640px){.topbar .who .lbl{display:none}.topbar .who{margin-inline-start:2px}}
 @media (max-width:430px){.topbar nav a.newidea{padding:6px 9px}
+.topbar form.logout .lbl{position:absolute;width:1px;height:1px;overflow:hidden;
+clip-path:inset(50%);white-space:nowrap}.topbar form.logout button{padding:5px 8px}
 .topbar .newidea .lbl{position:absolute;width:1px;height:1px;overflow:hidden;
 clip-path:inset(50%);white-space:nowrap}}
 """
@@ -432,6 +454,11 @@ class TopBar:
     welcome: UpdateNotice | None = None  # just updated: what came in (D179)
     # Called when the welcome bar is actually put on a page (starts its window).
     welcome_shown: Callable[[], None] | None = None
+    # Login (D181): who is signed in and the session's form token for "Sign out";
+    # ``bare`` (pages before sign-in) shows only the name, nothing about projects.
+    user: str | None = None
+    logout_token: str | None = None
+    bare: bool = False
 
 
 _TOP_BAR: ContextVar[TopBar] = ContextVar("automa_top_bar", default=TopBar())  # noqa: B039
@@ -488,6 +515,9 @@ def page(
     (with ``no-referrer`` it would send ``Origin: null``, which the server refuses).
     ``refresh`` (seconds) makes the browser reload the same page, with no script (D127).
     """
+    bar = _TOP_BAR.get()
+    # The "Sign out" form (D181) posts to this server: same CSP as action mode.
+    actions = actions or bar.logout_token is not None
     csp = page_csp(actions=actions, img_src=img_src)
     referrer = "same-origin" if actions else "no-referrer"
     if lang not in ("fa", "en"):
@@ -505,8 +535,8 @@ def page(
         '<meta name="color-scheme" content="light dark">'
         f'<meta name="referrer" content="{referrer}">{reload}'
         f"<title>{text(title)}</title><style>{FONT_FACE}{_STYLE}</style></head>"
-        f"<body>{_topbar(lang, _TOP_BAR.get(), new_idea=new_idea)}"
-        f"{'' if refresh is not None else _version_bars(_TOP_BAR.get(), lang)}"
+        f"<body>{_topbar(lang, bar, new_idea=new_idea)}"
+        f"{'' if refresh is not None or bar.bare else _version_bars(bar, lang)}"
         f'<main class="wrap">{body}</main></body></html>\n'
     )
 
@@ -515,6 +545,9 @@ def _topbar(lang: Language, bar: TopBar, *, new_idea: bool = False) -> str:
     """The app bar on every page: the name (home link), the project list, this month's
     spending when anything was spent (D161) and, when ideas can be planned from the
     browser, "+ New idea" (D160)."""
+    brand = '<a class="brand" href="/"><span class="logo" aria-hidden="true">A</span>Automa</a>'
+    if bar.bare:
+        return f'<header class="topbar">{brand}</header>'
     idea = ""
     if new_idea or bar.new_idea:
         label = text(t("overview.new_idea", lang).lstrip("+ "))
@@ -536,10 +569,25 @@ def _topbar(lang: Language, bar: TopBar, *, new_idea: bool = False) -> str:
             f'<span class="lbl">{this_month}</span> <strong>{text(short)}</strong></span>'
         )
     return (
-        '<header class="topbar"><a class="brand" href="/">'
-        '<span class="logo" aria-hidden="true">A</span>Automa</a>'
-        f'<nav><a class="projects" href="/">{text(t("nav.projects", lang))}</a>{month}{idea}</nav>'
-        "</header>"
+        f'<header class="topbar">{brand}'
+        f'<nav><a class="projects" href="/">{text(t("nav.projects", lang))}</a>{month}{idea}'
+        f"{_account(bar, lang)}</nav></header>"
+    )
+
+
+def _account(bar: TopBar, lang: Language) -> str:
+    """Who is signed in and "Sign out" (D181); nothing without a login."""
+    if bar.user is None or bar.logout_token is None:
+        return ""
+    who = text(t("nav.signed_in", lang, name=bar.user))
+    out = text(t("nav.logout", lang))
+    return (
+        f'<span class="who" title="{who}">{ICONS["user"]}'
+        f'<bdi class="lbl" dir="ltr">{text(bar.user)}</bdi></span>'
+        f'<form class="logout" method="post" action="/logout">'
+        f"{_hidden('csrf', bar.logout_token)}"
+        f'<button type="submit" class="small secondary" title="{out}">{ICONS["logout"]}'
+        f'<span class="lbl">{out}</span></button></form>'
     )
 
 
@@ -1736,6 +1784,35 @@ def render_new_idea(forms: ActionForms, lang: Language = "en", *, goal: str = ""
         f'<p><button type="submit">{text(t("idea.submit", lang))}</button></p></form>'
     )
     return page(t("idea.title", lang), body, actions=True, lang=lang)
+
+
+def render_login(
+    login_token: str,
+    lang: Language = "en",
+    *,
+    name: str = "",
+    message: str | None = None,
+) -> str:
+    """The sign-in page (D181). ``name`` (what was typed) is escaped and put back;
+    the password never is. ``message`` is an already translated plain sentence."""
+    err = f'<p class="err" role="alert">{text(message)}</p>' if message else ""
+    body = (
+        '<form class="card login" method="post" action="/login">'
+        f'<span class="lock" aria-hidden="true">{ICONS["lock"]}</span>'
+        f"<h1>{text(t('login.heading', lang))}</h1>"
+        f'<p class="muted">{text(t("login.intro", lang))}</p>{err}'
+        f"{_hidden('csrf', login_token)}"
+        f'<label for="login-name">{text(t("login.name", lang))}</label>'
+        f'<input id="login-name" type="text" name="name" value="{text(name[:64])}" '
+        'maxlength="64" autocomplete="username" autocapitalize="none" spellcheck="false" '
+        'dir="ltr" required autofocus>'
+        f'<label for="login-password">{text(t("login.password", lang))}</label>'
+        '<input id="login-password" type="password" name="password" maxlength="256" '
+        'autocomplete="current-password" dir="ltr" required>'
+        f'<button type="submit">{text(t("login.submit", lang))}</button>'
+        f'<p class="hint">{text(t("login.no_account", lang))}</p></form>'
+    )
+    return page(t("login.title", lang), body, actions=True, lang=lang)
 
 
 def _project_id_html(project_id: str, lang: Language) -> str:

@@ -21,6 +21,11 @@ gateway — and, when a run preflight is given (D125), to ``/projects/<pid>/star
 which starts ``automa run`` as a background child process (:mod:`automa.webui.runs`).
 Every POST passes the same Host, same-origin and CSRF checks first.
 
+With at least one account in ``users.json`` (M15, D181) every page except
+``/login`` and ``/static/`` needs a signed-in session (:mod:`automa.webui.auth`);
+``POST /login`` and ``/logout`` are then accepted even by the read-only server, and
+every form carries the session's own CSRF token instead of the per-server one.
+
 ``/projects/<pid>/files…`` (D128) browses the project's ``files/`` read-only through
 :mod:`automa.webui.files`; only a file view of a checked image gets an ``img-src``,
 and only for that project's ``raw`` path.
@@ -35,6 +40,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -68,6 +74,7 @@ from automa.userinput import (
     UserRequestError,
     UserRequestNotFound,
 )
+from automa.users import LoginOutcome, User, UsersError, UserStore
 from automa.webui.actions import (
     MAX_FORM_BYTES,
     ActionRefused,
@@ -80,6 +87,20 @@ from automa.webui.actions import (
     new_csrf_token,
     parse_action_path,
     parse_form,
+)
+from automa.webui.auth import (
+    AUTH_PATHS,
+    LOGIN_FIELDS,
+    LOGIN_PATH,
+    LOGOUT_FIELDS,
+    LOGOUT_PATH,
+    AuthSettings,
+    Session,
+    clear_cookie,
+    cookie_token,
+    minutes_left,
+    normalize_login_name,
+    session_cookie,
 )
 from automa.webui.bundle import build_bundle, bundle_name, parse_bundle_path
 from automa.webui.cards import ERROR_ART
@@ -124,6 +145,7 @@ from automa.webui.render import (
     render_clarify,
     render_file,
     render_files,
+    render_login,
     render_new_idea,
     render_overview,
     render_project,
@@ -193,6 +215,19 @@ def _replace_csp(security: tuple[tuple[str, str], ...], csp: str) -> tuple[tuple
         (name, csp) if name == "Content-Security-Policy" else (name, value)
         for name, value in security
     )
+
+
+@dataclass(frozen=True)
+class _SignedIn:
+    """The signed-in session of the request being handled (D181)."""
+
+    session: Session
+    actions: ActionSettings | None
+
+
+# Set per request (each request runs in its own thread): the session's own CSRF token
+# replaces the per-server one, and pages may post "Sign out".
+_SIGNED_IN: ContextVar[_SignedIn | None] = ContextVar("automa_signed_in", default=None)
 
 
 class WebServerError(ValueError):
@@ -340,8 +375,13 @@ class WebApp:
         timezone: str = DEFAULT_TIMEZONE,
         clock: Callable[[], datetime] | None = None,
         updates: UpdateWatcher | None = None,
+        auth: AuthSettings | None = None,
     ):
         self._store = ProjectStore.for_workspace(workspace)
+        # Login (D181): only once users.json has an account; checked on every request.
+        self._auth = auth or AuthSettings(
+            users=UserStore(workspace), origins=allowed_origins(allowed)
+        )
         self._updates = updates  # the "new version" bar (D178); never blocks a request
         if language not in LANGUAGES:
             raise ValueError(f"unknown language: {language!r}")
@@ -368,14 +408,41 @@ class WebApp:
         )
         self._ledger_path = ledger_path
         self._allowed = allowed
-        self._actions = actions
+        self._base_actions = actions
         self._methods = ACTION_METHODS if actions is not None else ALLOWED_METHODS
-        self._security = ACTION_SECURITY_HEADERS if actions is not None else SECURITY_HEADERS
+        self._base_security = ACTION_SECURITY_HEADERS if actions is not None else SECURITY_HEADERS
         self._decide_lock = threading.Lock()
 
     @property
+    def _actions(self) -> ActionSettings | None:
+        """Action settings of this request: a signed-in session's own CSRF token."""
+        signed_in = _SIGNED_IN.get()
+        return self._base_actions if signed_in is None else signed_in.actions
+
+    @property
+    def _security(self) -> tuple[tuple[str, str], ...]:
+        # Signed-in pages carry the "Sign out" form: forms may post to this server.
+        return self._base_security if _SIGNED_IN.get() is None else ACTION_SECURITY_HEADERS
+
+    def accepts_post(self, target: str) -> bool:
+        """Whether a POST to ``target`` is read at all (its body)."""
+        if self._base_actions is not None:
+            return True
+        return urlsplit(target).path in AUTH_PATHS and self._accounts() is not None
+
+    def _accounts(self) -> dict[str, User] | UsersError | None:
+        """The accounts by name; ``None``: no account, so no login (D181).
+
+        An unusable users file is returned (not raised): every page then fails closed."""
+        try:
+            users = self._auth.users.list()
+        except UsersError as e:
+            return e
+        return {u.name: u for u in users} or None
+
+    @property
     def actions_enabled(self) -> bool:
-        return self._actions is not None
+        return self._base_actions is not None
 
     @property
     def ideas_enabled(self) -> bool:
@@ -385,9 +452,21 @@ class WebApp:
     def runs_enabled(self) -> bool:
         return self._runs is not None
 
-    def max_body_bytes(self, target: str) -> int:
-        """The largest POST body accepted for ``target`` (idea forms are larger)."""
+    def max_body_bytes(self, target: str, headers: Sequence[tuple[str, str]] = ()) -> int:
+        """The largest POST body accepted for ``target`` (idea forms are larger).
+
+        With accounts (D181), a request without a live session never gets more than a
+        small form: an upload is not even read before sign-in."""
         path = urlsplit(target).path
+        accounts = self._accounts()
+        if accounts is not None:
+            session = (
+                None
+                if isinstance(accounts, UsersError)
+                else self._auth.sessions.peek(cookie_token(headers))
+            )
+            if session is None or not session.matches(accounts.get(session.user)):
+                return MAX_FORM_BYTES
         if self._ideas is not None and path == NEW_PATH:
             return MAX_UPLOAD_BYTES  # the new idea may carry files (D162)
         if self._ideas is not None and is_idea_path(path):
@@ -485,15 +564,60 @@ class WebApp:
         host: str | None,
         headers: Sequence[tuple[str, str]] = (),
         body: bytes = b"",
+        client: str = "",
     ) -> Response:
-        if method not in self._methods:
+        path = urlsplit(target).path
+        accounts = self._accounts()
+        auth_post = method == "POST" and path in AUTH_PATHS and accounts is not None
+        if method not in self._methods and not auth_post:
             code = "forms_only" if self._actions is not None else "read_only"
             refused = self.error(405, "error.title.method_not_allowed", code=code)
             return refused.with_headers(("Allow", ", ".join(self._methods)))
         if host is None or host.strip().lower() not in self._allowed:
             return self.error(421, "error.title.unexpected_host", code="open_printed_address")
-        if method != "POST" and is_static_path(urlsplit(target).path):
-            return self._static(urlsplit(target).path)
+        if method != "POST" and is_static_path(path):
+            return self._static(path)
+        if accounts is None:  # no account: unchanged loopback behaviour (D78)
+            return self._handle_checked(method, target, host, headers, body)
+        with top_bar(TopBar(bare=True)):
+            if isinstance(accounts, UsersError):
+                return self.error(
+                    503, "error.title.accounts_unusable", str(accounts), lead="lead.accounts"
+                )
+            token = cookie_token(headers)
+            session = self._auth.sessions.get(token)
+            if session is not None and not session.matches(accounts.get(session.user)):
+                self._auth.sessions.drop(token)
+                session = None
+            if path == LOGIN_PATH:
+                return self._login(method, headers, body, client, session, token)
+            if path == LOGOUT_PATH and method == "POST":
+                return self._logout(headers, body, session, token)
+            if session is None:
+                if method == "POST":
+                    return self.error(403, "error.title.login_needed", code="login_needed")
+                return self._redirect(LOGIN_PATH, "login.title")
+        base = self._base_actions
+        actions = (
+            None
+            if base is None
+            else ActionSettings(csrf_token=session.csrf_token, origins=base.origins)
+        )
+        reset = _SIGNED_IN.set(_SignedIn(session=session, actions=actions))
+        try:
+            return self._handle_checked(method, target, host, headers, body)
+        finally:
+            _SIGNED_IN.reset(reset)
+
+    def _handle_checked(
+        self,
+        method: str,
+        target: str,
+        host: str,
+        headers: Sequence[tuple[str, str]],
+        body: bytes,
+    ) -> Response:
+        """A request that passed the Host check (and the login, when there is one)."""
         totals = self._totals()
         with top_bar(self._top_bar(totals)):
             if method == "POST":
@@ -504,7 +628,10 @@ class WebApp:
     def _top_bar(self, totals: tuple[float, float] | None) -> TopBar:
         """The app bar of this request's pages (D161)."""
         welcome = self._welcome()
+        signed_in = _SIGNED_IN.get()
         return TopBar(
+            user=None if signed_in is None else signed_in.session.user,
+            logout_token=None if signed_in is None else signed_in.session.csrf_token,
             new_idea=self._ideas is not None and self._actions is not None,
             month_usd=None if totals is None else totals[1],
             rate=self._rate,
@@ -574,14 +701,108 @@ class WebApp:
             return lowered
         return self._decide(action, lowered, body)
 
-    def _redirect(self, location: str, title_key: str = "redirect.done") -> Response:
+    def _redirect(
+        self, location: str, title_key: str = "redirect.done", *extra: tuple[str, str]
+    ) -> Response:
         link = f'<p><a href="{text(location)}">{text(t("redirect.continue", self._lang))}</a></p>'
         return _html(
             303,
             page(t(title_key, self._lang), link, actions=True, lang=self._lang),
-            (("Location", location),),
+            (("Location", location), *extra),
             security=self._security,
         )
+
+    def _login_page(
+        self,
+        status: int = 200,
+        *,
+        name: str = "",
+        message: str | None = None,
+        extra: tuple[tuple[str, str], ...] = (),
+    ) -> Response:
+        document = render_login(self._auth.login_token, self._lang, name=name, message=message)
+        # Forms post to this server and the browser must send a real Origin (D123).
+        return _html(status, document, extra, security=ACTION_SECURITY_HEADERS)
+
+    def _login(
+        self,
+        method: str,
+        headers: Sequence[tuple[str, str]],
+        body: bytes,
+        client: str,
+        session: Session | None,
+        token: str | None,
+    ) -> Response:
+        """``GET``/``POST /login`` (D181).
+
+        A POST passes the same single-header, same-origin, strict-form and token
+        checks as every action, then the client limiter, then the account check of
+        :meth:`automa.users.UserStore.authenticate` (with its own lock). Success
+        always creates a fresh session (no fixation) and replaces any old one."""
+        if method != "POST":
+            if session is not None:
+                return self._redirect("/")
+            return self._login_page()
+        lowered = self._single_headers(headers)
+        if isinstance(lowered, Response):
+            return lowered
+        login = ActionSettings(csrf_token=self._auth.login_token, origins=self._auth.origins)
+        try:
+            check_same_origin(lowered, login)
+            form = parse_form(lowered, body, fields=LOGIN_FIELDS)
+            check_token(form, login)
+        except ActionRefused as e:
+            return self.refused(e)
+        name = normalize_login_name(form.get("name", ""))
+        wait = self._auth.limiter.retry_after(client)
+        if wait is not None:
+            message = t("login.slow_down", self._lang, minutes=max(1, -(-wait // 60)))
+            return self._login_page(
+                429, name=name, message=message, extra=(("Retry-After", str(wait)),)
+            )
+        try:
+            result = self._auth.users.authenticate(name, form.get("password", ""))
+        except UsersError as e:
+            return self.error(503, "error.title.accounts_unusable", str(e), lead="lead.accounts")
+        if not result.ok or result.user is None:
+            self._auth.limiter.failed(client)
+            if result.outcome is LoginOutcome.LOCKED:
+                minutes = minutes_left(result.locked_until, self._auth.now())
+                return self._login_page(
+                    429,
+                    name=name,
+                    message=t("login.locked", self._lang, minutes=minutes),
+                    extra=(("Retry-After", str(minutes * 60)),),
+                )
+            key = "login.disabled" if result.outcome is LoginOutcome.DISABLED else "login.bad"
+            return self._login_page(403, name=name, message=t(key, self._lang))
+        self._auth.limiter.succeeded(client)
+        self._auth.sessions.drop(token)
+        new_token, _ = self._auth.sessions.create(result.user)
+        return self._redirect("/", "redirect.done", ("Set-Cookie", session_cookie(new_token)))
+
+    def _logout(
+        self,
+        headers: Sequence[tuple[str, str]],
+        body: bytes,
+        session: Session | None,
+        token: str | None,
+    ) -> Response:
+        """``POST /logout`` (D181): same checks, with the session's own token."""
+        if session is None:
+            return self._redirect(LOGIN_PATH, "login.title", ("Set-Cookie", clear_cookie()))
+        lowered = self._single_headers(headers)
+        if isinstance(lowered, Response):
+            return lowered
+        settings = ActionSettings(csrf_token=session.csrf_token, origins=self._auth.origins)
+        try:
+            check_same_origin(lowered, settings)
+            form = parse_form(lowered, body, fields=LOGOUT_FIELDS)
+            check_token(form, settings)
+        except ActionRefused as e:
+            return self.refused(e)
+        self._auth.sessions.drop(token)
+        return self._redirect(LOGIN_PATH, "login.title", ("Set-Cookie", clear_cookie()))
 
     def _post_idea(self, path: str, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
         """``POST /new`` or ``/projects/<pid>/clarify`` (D124), after the same checks."""
@@ -1168,14 +1389,14 @@ def make_handler(
             if len(lengths) != 1 or not lengths[0].strip().isdigit():
                 return app.error(411, "error.title.length_required")
             length = int(lengths[0].strip())
-            if length > app.max_body_bytes(self.path):
+            if length > app.max_body_bytes(self.path, list(self.headers.items())):
                 return app.error(413, "error.title.refused", code="form_too_large")
             return self.rfile.read(length) if length else b""
 
         def _serve(self) -> None:
             response: Response | None = None
             body = b""
-            if self.command == "POST" and app.actions_enabled:
+            if self.command == "POST" and app.accepts_post(self.path):
                 read = self._read_body()
                 if isinstance(read, Response):
                     response = read
@@ -1188,6 +1409,7 @@ def make_handler(
                     self.headers.get("Host"),
                     list(self.headers.items()),
                     body,
+                    client=str(self.client_address[0]),
                 )
             self.send_response(response.status)
             for name, value in response.headers:

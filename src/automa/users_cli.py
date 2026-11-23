@@ -23,7 +23,8 @@ EXIT_CONFIG = 2
 
 users_app = typer.Typer(
     help="Web UI accounts (owner only): add, list, change password, disable or enable. "
-    "With no accounts the web UI stays loopback-only as before.",
+    "With no accounts the web UI stays loopback-only as before; with at least one, "
+    "every page of automa web asks for a sign-in.",
     no_args_is_help=True,
 )
 
@@ -84,6 +85,7 @@ def add(
     except UsersError as e:
         raise _fail(str(e)) from None
     typer.echo(f"added {user.role.value} {user.name!r} (saved in {store.path})")
+    typer.echo("automa web now asks for a sign-in on every page (no restart needed)")
 
 
 @users_app.command("list")

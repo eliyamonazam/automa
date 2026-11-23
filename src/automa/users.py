@@ -14,7 +14,8 @@ talks to the network or a model. The file is ``<workspace>/users.json``:
   weaker than the defaults.
 
 With no users file (or an empty one) nothing changes for the web UI: it keeps
-its loopback-only behaviour (D78). The login page itself is a later step.
+its loopback-only behaviour (D78); with an account every page needs a sign-in
+(:mod:`automa.webui.auth`, D181).
 """
 
 from __future__ import annotations

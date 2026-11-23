@@ -875,6 +875,55 @@ _RAW: dict[str, dict[Language, str]] = {
     },
     # Delivery: the product card (D157), retry (D156) and the zip (D158)
     "nav.projects": {"en": "Projects", "fa": "پروژه‌ها"},
+    # Login (M15, D181)
+    "nav.signed_in": {"en": "Signed in as {name}", "fa": "واردشده با حساب {name}"},
+    "nav.logout": {"en": "Sign out", "fa": "خروج"},
+    "login.title": {"en": "Sign in", "fa": "ورود"},
+    "login.heading": {"en": "Sign in to Automa", "fa": "ورود به Automa"},
+    "login.intro": {
+        "en": "Sign in to see your projects and start new ones.",
+        "fa": "برای دیدن پروژه‌هات و شروع ایدهٔ تازه وارد شو.",
+    },
+    "login.name": {"en": "User name", "fa": "نام کاربری"},
+    "login.password": {"en": "Password", "fa": "رمز"},
+    "login.submit": {"en": "Sign in", "fa": "ورود"},
+    "login.no_account": {
+        "en": "No account, or forgot your password? Ask the owner of this Automa.",
+        "fa": "حساب نداری یا رمزت یادت رفته؟ به صاحب این Automa بگو.",
+    },
+    "login.bad": {
+        "en": "Wrong user name or password.",
+        "fa": "نام کاربری یا رمز درست نیست.",
+    },
+    "login.locked": {
+        "en": "After several wrong passwords in a row this account is locked for now; "
+        "try again in about {minutes} minutes.",
+        "fa": "به‌خاطر چند رمز اشتباه پشت سر هم، این حساب موقتاً قفل شده؛ "
+        "حدود {minutes} دقیقهٔ دیگه دوباره امتحان کن.",
+    },
+    "login.disabled": {
+        "en": "This account is disabled; ask the owner of this Automa to enable it.",
+        "fa": "این حساب غیرفعاله؛ به صاحب این Automa بگو دوباره فعالش کنه.",
+    },
+    "login.slow_down": {
+        "en": "Too many failed sign-ins; try again in about {minutes} minutes.",
+        "fa": "تلاش ناموفق برای ورود زیاد بوده؛ حدود {minutes} دقیقهٔ دیگه دوباره امتحان کن.",
+    },
+    "error.title.login_needed": {"en": "Sign in first", "fa": "اول وارد شو"},
+    "refusal.login_needed": {
+        "en": "sign in first: reload the page and sign in",
+        "fa": "این کار بدون ورود انجام نمی‌شه؛ صفحه رو دوباره باز کن و وارد شو.",
+    },
+    "error.title.accounts_unusable": {
+        "en": "The accounts file cannot be used",
+        "fa": "فایل حساب‌ها قابل استفاده نیست",
+    },
+    "refusal.lead.accounts": {
+        "en": "For safety no page is shown until the owner fixes the accounts file "
+        "(users.json in the workspace).",
+        "fa": "برای امنیت، تا وقتی صاحب Automa فایل حساب‌ها (users.json در پوشهٔ کار) رو "
+        "درست نکنه هیچ صفحه‌ای نشون داده نمی‌شه.",
+    },
     "nav.new": {"en": "New idea", "fa": "ایدهٔ جدید"},
     "deliver.ready.title": {"en": "✅ Your product is ready", "fa": "✅ محصولت آماده‌ست"},
     "deliver.partial.title": {
