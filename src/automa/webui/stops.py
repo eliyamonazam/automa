@@ -35,6 +35,7 @@ StopKind = Literal[
     "daily_cap",
     "project_cap",
     "per_call_cap",
+    "user_monthly_cap",
     "budget",
     "balance",
     "key",
@@ -58,7 +59,12 @@ FINISHED = "orchestrator.finished"
 BUDGET_STOP = "budget.stop"
 
 _SCOPE_KIND: Mapping[str, StopKind] = MappingProxyType(
-    {"daily": "daily_cap", "project": "project_cap", "per_call": "per_call_cap"}
+    {
+        "daily": "daily_cap",
+        "project": "project_cap",
+        "per_call": "per_call_cap",
+        "user_monthly": "user_monthly_cap",
+    }
 )
 _REASON_KIND: Mapping[str, StopKind] = MappingProxyType(
     {
@@ -230,6 +236,12 @@ _RAW: dict[str, dict[Language, str]] = {
         "per_call_usd in automa.toml, then continue.",
         "fa": "متوقف شد: یک درخواست به مدل از سقف هر درخواست بیشتر می‌شد. در automa.toml "
         "مقدار per_call_usd رو بیشتر کن و بعد ادامه بده.",
+    },
+    "stop.user_monthly_cap": {
+        "en": "Paused: your account's spending cap for this month is used up. Ask the "
+        "owner of Automa to raise it, or wait until next month.",
+        "fa": "متوقف شد: سقف خرج این ماهِ حساب تو پر شده. از صاحب Automa بخواه سقفت رو "
+        "بیشتر کنه، یا تا ماه بعد صبر کن.",
     },
     "stop.budget": {
         "en": "Paused: the spending guard did not allow going on (see the log).",

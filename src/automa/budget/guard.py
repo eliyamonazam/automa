@@ -15,6 +15,12 @@ later call in it is refused, even a tiny one, until the user resolves it (approv
 flow arrives in M5). All arithmetic is in integer nano-USD; caps round *down* and
 costs round *up*, so the guard can never under-count.
 
+Per-user monthly cap (D183): a guard built for a project that belongs to a web UI
+account records that ``user`` on every ledger row and, with ``user_monthly_usd``,
+adds one more hard cap - the account's spending in the current UTC month across all
+of its projects. It is only ever an *extra* scope: the per-call, daily and project
+caps are checked exactly as before.
+
 Warnings: when recorded spending first reaches 50% and 80% of the daily or project
 cap, a ``budget.warning`` event is emitted (once per scope, key and threshold);
 every new hard stop emits ``budget.stop``. Events go to the optional ``EventSink``
@@ -30,7 +36,15 @@ from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 
-from automa.budget.ledger import NANO_PER_USD, CostLedger, LedgerEntry, nusd_to_usd, usd_to_nusd
+from automa.budget.ledger import (
+    NANO_PER_USD,
+    USER_PATTERN,
+    CostLedger,
+    LedgerEntry,
+    month_of,
+    nusd_to_usd,
+    usd_to_nusd,
+)
 from automa.config import BudgetLimits
 from automa.events import Event, EventSink
 from automa.llm.gateway import CallEstimate
@@ -44,6 +58,7 @@ class BudgetScope(StrEnum):
     PER_CALL = "per_call"
     DAILY = "daily"
     PROJECT = "project"
+    USER_MONTHLY = "user_monthly"
 
 
 class BudgetError(Exception):
@@ -113,7 +128,15 @@ class BudgetGuard:
         ledger: CostLedger,
         *,
         events: EventSink | None = None,
+        user: str | None = None,
+        user_monthly_usd: float | None = None,
     ):
+        if user is not None and not USER_PATTERN.fullmatch(user):
+            raise BudgetError("invalid user name")
+        if user_monthly_usd is not None and user is None:
+            raise BudgetError("a monthly user cap needs a user")
+        self._user = user
+        self._user_cap = None if user_monthly_usd is None else cap_to_nusd(user_monthly_usd)
         self._limits = limits
         self._sink = events
         self._events: list[Event] = []
@@ -136,6 +159,14 @@ class BudgetGuard:
     @property
     def ledger(self) -> CostLedger:
         return self._ledger
+
+    @property
+    def user(self) -> str | None:
+        return self._user
+
+    @property
+    def user_monthly_nusd(self) -> int | None:
+        return self._user_cap
 
     # --- inspection -----------------------------------------------------------
 
@@ -166,8 +197,13 @@ class BudgetGuard:
             raise BudgetError("call has no project_id; refusing (project cap cannot apply)")
         requested = usd_to_nusd(estimate.max_cost_usd)
         with self._lock:
-            day_key = self._ledger.today().isoformat()
-            for scope, key in ((BudgetScope.DAILY, day_key), (BudgetScope.PROJECT, project_id)):
+            today = self._ledger.today()
+            day_key = today.isoformat()
+            latch_keys = [(BudgetScope.DAILY, day_key), (BudgetScope.PROJECT, project_id)]
+            user_key = self._user_key(today)
+            if user_key is not None:
+                latch_keys.append((BudgetScope.USER_MONTHLY, user_key))
+            for scope, key in latch_keys:
                 latched = self._stopped.get((scope, key))
                 if latched is not None:
                     raise BudgetExceeded(
@@ -186,7 +222,7 @@ class BudgetGuard:
                     spent_nusd=0,
                     requested_nusd=requested,
                 )
-            checks = (
+            checks = [
                 (BudgetScope.DAILY, day_key, self._daily_cap, self._pending_locked(None)),
                 (
                     BudgetScope.PROJECT,
@@ -194,7 +230,17 @@ class BudgetGuard:
                     self._project_cap,
                     self._pending_locked(project_id),
                 ),
-            )
+            ]
+            if user_key is not None and self._user_cap is not None:
+                # Every reservation of this guard is this user's.
+                checks.append(
+                    (
+                        BudgetScope.USER_MONTHLY,
+                        user_key,
+                        self._user_cap,
+                        self._pending_locked(None),
+                    )
+                )
             for scope, key, cap, pending in checks:
                 committed = self._spent_locked(scope, key) + pending
                 if committed + requested > cap:
@@ -228,13 +274,16 @@ class BudgetGuard:
         has now reached is latched.
         """
         with self._lock:
-            entry = self._ledger.record(estimate, result)
+            entry = self._ledger.record(estimate, result, user=self._user)
             reserved = self._pop_reservation(estimate)
             day_key = entry.ts.date().isoformat()
             project_id = estimate.context.project_id
             scopes = [(BudgetScope.DAILY, day_key, self._daily_cap)]
             if project_id:
                 scopes.append((BudgetScope.PROJECT, project_id, self._project_cap))
+            user_key = self._user_key(entry.ts.date())
+            if user_key is not None and self._user_cap is not None:
+                scopes.append((BudgetScope.USER_MONTHLY, user_key, self._user_cap))
             new_events: list[Event] = []
             for scope, key, cap in scopes:
                 spent = self._spent_locked(scope, key)
@@ -268,9 +317,18 @@ class BudgetGuard:
             if project_id is None or r.estimate.context.project_id == project_id
         )
 
+    def _user_key(self, day: date) -> str | None:
+        """``<user>:<YYYY-MM>``, the latch key of the monthly user cap (or ``None``)."""
+        if self._user is None or self._user_cap is None:
+            return None
+        return f"{self._user}:{month_of(day)}"
+
     def _spent_locked(self, scope: BudgetScope, key: str) -> int:
         if scope is BudgetScope.DAILY:
             return self._ledger.spent_nusd(day=date.fromisoformat(key))
+        if scope is BudgetScope.USER_MONTHLY:
+            user, month = key.split(":", 1)
+            return self._ledger.spent_nusd(user=user, month=month)
         return self._ledger.spent_nusd(project_id=key)
 
     def _pop_reservation(self, estimate: CallEstimate) -> bool:

@@ -244,12 +244,25 @@ class BudgetLimits(_Strict):
     # max(run_brake_factor x the high end of the run's estimated range, run_brake_min_usd).
     run_brake_min_usd: float = Field(default=0.30, gt=0, le=1_000_000, allow_inf_nan=False)
     run_brake_factor: float = Field(default=2.0, ge=1, le=100, allow_inf_nan=False)
+    # Member accounts (D183), only ever stricter: a project owned by a member account
+    # is capped at min(project_usd, member_project_usd), and every member has a monthly
+    # cap across all of their projects ([users.<name>] monthly_usd, else this default).
+    member_project_usd: float = Field(default=1.0, gt=0, le=1_000_000, allow_inf_nan=False)
+    member_monthly_usd: float = Field(default=3.0, gt=0, le=1_000_000, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _per_call_within_caps(self) -> BudgetLimits:
         if self.per_call_usd > self.daily_usd or self.per_call_usd > self.project_usd:
             raise ValueError("per_call_usd must not exceed daily_usd or project_usd")
+        if self.per_call_usd > self.member_project_usd:
+            raise ValueError("per_call_usd must not exceed member_project_usd")
         return self
+
+
+class UserBudget(_Strict):
+    """``[users.<name>]``: the monthly spending cap of one web UI account (D183)."""
+
+    monthly_usd: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)
 
 
 class SandboxMode(StrEnum):
@@ -405,6 +418,7 @@ def describe_parallel(max_parallel: int) -> str:
 
 
 # Same as automa.plan.models.ROLE_PATTERN (not imported: automa.plan imports this module).
+_USER_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")  # = users.NAME_PATTERN
 _ROLE_KEY_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 
@@ -632,6 +646,15 @@ class AutomaConfig(_Strict):
     images: ImagesConfig = Field(default_factory=ImagesConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
     finance: FinanceConfig = Field(default_factory=FinanceConfig)
+    users: dict[str, UserBudget] = Field(default_factory=dict)
+
+    @field_validator("users")
+    @classmethod
+    def _user_keys(cls, v: dict[str, UserBudget]) -> dict[str, UserBudget]:
+        bad = sorted(repr(k) for k in v if not _USER_KEY_RE.fullmatch(k))
+        if bad:
+            raise ValueError(f"invalid account names: {', '.join(bad)}")
+        return v
 
     @field_validator("roles")
     @classmethod

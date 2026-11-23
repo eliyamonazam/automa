@@ -360,7 +360,8 @@ def test_new_and_self_new_share_the_guarded_planning_path() -> None:
         assert "LLMGateway" not in calls and "make_provider" not in calls
     assert "create_selfdev_project" in _calls(cli.self_new)
     planning = _calls(cli._plan_with_executive)
-    assert {"LLMGateway", "BudgetGuard"} <= planning
+    assert {"LLMGateway", "_project_guard"} <= planning
+    assert "BudgetGuard" in _calls(cli._project_guard)
 
 
 def test_help_lists_self_new() -> None:

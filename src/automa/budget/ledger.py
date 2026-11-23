@@ -9,6 +9,7 @@ recorded, the caller sees the exception (the budget layer must fail closed).
 from __future__ import annotations
 
 import math
+import re
 import sqlite3
 import threading
 from collections.abc import Callable
@@ -21,7 +22,9 @@ from automa.config import Tier
 from automa.llm.gateway import CallEstimate
 from automa.llm.types import LLMResult
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+# Version 2 (D183) added the ``user`` column (the web UI account a project belongs
+# to); version-1 files are migrated in place with ``ALTER TABLE ... ADD COLUMN``.
 NANO_PER_USD = 1_000_000_000
 
 _SCHEMA = """
@@ -38,11 +41,21 @@ CREATE TABLE IF NOT EXISTS calls (
     output_tokens      INTEGER NOT NULL CHECK (output_tokens >= 0),
     cost_nusd          INTEGER NOT NULL CHECK (cost_nusd >= 0),
     estimate_nusd      INTEGER NOT NULL CHECK (estimate_nusd >= 0),
-    reported_cost_nusd INTEGER CHECK (reported_cost_nusd IS NULL OR reported_cost_nusd >= 0)
+    reported_cost_nusd INTEGER CHECK (reported_cost_nusd IS NULL OR reported_cost_nusd >= 0),
+    user               TEXT
 );
 CREATE INDEX IF NOT EXISTS calls_project ON calls (project_id);
 CREATE INDEX IF NOT EXISTS calls_day ON calls (day);
+CREATE INDEX IF NOT EXISTS calls_user ON calls (user);
 """
+
+_MIGRATE_V1 = """
+ALTER TABLE calls ADD COLUMN user TEXT;
+CREATE INDEX IF NOT EXISTS calls_user ON calls (user);
+"""
+
+USER_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
+MONTH_PATTERN = re.compile(r"^[0-9]{4}-(0[1-9]|1[0-2])$")
 
 Clock = Callable[[], datetime]
 
@@ -83,6 +96,7 @@ class LedgerEntry(BaseModel):
     cost_nusd: int = Field(ge=0)
     estimate_nusd: int = Field(ge=0)
     reported_cost_nusd: int | None = Field(default=None, ge=0)
+    user: str | None = Field(default=None, pattern=USER_PATTERN.pattern)
 
     @property
     def cost_usd(self) -> float:
@@ -91,7 +105,7 @@ class LedgerEntry(BaseModel):
 
 _COLUMNS = (
     "id, ts, project_id, task_id, tier, model, response_model, input_tokens, "
-    "output_tokens, cost_nusd, estimate_nusd, reported_cost_nusd"
+    "output_tokens, cost_nusd, estimate_nusd, reported_cost_nusd, user"
 )
 
 
@@ -111,6 +125,7 @@ class CostLedger:
         self._path = str(path)
         self._read_only = read_only
         self._empty = False  # read-only open of a file without the schema yet
+        self._has_user = True  # False only for a read-only open of a version-1 file
         target, uri = self._path, False
         if self._path == ":memory:":
             if read_only:
@@ -155,7 +170,7 @@ class CostLedger:
 
     def _init_schema(self) -> None:
         (version,) = self._conn.execute("PRAGMA user_version").fetchone()
-        if version not in (0, SCHEMA_VERSION):
+        if version not in (0, 1, SCHEMA_VERSION):
             raise LedgerError(f"unsupported ledger schema version {version}")
         if version == 0:
             tables = self._conn.execute(
@@ -165,9 +180,14 @@ class CostLedger:
                 raise LedgerError("database is not an Automa ledger (unexpected tables)")
         if self._read_only:
             self._empty = version == 0
+            # A version-1 file read without migrating: there is no ``user`` column.
+            self._has_user = version != 1
             return
         with self._conn:
-            self._conn.executescript(_SCHEMA)
+            if version == 1:
+                self._conn.executescript(_MIGRATE_V1)
+            else:
+                self._conn.executescript(_SCHEMA)
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def close(self) -> None:
@@ -194,10 +214,17 @@ class CostLedger:
         """Current UTC day according to the ledger clock."""
         return self._now().date()
 
-    def record(self, estimate: CallEstimate, result: LLMResult) -> LedgerEntry:
-        """Persist one completed call. Raises on any failure (fail closed)."""
+    def record(
+        self, estimate: CallEstimate, result: LLMResult, *, user: str | None = None
+    ) -> LedgerEntry:
+        """Persist one completed call. Raises on any failure (fail closed).
+
+        ``user`` (D183) is the account the project belongs to, or ``None``.
+        """
         if self._read_only:
             raise LedgerError("ledger is open read-only")
+        if user is not None and not USER_PATTERN.fullmatch(user):
+            raise LedgerError("invalid user name")
         if result.tier is not estimate.tier:
             raise LedgerError("result tier does not match estimate tier")
         now = self._now()
@@ -218,12 +245,13 @@ class CostLedger:
             usd_to_nusd(result.cost_usd),
             usd_to_nusd(estimate.max_cost_usd),
             reported,
+            user,
         )
         with self._lock, self._conn:
             cur = self._conn.execute(
                 "INSERT INTO calls (ts, day, project_id, task_id, tier, model, response_model,"
-                " input_tokens, output_tokens, cost_nusd, estimate_nusd, reported_cost_nusd)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " input_tokens, output_tokens, cost_nusd, estimate_nusd, reported_cost_nusd,"
+                " user) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 row,
             )
         entry_id = cur.lastrowid
@@ -235,23 +263,38 @@ class CostLedger:
             raise KeyError(entry_id)
         with self._lock:
             row = self._conn.execute(
-                f"SELECT {_COLUMNS} FROM calls WHERE id = ?",  # noqa: S608 - constant columns
+                f"SELECT {self._columns()} FROM calls WHERE id = ?",  # noqa: S608 - constant
                 (entry_id,),
             ).fetchone()
         if row is None:
             raise KeyError(entry_id)
         return _row_to_entry(row)
 
+    def _columns(self) -> str:
+        return _COLUMNS if self._has_user else _COLUMNS.replace(", user", ", NULL")
+
+    def _user_filter_ok(self, user: str | None) -> bool:
+        """False when a user filter can match nothing (version-1 file read as is)."""
+        if user is not None and not USER_PATTERN.fullmatch(user):
+            raise LedgerError("invalid user name")
+        return user is None or self._has_user
+
     def entries(
-        self, *, project_id: str | None = None, day: date | None = None
+        self,
+        *,
+        project_id: str | None = None,
+        day: date | None = None,
+        user: str | None = None,
+        month: str | None = None,
     ) -> list[LedgerEntry]:
-        """All entries in insertion order, optionally filtered by project and/or UTC day."""
-        if self._empty:
+        """All entries in insertion order, optionally filtered by project, UTC day,
+        user and/or UTC month (``YYYY-MM``)."""
+        if self._empty or not self._user_filter_ok(user):
             return []
-        where, params = _filters(project_id, day)
+        where, params = _filters(project_id, day, None, user, month)
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT {_COLUMNS} FROM calls{where} ORDER BY id",  # noqa: S608 - fixed clauses
+                f"SELECT {self._columns()} FROM calls{where} ORDER BY id",  # noqa: S608
                 params,
             ).fetchall()
         return [_row_to_entry(r) for r in rows]
@@ -262,11 +305,16 @@ class CostLedger:
         project_id: str | None = None,
         day: date | None = None,
         task_id: str | None = None,
+        user: str | None = None,
+        month: str | None = None,
     ) -> int:
-        """Exact total spending in nano-USD for the given filters."""
-        if self._empty:
+        """Exact total spending in nano-USD for the given filters.
+
+        ``month`` is a UTC calendar month ``YYYY-MM`` (D183, the per-user cap).
+        """
+        if self._empty or not self._user_filter_ok(user):
             return 0
-        where, params = _filters(project_id, day, task_id)
+        where, params = _filters(project_id, day, task_id, user, month)
         with self._lock:
             (total,) = self._conn.execute(
                 f"SELECT COALESCE(SUM(cost_nusd), 0) FROM calls{where}",  # noqa: S608
@@ -285,11 +333,29 @@ class CostLedger:
         return nusd_to_usd(self.spent_nusd(day=day or self.today()))
 
 
+def month_of(day: date) -> str:
+    """The ``YYYY-MM`` key of the UTC calendar month containing ``day``."""
+    return f"{day.year:04d}-{day.month:02d}"
+
+
 def _filters(
-    project_id: str | None, day: date | None, task_id: str | None = None
+    project_id: str | None,
+    day: date | None,
+    task_id: str | None = None,
+    user: str | None = None,
+    month: str | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     clauses: list[str] = []
     params: list[str] = []
+    if month is not None:
+        if not MONTH_PATTERN.fullmatch(month):
+            raise LedgerError("month must be YYYY-MM")
+        # ``day`` is always ``YYYY-MM-DD``: a fixed-width prefix comparison.
+        clauses.append("substr(day, 1, 7) = ?")
+        params.append(month)
+    if user is not None:
+        clauses.append("user = ?")
+        params.append(user)
     if task_id is not None:
         clauses.append("task_id = ?")
         params.append(task_id)

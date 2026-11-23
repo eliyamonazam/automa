@@ -131,6 +131,7 @@ from automa.benchmarks import (
     scan_results,
     write_result,
 )
+from automa.budget.accounts import config_for_project
 from automa.budget.brake import (
     RUN_KEY,
     BrakeError,
@@ -160,7 +161,7 @@ from automa.config import (
     load_config,
 )
 from automa.delivery import DeliveryState, build_delivery, render_markdown, try_build_delivery
-from automa.events import Event, JsonlEventLog
+from automa.events import Event, EventSink, JsonlEventLog
 from automa.feasibility import cli_lines as feasibility_lines
 from automa.finance import (
     ACTUAL_EVENT,
@@ -794,6 +795,21 @@ def _prepare_executive(config: AutomaConfig, memory: bool | None) -> _ExecutiveP
         raise _fail(str(e), EXIT_CONFIG) from None
 
 
+def _project_guard(
+    config: AutomaConfig, ledger: CostLedger, events: EventSink, owner: str | None
+) -> BudgetGuard:
+    """The ``BudgetGuard`` of a project of ``owner`` (D183): the configured caps plus,
+    for an account's project, the stricter member caps and the monthly user cap."""
+    _, budget = config_for_project(config, owner)
+    return BudgetGuard(
+        budget.limits,
+        ledger,
+        events=events,
+        user=budget.user,
+        user_monthly_usd=budget.user_monthly_usd,
+    )
+
+
 def _plan_with_executive(
     config: AutomaConfig,
     store: ProjectStore,
@@ -807,7 +823,7 @@ def _plan_with_executive(
     pid = project.id
     events = store.events(pid)
     with CostLedger.for_workspace(config.workspace) as ledger:
-        guard = BudgetGuard(config.limits, ledger, events=events)
+        guard = _project_guard(config, ledger, events, project.owner)
         gateway = LLMGateway(config, provider, guard=guard)
         agent = ExecutiveAgent(
             gateway,
@@ -1208,6 +1224,8 @@ def run(
             "or was killed, run again with --force.",
             EXIT_USER,
         )
+    # An account's project runs under its stricter caps everywhere below (D183).
+    config, budget = config_for_project(config, project.owner)
     settings = _run_settings(config, max_attempts=max_attempts, parallel=parallel)
     try:
         # Validate what every model call needs before touching the project.
@@ -1248,7 +1266,13 @@ def run(
         # Before the guard, the gateway and any model call (D121).
         _confirm_spend(config, events, pid, est.high_nusd, yes=yes)
         marks = _RunMarks.take(ledger, quality, pid)
-        budget_guard = BudgetGuard(config.limits, ledger, events=events)
+        budget_guard = BudgetGuard(
+            budget.limits,
+            ledger,
+            events=events,
+            user=budget.user,
+            user_monthly_usd=budget.user_monthly_usd,
+        )
         # The task spending brake (D153) only refuses more than the BudgetGuard.
         guard = _task_brake(
             config,
@@ -3592,7 +3616,7 @@ def review_run(
     events = store.events(pid)
     with CostLedger.for_workspace(config.workspace) as ledger:
         spent_before = ledger.spent_nusd(project_id=pid)
-        guard = BudgetGuard(config.limits, ledger, events=events)
+        guard = _project_guard(config, ledger, events, project.owner)
         gateway = LLMGateway(config, provider, guard=guard)
         agent = ReviewAgent(gateway, settings=settings, events=events)
         try:
@@ -4143,8 +4167,12 @@ class _WebIdeaPlanner:
         settings, provider, roles, prompt_memory = self._prep()
         store = ProjectStore.for_workspace(config.workspace)
         events = store.events(project_id)
+        try:
+            owner = store.load(project_id).owner
+        except ProjectStoreError as e:
+            raise IdeaError("config", _safe(str(e))) from None
         with CostLedger.for_workspace(config.workspace) as ledger:
-            guard = BudgetGuard(config.limits, ledger, events=events)
+            guard = _project_guard(config, ledger, events, owner)
             gateway = LLMGateway(config, provider, guard=guard)
             agent = ExecutiveAgent(
                 gateway,

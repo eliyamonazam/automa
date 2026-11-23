@@ -119,6 +119,17 @@ task_brake_factor = 3.0
 # calls. Go on with: automa brake continue <project> --run (or the web's "Continue").
 run_brake_min_usd = 0.30
 run_brake_factor = 2.0
+# Web UI accounts (D183), only ever stricter: a project of a member account is
+# capped at min(project_usd, member_project_usd), and each member may spend at most
+# member_monthly_usd per UTC month across all of their projects (per_call_usd must
+# not exceed member_project_usd).
+member_project_usd = 1.0
+member_monthly_usd = 3.0
+
+# Monthly cap of one account (overrides member_monthly_usd for a member; for an
+# owner account there is no monthly cap unless set here).
+# [users.sara]
+# monthly_usd = 5.0
 
 # Where run_command runs. "local" (default): on this machine, with your privileges,
 # NOT isolated. "docker": each call in a fresh container with no network, read-only
