@@ -48,8 +48,10 @@ from pathlib import Path
 from string import Formatter
 from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
+from automa.budget.accounts import project_budget
 from automa.budget.ledger import CostLedger, LedgerEntry, LedgerError, nusd_to_usd
 from automa.changes import ChangeError, can_change, check_change, load_changes
+from automa.config import AutomaConfig
 from automa.delivery import try_build_delivery
 from automa.feasibility import FeasibilityWarning, plan_warnings
 from automa.finance.anomaly import AnomalySettings
@@ -166,6 +168,14 @@ from automa.webui.runs import (
     parse_start_path,
     parse_stop_path,
 )
+from automa.webui.spending import (
+    SPENDING_PATH,
+    AccountInfo,
+    ProjectInfo,
+    attribute,
+    build_spending,
+    render_spending,
+)
 from automa.webui.static import STATIC_HEADERS, is_static_path, static_asset
 from automa.webui.upload import (
     CHANGE_FIELDS,
@@ -179,7 +189,7 @@ from automa.webui.upload import (
     parse_multipart,
     parse_request_action,
 )
-from automa.webui.views import ProjectView, build_overview, build_project_view
+from automa.webui.views import ProjectView, build_overview, build_project_view, project_title
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -376,8 +386,11 @@ class WebApp:
         clock: Callable[[], datetime] | None = None,
         updates: UpdateWatcher | None = None,
         auth: AuthSettings | None = None,
+        budget_config: AutomaConfig | None = None,
     ):
         self._store = ProjectStore.for_workspace(workspace)
+        # Display only (D184): the caps shown on "My spending"; the guard reads its own.
+        self._budget_config = budget_config
         # Login (D181): only once users.json has an account; checked on every request.
         self._auth = auth or AuthSettings(
             users=UserStore(workspace), origins=allowed_origins(allowed)
@@ -522,11 +535,11 @@ class WebApp:
             return None
         now = self._clock().astimezone(self._tz)
         user = self._member()
-        mine = None if user is None else self._owned_ids(user)
+        projects = None if user is None else self._project_infos()
         today = month = 0
         for e in entries:
-            if mine is not None and e.project_id not in mine:
-                continue  # D182: a member sees only their own spending
+            if projects is not None and attribute(e, projects) != user:
+                continue  # D182/D184: a member sees only their own spending
             local = e.ts.astimezone(self._tz)
             if (local.year, local.month) == (now.year, now.month):
                 month += e.cost_nusd
@@ -534,9 +547,60 @@ class WebApp:
                     today += e.cost_nusd
         return nusd_to_usd(today), nusd_to_usd(month)
 
-    def _owned_ids(self, user: str) -> set[str]:
-        """The ids of ``user``'s readable projects (D182)."""
-        return {pid for pid in self._store.list_ids() if self._owned_by(pid, user)}
+    def _project_infos(self) -> dict[str, ProjectInfo]:
+        """Owner and title of every readable project (an unreadable one is left out,
+        so its rows fall back to the account recorded on them, D184)."""
+        infos: dict[str, ProjectInfo] = {}
+        for pid in self._store.list_ids():
+            try:
+                project = self._store.load(pid)
+            except (ProjectStoreError, OSError):
+                continue
+            infos[pid] = ProjectInfo(owner=project.owner, title=project_title(project.goal) or pid)
+        return infos
+
+    def _account_info(self, name: str, role: UserRole, disabled: bool = False) -> AccountInfo:
+        """An account with the caps its projects' guards enforce (D183)."""
+        cap = project_cap = None
+        if self._budget_config is not None:
+            budget = project_budget(self._budget_config, name, role)
+            cap, project_cap = budget.user_monthly_usd, budget.limits.project_usd
+        return AccountInfo(
+            name=name,
+            role="owner" if role is UserRole.OWNER else "member",
+            disabled=disabled,
+            cap_usd=cap,
+            project_cap_usd=project_cap,
+            caps_known=self._budget_config is not None,
+        )
+
+    def _spending_page(self) -> Response:
+        """``GET /spending`` (D184): the viewer's month; an owner also sees everyone."""
+        entries, err = self._entries()
+        signed_in = _SIGNED_IN.get()
+        viewer = accounts = None
+        if signed_in is not None:
+            session = signed_in.session
+            viewer = self._account_info(session.user, session.role)
+            if session.role is UserRole.OWNER:
+                found = self._accounts()
+                if isinstance(found, dict):
+                    accounts = [
+                        self._account_info(u.name, u.role, u.disabled) for u in found.values()
+                    ]
+        config = self._budget_config
+        view = build_spending(
+            entries,
+            self._project_infos(),
+            viewer=viewer,
+            accounts=accounts or (),
+            workspace_project_cap_usd=None if config is None else config.limits.project_usd,
+            now=self._clock(),
+            tz=self._tz,
+            error=err,
+        )
+        document = render_spending(view, rate=self._rate, lang=self._lang)
+        return _html(200, document, security=self._security)
 
     def _spending(self) -> tuple[dict[str, int], str | None]:
         """Spending per project from a read-only Ledger; never creates one."""
@@ -1259,6 +1323,8 @@ class WebApp:
         bundle_pid = parse_bundle_path(path)
         if bundle_pid is not None:
             return self._bundle(bundle_pid)
+        if path == SPENDING_PATH:
+            return self._spending_page()
         if path == "/":
             spent, err = self._spending()
             try:
@@ -1492,6 +1558,7 @@ def create_server(
     language: Language = "en",
     timezone: str = DEFAULT_TIMEZONE,
     updates: UpdateWatcher | None = None,
+    budget_config: AutomaConfig | None = None,
 ) -> ThreadingHTTPServer:
     """A bound (not yet serving) server. ``port=0`` picks a free port (tests).
 
@@ -1502,7 +1569,8 @@ def create_server(
     is the unusual-spending threshold of the progress panel (``[finance]``, D132);
     ``toman_per_usd`` shows every amount first in rounded toman (D133); ``language``
     and ``timezone`` are ``[display]`` (translated pages and local times, D140);
-    ``updates`` shows a "new version is ready" bar (D178)."""
+    ``updates`` shows a "new version is ready" bar (D178); ``budget_config`` lets the
+    "My spending" page show each account's caps (display only, D184)."""
     host = validate_bind_host(host)
     port = validate_port(port)
 
@@ -1533,6 +1601,7 @@ def create_server(
         timezone=timezone,
         background_ideas=True,  # the browser waits on a "thinking" page (D137)
         updates=updates,
+        budget_config=budget_config,
     )
     server.RequestHandlerClass = make_handler(app, log)
     return server

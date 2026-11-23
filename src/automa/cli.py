@@ -4309,6 +4309,7 @@ def web(
             updates=updatecheck.watcher_for(config.workspace)
             if config.display.update_check
             else None,
+            budget_config=config,
         )
     except webui_server.WebServerError as e:
         raise _fail(str(e), EXIT_USER) from None

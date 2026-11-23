@@ -310,6 +310,18 @@ details>summary{cursor:pointer;color:var(--muted)}
 .spend{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin:0;
 background:var(--card);border:1px solid var(--line);border-radius:999px;padding:4px 14px}
 .spend .icon{color:var(--accent)}
+.spend-total .spend,.person .spend{border:0;padding:0;background:none;font-size:1.1em}
+.home-head .page-lead{flex-basis:100%;margin:0}
+.cap-figures{list-style:none;margin:6px 0;padding:0;display:flex;flex-wrap:wrap;gap:4px 22px;
+color:var(--muted)}.cap-figures strong{color:var(--fg)}
+.spend-list{list-style:none;margin:10px 0;padding:0;display:grid;gap:8px}
+.spend-row .name{flex:1 1 12em;overflow-wrap:anywhere;font-weight:600}
+.bar.near .fill{background:var(--warn)}.bar.full .fill{background:var(--badline)}
+.cap-note{margin:.3em 0;color:var(--warn);font-weight:600}.cap-note.bad{color:var(--badfg)}
+.person h3{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin:0 0 .4em}
+.person .chip{font-size:.75em;font-weight:600;padding:1px 10px;border-radius:999px;
+background:var(--chip);color:var(--muted)}
+.topbar a.month{text-decoration:none}
 .icon{flex:none;vertical-align:middle}
 .topbar nav{align-items:center}
 .topbar .month{display:inline-flex;align-items:center;gap:6px;color:var(--muted);
@@ -565,8 +577,8 @@ def _topbar(lang: Language, bar: TopBar, *, new_idea: bool = False) -> str:
             else toman_text(bar.month_usd, bar.rate, lang=lang)
         )
         month = (
-            f'<span class="month" title="{this_month} {full}">{ICONS["wallet"]}'
-            f'<span class="lbl">{this_month}</span> <strong>{text(short)}</strong></span>'
+            f'<a class="month" href="/spending" title="{this_month} {full}">{ICONS["wallet"]}'
+            f'<span class="lbl">{this_month}</span> <strong>{text(short)}</strong></a>'
         )
     return (
         f'<header class="topbar">{brand}'
