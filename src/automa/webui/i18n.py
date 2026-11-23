@@ -196,6 +196,10 @@ _RAW: dict[str, dict[Language, str]] = {
         "en": "A new version of Automa is ready",
         "fa": "نسخهٔ تازهٔ Automa آماده‌ست",
     },
+    "update.done": {
+        "en": "Automa is updated to the new version",
+        "fa": "Automa به نسخهٔ تازه به‌روز شد",
+    },
     "update.whats_new": {"en": "What's new", "fa": "چه چیزهایی تازه‌ست"},
     "update.more": {"en": "and {count} more", "fa": "و {count} مورد دیگه"},
     "update.small": {

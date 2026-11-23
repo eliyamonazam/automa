@@ -141,6 +141,9 @@ border:1px solid color-mix(in srgb,var(--infofg) 22%,transparent)}
 .updatebar li.more{list-style:none;color:var(--muted)}
 .updatebar p{margin:.4em 0 .2em;color:var(--fg)}
 .updatebar p.term{color:var(--muted);font-size:.92em}
+.welcomebar{background:var(--ok);color:var(--okfg);
+border-color:color-mix(in srgb,var(--okfg) 22%,transparent)}
+.welcomebar+.updatebar{margin-top:8px}
 @media (max-width:1100px){.updatebar{margin-inline:16px}}
 h1{font-size:1.65em;margin:.3em 0;line-height:1.4}h2{font-size:1.2em;margin:1.3em 0 .5em}
 h3{font-size:1.04em;margin:.4em 0}
@@ -426,6 +429,9 @@ class TopBar:
     month_usd: float | None = None
     rate: float | None = None
     update: UpdateNotice | None = None  # a newer Automa is waiting (D178)
+    welcome: UpdateNotice | None = None  # just updated: what came in (D179)
+    # Called when the welcome bar is actually put on a page (starts its window).
+    welcome_shown: Callable[[], None] | None = None
 
 
 _TOP_BAR: ContextVar[TopBar] = ContextVar("automa_top_bar", default=TopBar())  # noqa: B039
@@ -500,7 +506,7 @@ def page(
         f'<meta name="referrer" content="{referrer}">{reload}'
         f"<title>{text(title)}</title><style>{FONT_FACE}{_STYLE}</style></head>"
         f"<body>{_topbar(lang, _TOP_BAR.get(), new_idea=new_idea)}"
-        f"{'' if refresh is not None else _update_bar(_TOP_BAR.get().update, lang)}"
+        f"{'' if refresh is not None else _version_bars(_TOP_BAR.get(), lang)}"
         f'<main class="wrap">{body}</main></body></html>\n'
     )
 
@@ -537,21 +543,50 @@ def _topbar(lang: Language, bar: TopBar, *, new_idea: bool = False) -> str:
     )
 
 
-def _update_bar(notice: UpdateNotice | None, lang: Language) -> str:
-    """The small "a new version is ready" bar under the app bar (D178). Not shown on
-    self-refreshing pages, where an opened list would snap shut every few seconds."""
-    if notice is None:
-        return ""
+def _version_bars(bar: TopBar, lang: Language) -> str:
+    """The "you are on the new version" bar (D179), then the "new version is ready"
+    bar (D178). Neither on self-refreshing pages (see :func:`_update_bar`)."""
+    welcome = _welcome_bar(bar.welcome, lang)
+    if welcome and bar.welcome_shown is not None:
+        try:
+            bar.welcome_shown()
+        except Exception:  # noqa: BLE001, S110 - bookkeeping must never break a page
+            pass
+    return welcome + _update_bar(bar.update, lang)
+
+
+def _news_items(notice: UpdateNotice, lang: Language) -> str:
     items = [f'<li dir="auto">{text(title)}</li>' for title in notice.titles]
     if notice.more:
         items.append(f'<li class="more">{text(t("update.more", lang, count=notice.more))}</li>')
     if not items:
         items.append(f"<li>{text(t('update.small', lang, count=notice.commits))}</li>")
+    return "".join(items)
+
+
+def _welcome_bar(notice: UpdateNotice | None, lang: Language) -> str:
+    """Shown once after an update (D179): the list is open, nothing to do."""
+    if notice is None:
+        return ""
+    return (
+        f'<aside class="updatebar welcomebar" role="status">{ICONS["check"]}<div>'
+        f"<strong>{text(t('update.done', lang))}</strong>"
+        f"<details open><summary>{text(t('update.whats_new', lang))}</summary>"
+        f"<ul>{_news_items(notice, lang)}</ul></details>"
+        "</div></aside>"
+    )
+
+
+def _update_bar(notice: UpdateNotice | None, lang: Language) -> str:
+    """The small "a new version is ready" bar under the app bar (D178). Not shown on
+    self-refreshing pages, where an opened list would snap shut every few seconds."""
+    if notice is None:
+        return ""
     return (
         f'<aside class="updatebar" role="status">{ICONS["download"]}<div>'
         f"<strong>{text(t('update.ready', lang))}</strong>"
         f"<details><summary>{text(t('update.whats_new', lang))}</summary>"
-        f"<ul>{''.join(items)}</ul><p>{text(t('update.how', lang))}</p>"
+        f"<ul>{_news_items(notice, lang)}</ul><p>{text(t('update.how', lang))}</p>"
         f'<p class="term">{text(t("update.terminal", lang))} '
         '<code dir="ltr">automa update</code></p></details>'
         "</div></aside>"

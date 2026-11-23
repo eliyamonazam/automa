@@ -10,6 +10,10 @@ git, not a clone, another branch, local commits — means "no banner", silently.
 
 "What is new" comes from the ``## `` headings that ``origin/main`` adds to
 ``CHANGELOG.md`` (Persian titles written by each run), not from commit subjects.
+
+After an update (D179) the first web page shows, once, "you are on the new version"
+with the same kind of list: the commit the web UI last ran is kept in the workspace
+(``seen_head``) and compared with the commit this process started from.
 """
 
 from __future__ import annotations
@@ -35,6 +39,9 @@ STATE_FILENAME = "update-check.json"
 _FETCH_TIMEOUT_S = 60.0
 _LOCAL_TIMEOUT_S = 20.0
 _TITLE_LIMIT = 160
+#: How long the "you are on the new version" bar stays after it was first shown.
+WELCOME_WINDOW = timedelta(minutes=10)
+_SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 _DATE_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}\s*[—–-]\s*")
 _MILESTONE = re.compile(r"^M\d+[a-z]?\s*:\s*", re.IGNORECASE)
@@ -112,20 +119,16 @@ def pending_update(repo: Path, runner: Runner = default_runner) -> UpdateNotice 
         return None
     if _git(repo, runner, "merge-base", "--is-ancestor", "HEAD", f"{REMOTE}/{BRANCH}") is None:
         return None
-    count = _git(repo, runner, "rev-list", "--count", f"HEAD..{REMOTE}/{BRANCH}") or ""
+    return _notice_between(repo, runner, "HEAD", f"{REMOTE}/{BRANCH}")
+
+
+def _notice_between(repo: Path, runner: Runner, old: str, new: str) -> UpdateNotice | None:
+    """Commits ``old..new`` and the CHANGELOG titles they add; ``None`` when none."""
+    count = _git(repo, runner, "rev-list", "--count", f"{old}..{new}") or ""
     if not count.isdigit() or int(count) == 0:
         return None
     diff = _git(
-        repo,
-        runner,
-        "diff",
-        "--no-color",
-        "--no-ext-diff",
-        "-U0",
-        "HEAD",
-        f"{REMOTE}/{BRANCH}",
-        "--",
-        "CHANGELOG.md",
+        repo, runner, "diff", "--no-color", "--no-ext-diff", "-U0", old, new, "--", "CHANGELOG.md"
     )
     titles = changelog_titles(diff or "")
     return UpdateNotice(
@@ -133,6 +136,21 @@ def pending_update(repo: Path, runner: Runner = default_runner) -> UpdateNotice 
         titles=tuple(titles[:MAX_TITLES]),
         more=max(0, len(titles) - MAX_TITLES),
     )
+
+
+def just_updated(
+    repo: Path, seen: str, head: str, runner: Runner = default_runner
+) -> UpdateNotice | None:
+    """What came in between the commit the web UI last ran (``seen``) and ``head``.
+
+    ``None`` unless both are full commit ids (the state file is never trusted as a
+    git argument) and ``head`` is strictly ahead of ``seen``: another branch or an
+    older commit is not "an update"."""
+    if not _SHA.match(seen) or not _SHA.match(head) or seen == head:
+        return None
+    if _git(repo, runner, "merge-base", "--is-ancestor", seen, head) is None:
+        return None
+    return _notice_between(repo, runner, seen, head)
 
 
 def _start_thread(job: Callable[[], None]) -> None:
@@ -144,7 +162,13 @@ class UpdateWatcher:
 
     :meth:`notice` returns the last known result at once and, when due, starts one
     background job: a fetch if the last attempt (kept in ``state_path`` so restarts
-    do not fetch again) is a day old or more, then the local comparison."""
+    do not fetch again) is a day old or more, then the local comparison.
+
+    The first job also compares the commit this process started from with the one
+    the web UI last ran (``seen_head`` in the same file): if it moved forward,
+    :meth:`welcome` returns what came in until :data:`WELCOME_WINDOW` after
+    :meth:`welcome_shown` is first called, and ``seen_head`` is updated at once so
+    a restart does not show it again (D179)."""
 
     def __init__(
         self,
@@ -161,10 +185,15 @@ class UpdateWatcher:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._start = start
         self._lock = threading.Lock()
+        self._state_lock = threading.Lock()
         self._busy = False
         self._notice: UpdateNotice | None = None
         self._local_at: datetime | None = None
         self._attempt_at: datetime | None = None  # also when the state file is unwritable
+        self._boot_checked = False
+        self._boot_head: str | None = None
+        self._welcome: UpdateNotice | None = None
+        self._welcome_until: datetime | None = None
 
     def notice(self) -> UpdateNotice | None:
         now = self._clock()
@@ -185,7 +214,52 @@ class UpdateWatcher:
         with self._lock:
             return self._notice
 
+    def welcome(self) -> UpdateNotice | None:
+        """ "You are on the new version" (what came in), or ``None``; never blocks."""
+        now = self._clock()
+        with self._lock:
+            if self._welcome is None:
+                return None
+            if self._welcome_until is not None and now >= self._welcome_until:
+                self._welcome = None
+                return None
+            return self._welcome
+
+    def welcome_shown(self) -> None:
+        """The bar was put on a page: start its window and remember this commit."""
+        with self._lock:
+            if self._welcome is None or self._welcome_until is not None:
+                return
+            self._welcome_until = self._clock() + WELCOME_WINDOW
+            head = self._boot_head
+        if head is not None:
+            self._write_state(seen_head=head)
+
+    def _check_boot(self) -> None:
+        """Once per process: did the commit we started from move since last time?"""
+        head = _git(self._repo, self._runner, "rev-parse", "HEAD")
+        if not head or not _SHA.match(head):
+            return
+        self._boot_head = head
+        seen = self._read_state().get("seen_head")
+        notice = None
+        if isinstance(seen, str) and seen != head:
+            notice = just_updated(self._repo, seen, head, self._runner)
+        if notice is None:
+            if seen != head:
+                # First run, another branch or an older commit: remember, say nothing.
+                self._write_state(seen_head=head)
+            return
+        with self._lock:
+            self._welcome = notice
+
     def _job(self) -> None:
+        if not self._boot_checked:
+            self._boot_checked = True
+            try:
+                self._check_boot()
+            except Exception:  # noqa: BLE001, S110 - a welcome must never break the page
+                pass
         try:
             now = self._clock()
             if self._fetch_due(now):
@@ -200,11 +274,17 @@ class UpdateWatcher:
             self._local_at = self._clock()
             self._busy = False
 
-    def _last_attempt(self) -> datetime | None:
+    def _read_state(self) -> dict[str, object]:
         try:
             raw = json.loads(self._state_path.read_text(encoding="utf-8"))
-            value = datetime.fromisoformat(str(raw["last_fetch"]))
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError):
+            return {}
+        return raw if isinstance(raw, dict) else {}
+
+    def _last_attempt(self) -> datetime | None:
+        try:
+            value = datetime.fromisoformat(str(self._read_state()["last_fetch"]))
+        except (ValueError, KeyError, TypeError):
             return None
         return value if value.tzinfo is not None else None
 
@@ -217,13 +297,20 @@ class UpdateWatcher:
         return last is None or last > now or now - last >= FETCH_INTERVAL
 
     def _write_attempt(self, now: datetime) -> None:
-        tmp = self._state_path.with_name(self._state_path.name + ".tmp")
-        try:
-            self._state_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(json.dumps({"last_fetch": now.isoformat()}), encoding="utf-8")
-            os.replace(tmp, self._state_path)
-        except OSError:
-            pass
+        self._write_state(last_fetch=now.isoformat())
+
+    def _write_state(self, **values: str) -> None:
+        """Merge ``values`` into the state file (atomic); unwritable is fine."""
+        with self._state_lock:
+            state = self._read_state()
+            state.update(values)
+            tmp = self._state_path.with_name(self._state_path.name + ".tmp")
+            try:
+                self._state_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp.write_text(json.dumps(state), encoding="utf-8")
+                os.replace(tmp, self._state_path)
+            except OSError:
+                pass
 
 
 def watcher_for(workspace: Path) -> UpdateWatcher | None:

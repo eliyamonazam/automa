@@ -1,5 +1,13 @@
 # گزارش تغییرات
 
+## 2026-11-23 — M16: پیام «به نسخهٔ تازه به‌روز شدی» و تصویرهای README (D179)
+- **انجام‌شده:** بعد از به‌روزرسانی، وقتی Automa دوباره باز می‌شه، بالای صفحه یک نوار سبز «Automa به نسخهٔ تازه به‌روز شد» با فهرست باز «چه چیزهایی تازه‌ست» (از عنوان‌های همین گزارش تغییرات) میاد؛ فقط یک بار (چند دقیقه بعد از اولین نمایش می‌ره و با بستن و باز کردن دوباره تکرار نمی‌شه). بار اول نصب، شاخهٔ دیگه یا برگشت به نسخهٔ قدیمی‌تر پیامی نداره. بخش «به‌روزرسانی Automa» در README حالا تصویر هر دو نوار رو داره. با این، مورد «به‌روزرسانی ساده و تصویری» کامل شد.
+- **فایل‌ها:** `src/automa/updatecheck.py` (`just_updated`، `UpdateWatcher.welcome`/`welcome_shown`، نوشتن ادغامی state)، `src/automa/webui/render.py` (`_welcome_bar`، `_version_bars`، `TopBar.welcome`)، `src/automa/webui/server.py`، `src/automa/webui/i18n.py`، `src/automa/webui/cards.py` (آیکون)، `scripts/update_screenshots.py` (تازه)، `docs/images/update-ready.png` و `update-done.png`، `README.md`؛ تست: `tests/test_update_welcome.py`.
+- **تست‌ها:** `pytest` ← ۶۳۲۰ سبز، ۲ رد شده (Docker واقعی)؛ حالت شبیه CI هم سبز؛ `ruff check` و `ruff format --check` سبز. بررسی بصری با Chromium headless در ۱۲۸۰ (تیره) و ۳۹۰ پیکسل (روشن)، بدون اسکرول افقی.
+- **مشکلات:** BudgetGuard و Policy دست نخوردن؛ allow-list دستورهای git گسترده نشد؛ مقدار `seen_head` فایل state فقط اگه شناسهٔ کامل hex باشه به git داده می‌شه. کسایی که به همین نسخه به‌روز می‌کنن هنوز پیام سبز رو نمی‌بینن (نسخهٔ قبلی چیزی ثبت نکرده بود)؛ از به‌روزرسانی بعدی دیده می‌شه.
+- **برای صاحب مخزن:** کاری لازم نیست.
+- **قدم بعدی:** مورد باز بعدی M16.
+
 ## 2026-11-22 — M16: نوار «نسخهٔ تازه آماده‌ست» در رابط وب (D178)
 - **انجام‌شده:** وقتی نسخهٔ تازه‌ای از Automa روی GitHub هست، بالای همهٔ صفحه‌های رابط وب یک نوار کوچک «نسخهٔ تازهٔ Automa آماده‌ست» میاد، با فهرست تاشوی «چه چیزهایی تازه‌ست» (از عنوان‌های همین گزارش تغییرات) و راهنمای «روی به‌روزرسانی Automa دابل‌کلیک کن». بررسی حداکثر روزی یک بار و در پس‌زمینه انجام می‌شه، صفحه رو کند نمی‌کنه و اگه اینترنت یا git نبود بی‌صداست. مورد نقشهٔ راه شکسته شد (۲الف انجام شد؛ ۲ب: پیام «به‌روز شدی» و تصویرهای README).
 - **فایل‌ها:** `src/automa/updatecheck.py` (تازه)، `src/automa/webui/render.py` (`_update_bar`، `TopBar.update`، CSS)، `src/automa/webui/server.py`، `src/automa/webui/i18n.py`، `src/automa/webui/cards.py` (آیکون)، `src/automa/config.py` (`[display] update_check`)، `src/automa/cli.py`، `automa.toml.example`؛ تست: `tests/test_updatecheck.py`.

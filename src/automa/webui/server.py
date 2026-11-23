@@ -503,12 +503,28 @@ class WebApp:
 
     def _top_bar(self, totals: tuple[float, float] | None) -> TopBar:
         """The app bar of this request's pages (D161)."""
+        welcome = self._welcome()
         return TopBar(
             new_idea=self._ideas is not None and self._actions is not None,
             month_usd=None if totals is None else totals[1],
             rate=self._rate,
             update=self._update_notice(),
+            welcome=welcome,
+            welcome_shown=self._welcome_shown if welcome is not None else None,
         )
+
+    def _welcome(self) -> UpdateNotice | None:
+        """ "You are on the new version" after an update (D179)."""
+        if self._updates is None:
+            return None
+        try:
+            return self._updates.welcome()
+        except Exception:  # noqa: BLE001 - a version check must never break a page
+            return None
+
+    def _welcome_shown(self) -> None:
+        if self._updates is not None:
+            self._updates.welcome_shown()
 
     def _update_notice(self) -> UpdateNotice | None:
         if self._updates is None:
