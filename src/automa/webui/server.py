@@ -74,7 +74,7 @@ from automa.userinput import (
     UserRequestError,
     UserRequestNotFound,
 )
-from automa.users import LoginOutcome, User, UsersError, UserStore
+from automa.users import LoginOutcome, User, UserRole, UsersError, UserStore
 from automa.webui.actions import (
     MAX_FORM_BYTES,
     ActionRefused,
@@ -521,14 +521,22 @@ class WebApp:
         if err:
             return None
         now = self._clock().astimezone(self._tz)
+        user = self._member()
+        mine = None if user is None else self._owned_ids(user)
         today = month = 0
         for e in entries:
+            if mine is not None and e.project_id not in mine:
+                continue  # D182: a member sees only their own spending
             local = e.ts.astimezone(self._tz)
             if (local.year, local.month) == (now.year, now.month):
                 month += e.cost_nusd
                 if local.date() == now.date():
                     today += e.cost_nusd
         return nusd_to_usd(today), nusd_to_usd(month)
+
+    def _owned_ids(self, user: str) -> set[str]:
+        """The ids of ``user``'s readable projects (D182)."""
+        return {pid for pid in self._store.list_ids() if self._owned_by(pid, user)}
 
     def _spending(self) -> tuple[dict[str, int], str | None]:
         """Spending per project from a read-only Ledger; never creates one."""
@@ -620,14 +628,46 @@ class WebApp:
         """A request that passed the Host check (and the login, when there is one)."""
         totals = self._totals()
         with top_bar(self._top_bar(totals)):
+            if not self._may_reach(urlsplit(target).path):
+                # D182: a member gets the same 404 for another's project as for none.
+                return self.error(404, "error.title.not_found")
             if method == "POST":
                 return self._post(target, headers, body)
             # HEAD gets the same status and headers; the handler omits the body.
             return self._route(target, host.strip().lower(), totals)
 
+    def _signed_in_user(self) -> str | None:
+        signed_in = _SIGNED_IN.get()
+        return None if signed_in is None else signed_in.session.user
+
+    def _member(self) -> str | None:
+        """The signed-in member account's name; ``None`` for an owner or no accounts."""
+        signed_in = _SIGNED_IN.get()
+        if signed_in is None or signed_in.session.role is not UserRole.MEMBER:
+            return None
+        return signed_in.session.user
+
+    def _owned_by(self, pid: str, user: str) -> bool:
+        """Whether project ``pid`` exists, is readable and belongs to ``user`` (D182)."""
+        try:
+            return self._store.load(validate_project_id(pid)).owner == user
+        except (ProjectStoreError, OSError):
+            return False
+
+    def _may_reach(self, path: str) -> bool:
+        """Whether this request may touch ``path`` (D182): a member only reaches
+        ``/projects/<pid>…`` of their own projects. The id is taken raw (no
+        percent-decoding) and must be a valid id the member owns, so no other
+        spelling can reach another project; everything else fails closed."""
+        user = self._member()
+        if user is None or not (path == "/projects" or path.startswith(_PROJECT_PREFIX)):
+            return True
+        pid = path[len(_PROJECT_PREFIX) :].split("/", 1)[0]
+        return self._owned_by(pid, user)
+
     def _top_bar(self, totals: tuple[float, float] | None) -> TopBar:
         """The app bar of this request's pages (D161)."""
-        welcome = self._welcome()
+        welcome = None if self._member() else self._welcome()
         signed_in = _SIGNED_IN.get()
         return TopBar(
             user=None if signed_in is None else signed_in.session.user,
@@ -635,7 +675,8 @@ class WebApp:
             new_idea=self._ideas is not None and self._actions is not None,
             month_usd=None if totals is None else totals[1],
             rate=self._rate,
-            update=self._update_notice(),
+            # Updating is the owner's job: a member never sees "a new version is ready".
+            update=None if self._member() else self._update_notice(),
             welcome=welcome,
             welcome_shown=self._welcome_shown if welcome is not None else None,
         )
@@ -849,7 +890,7 @@ class WebApp:
                 form = parse_form(lowered, body, fields=fields, max_bytes=MAX_IDEA_FORM_BYTES)
             check_token(form, self._actions)
             location = (
-                self._ideas.start(form, files)
+                self._ideas.start(form, files, owner=self._signed_in_user())
                 if pid is None
                 else self._ideas.answer(pid, form, need_files)
             )
@@ -1224,7 +1265,9 @@ class WebApp:
                 show_tests = ("tests", "1") in parse_qsl(parts.query, max_num_fields=4)
             except ValueError:
                 show_tests = False
-            view = build_overview(self._store, spent, include_tests=show_tests)
+            view = build_overview(
+                self._store, spent, include_tests=show_tests, owner=self._member()
+            )
             if err:
                 view = view.model_copy(update={"errors": (*view.errors, err)})
             document = render_overview(

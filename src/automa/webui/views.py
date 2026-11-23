@@ -226,11 +226,18 @@ def _questions_waiting(store: ProjectStore, project_id: str) -> bool:
 
 
 def build_overview(
-    store: ProjectStore, spent_nusd: dict[str, int], *, include_tests: bool = True
+    store: ProjectStore,
+    spent_nusd: dict[str, int],
+    *,
+    include_tests: bool = True,
+    owner: str | None = None,
 ) -> Overview:
     """All projects, newest first (D138). Benchmark projects (``bench-…``) are left
     out unless ``include_tests``; their number is kept. A corrupt project becomes an
-    error line, not a crash."""
+    error line, not a crash.
+
+    ``owner`` (D182): only that account's projects (a member's page); nothing about
+    the others is shown, not even an unreadable one's id."""
     rows: list[ProjectRow] = []
     errors: list[str] = []
     projects: list[Project] = []
@@ -238,7 +245,10 @@ def build_overview(
         try:
             projects.append(store.load(pid))
         except _READ_ERRORS as e:  # one bad project must not hide the rest
-            errors.append(f"{pid}: {e}")
+            if owner is None:
+                errors.append(f"{pid}: {e}")
+    if owner is not None:
+        projects = [p for p in projects if p.owner == owner]
     projects.sort(key=lambda p: (p.created_at, p.id), reverse=True)
     hidden = 0
     if not include_tests:

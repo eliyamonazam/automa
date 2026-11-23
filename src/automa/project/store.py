@@ -58,6 +58,7 @@ from automa.plan import (
 )
 from automa.tools.approvals import ApprovalStore
 from automa.userinput import UserRequestStore
+from automa.users import NAME_PATTERN
 
 SCHEMA_VERSION = 1
 PROJECTS_DIRNAME = "projects"
@@ -135,6 +136,9 @@ class Project(BaseModel):
     created_at: datetime
     updated_at: datetime
     revision: int = Field(default=0, ge=0)
+    # The account that created it in the web UI (D182); ``None``: made from the CLI
+    # (or before accounts), so only an owner account sees it. Never changes.
+    owner: str | None = Field(default=None, pattern=NAME_PATTERN)
 
     @field_validator("schema_version")
     @classmethod
@@ -182,6 +186,14 @@ class ProjectEventLog(JsonlEventLog):
                 f"event for project {event.project_id!r} sent to log of {self._project_id!r}"
             )
         super().emit(event)
+
+
+def _project_json(project: Project) -> dict[str, Any]:
+    """``project.json`` contents; no ``owner`` key when there is none (older files)."""
+    data = project.model_dump(mode="json")
+    if data.get("owner") is None:
+        data.pop("owner", None)
+    return data
 
 
 def _write_json_atomic(path: Path, data: Any) -> None:
@@ -343,15 +355,18 @@ class ProjectStore:
         now = self._now()
         return f"p-{now:%Y%m%d-%H%M%S}-{secrets.token_hex(3)}"
 
-    def create(self, goal: str, *, project_id: str | None = None) -> Project:
+    def create(
+        self, goal: str, *, project_id: str | None = None, owner: str | None = None
+    ) -> Project:
         """Create a new project directory with ``project.json`` and a ``project.created`` event.
 
-        Raises ``ProjectExists`` if the id is taken (never overwrites).
+        ``owner`` (D182): the web UI account creating it. Raises ``ProjectExists`` if the
+        id is taken (never overwrites).
         """
         now = self._now()
         pid = validate_project_id(project_id) if project_id is not None else self.new_id()
         try:
-            project = Project(id=pid, goal=goal, created_at=now, updated_at=now)
+            project = Project(id=pid, goal=goal, created_at=now, updated_at=now, owner=owner)
         except ValidationError as e:
             raise ProjectStoreError("invalid project") from e
         with self._lock:
@@ -363,7 +378,7 @@ class ProjectStore:
                 raise ProjectExists(f"project already exists: {pid!r}") from None
             (pdir / TASKS_DIR).mkdir()
             (pdir / FILES_DIR).mkdir()
-            _write_json_atomic(pdir / PROJECT_FILE, project.model_dump(mode="json"))
+            _write_json_atomic(pdir / PROJECT_FILE, _project_json(project))
         self.events(pid).emit(
             Event(ts=now, type="project.created", project_id=pid, data={"goal": goal})
         )
@@ -384,6 +399,8 @@ class ProjectStore:
                 )
             if project.created_at != current.created_at:
                 raise ProjectStoreError("created_at of a project cannot change")
+            if project.owner != current.owner:
+                raise ProjectStoreError("the owner of a project cannot change")
             now = max(self._now(), current.updated_at)
             stored = project.model_copy(
                 update={"revision": current.revision + 1, "updated_at": now}
@@ -392,7 +409,7 @@ class ProjectStore:
                 stored = Project.model_validate(stored.model_dump())
             except ValidationError as e:
                 raise ProjectStoreError(f"invalid project {project.id!r}") from e
-            _write_json_atomic(self.project_file(project.id), stored.model_dump(mode="json"))
+            _write_json_atomic(self.project_file(project.id), _project_json(stored))
         return stored
 
     def set_status(self, project_id: str, status: ProjectStatus) -> Project:

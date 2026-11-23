@@ -498,7 +498,9 @@ def test_session_tokens_are_not_interchangeable(env: Env) -> None:
     dad = env.signed_in("dad", PW_KID)
     assert env.csrf_of(eli) != env.csrf_of(dad)
     target = f"/projects/p1/approvals/{env.req.id}/reject"
-    r = env.post(target, {"csrf": env.csrf_of(eli), "fingerprint": env.req.fingerprint}, cookie=dad)
+    # The owner account may reach p1 (a member gets 404 for it, D182), so a token
+    # mismatch is what refuses this: dad's token in eli's session.
+    r = env.post(target, {"csrf": env.csrf_of(dad), "fingerprint": env.req.fingerprint}, cookie=eli)
     assert r.status == 403
 
 

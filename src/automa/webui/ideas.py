@@ -286,11 +286,18 @@ class IdeaFlow:
         if not self._busy.acquire(blocking=False):
             raise ActionRefused.coded(409, "executive_busy")
 
-    def start(self, form: Mapping[str, str], files: Sequence[tuple[str, bytes]] = ()) -> str:
+    def start(
+        self,
+        form: Mapping[str, str],
+        files: Sequence[tuple[str, bytes]] = (),
+        *,
+        owner: str | None = None,
+    ) -> str:
         """Create the project and ask (or plan); returns where the browser goes next.
 
         ``files`` (D162): files attached to the idea; checked before the project is
         created and saved into its ``files/inputs/idea/`` before the first model call.
+        ``owner`` (D182): the signed-in account the new project belongs to.
         """
         goal, ask = parse_idea(form)
         try:
@@ -305,7 +312,7 @@ class IdeaFlow:
             except IdeaError as e:
                 raise _refusal(e, None) from None
             try:
-                project = self._store.create(goal)
+                project = self._store.create(goal, owner=owner)
             except ProjectStoreError as e:
                 raise ActionRefused(400, str(e), lead="lead.store") from None
             pid = project.id
