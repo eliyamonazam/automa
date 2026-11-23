@@ -331,6 +331,7 @@ from automa.tools.approvals import (
 from automa.tools.github import GitHubRead, describe_github_request
 from automa.tools.web import FetchUrl, describe_fetch_request
 from automa.userinput import MAX_ANSWER_FILE_BYTES, RequestStatus, UserRequestError
+from automa.users_cli import users_app
 from automa.webui import money as webui_money
 from automa.webui import runs as webui_runs
 from automa.webui import server as webui_server
@@ -437,6 +438,7 @@ skill_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(skill_app, name="skill")
+app.add_typer(users_app, name="users")
 
 DEFAULT_SUITE_DIR = Path("benchmarks")
 RESULTS_DIRNAME = "results"
