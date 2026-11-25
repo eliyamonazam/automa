@@ -153,9 +153,14 @@ def check_token(form: Mapping[str, str], settings: ActionSettings) -> None:
 
 
 def decide_from_form(
-    store: ProjectStore, target: ActionTarget, form: Mapping[str, str]
+    store: ProjectStore,
+    target: ActionTarget,
+    form: Mapping[str, str],
+    *,
+    by: str | None = None,
 ) -> ApprovalRequest:
-    """Record the decision of an already origin- and token-checked form."""
+    """Record the decision of an already origin- and token-checked form; ``by`` is
+    the signed-in account that decided (D186), kept in the event."""
     if target.project_id not in store.list_ids():
         raise ActionRefused.coded(404, "no_such_project")
     try:
@@ -179,6 +184,7 @@ def decide_from_form(
             approve=target.approve,
             note=note,
             via="web",
+            by=by,
         )
     except (ApprovalError, ProjectStoreError) as e:
         raise ActionRefused(409, str(e), lead="lead.store") from None

@@ -192,6 +192,8 @@ padding:8px 10px;text-align:start;vertical-align:top}th{color:var(--muted);font-
 font-size:.9em}
 .scroll{overflow-x:auto}
 .warn{color:var(--warn)}.err{color:var(--err)}
+.owner-decides{display:flex;align-items:flex-start;gap:8px;padding:10px 14px;border-radius:12px;
+background:var(--info);color:var(--infofg)}.owner-decides .icon{flex:none;margin-top:2px}
 .badge{display:inline-flex;align-items:center;gap:4px;padding:1px 11px;border-radius:999px;
 background:var(--chip);font-size:.82em;font-weight:700;vertical-align:middle;line-height:1.9}
 .st-passed,.ps-done .badge.st,.badge.ps-done{background:var(--ok);color:var(--okfg)}
@@ -372,6 +374,7 @@ padding:2px 12px 2px 10px;border-radius:999px;background:var(--chip);color:var(-
 .cs-ready .state{background:var(--ok);color:var(--okfg)}
 .cs-partial .state{background:var(--busy);color:var(--busyfg)}
 .cs-waiting .state{background:var(--info);color:var(--infofg)}
+.cs-with_owner .state{background:var(--info);color:var(--infofg)}
 .cs-working .state{background:var(--busy);color:var(--busyfg)}
 .cs-ready::before{background:var(--okline)}.cs-partial::before{background:var(--busyline)}
 .cs-working::before{background:var(--busyline)}.cs-paused::before{background:#98a2b3}
@@ -679,15 +682,20 @@ def render_overview(
     lang: Language = "en",
     tz: tzinfo | None = None,
     now: datetime | None = None,
+    member: bool = False,
 ) -> str:
     """The home page (D160): projects waiting for the user's answer first (with an
     "Answer" button), then every project as a card with its delivery state, step
     progress and cost. ``ideas`` (action mode with a planner, D124) adds "+ New idea"
     to the top bar; ``rate`` (toman per USD) shows costs first in toman (D133);
     ``totals`` is (spent today, this month); ``lang`` translates the page and
-    ``now``/``tz`` show times relative and local (D140)."""
+    ``now``/``tz`` show times relative and local (D140); ``member`` (D186): a
+    member's page, where approvals are the owner's, says so instead."""
     can_plan = actions and ideas
-    mode = t("overview.mode.actions" if actions else "overview.mode.readonly", lang)
+    mode_key = "overview.mode.actions" if actions else "overview.mode.readonly"
+    if member and actions:
+        mode_key = "overview.mode.member"
+    mode = t(mode_key, lang)
     title = t("overview.title", lang)
     head = [f'<header class="home-head"><h1>{text(title)}</h1>']
     if totals is not None and (view.projects or totals[1] > 0):
@@ -746,8 +754,12 @@ def _waiting_reasons(p: ProjectRow, lang: Language) -> str:
         reasons.append(ct("card.why.questions", lang))
     if p.open_asks:
         reasons.append(ct("card.why.asks", lang, count=p.open_asks))
-    if p.pending_approvals:
+    if p.pending_approvals and p.owner_decides:
+        reasons.append(ct("card.why.owner_approvals", lang, count=p.pending_approvals))
+    elif p.pending_approvals:
         reasons.append(ct("card.why.approvals", lang, count=p.pending_approvals))
+        if p.member is not None:  # the owner's queue (D186): whose project asks
+            reasons.append(t("approvals.from_member", lang, name=p.member))
     return " · ".join(reasons)
 
 
@@ -767,7 +779,7 @@ def _project_card(p: ProjectRow, rate: float | None, lang: Language, when: When)
     state = p.card
     label = text(card_label(state, lang, p.status))
     hint = card_hint(state, lang)
-    if state is CardState.WAITING:
+    if state in (CardState.WAITING, CardState.WITH_OWNER):
         hint = _waiting_reasons(p, lang) or hint
     hint_html = f'<p class="hint" dir="auto">{text(hint)}</p>' if hint else ""
     if p.tasks_total:
@@ -876,12 +888,18 @@ def _approval(
     forms: ActionForms | None,
     lang: Language = "en",
     when: When = _iso,
+    owner_decides: bool = False,
 ) -> str:
     args = json.dumps(a.arguments, ensure_ascii=False, indent=2, sort_keys=True, default=str)
     lines = "".join(f'<li dir="auto">{text(line)}</li>' for line in a.request_lines)
     warns = "".join(f'<li class="warn" dir="auto">{text(w)}</li>' for w in a.warnings)
     target = f"<ul>{lines}{warns}</ul>" if lines or warns else ""
-    if forms is None:
+    if owner_decides:  # D186: a member sees the request, never a decision form
+        decide = (
+            f'<p class="owner-decides">{ICONS[CardState.WITH_OWNER]}'
+            f"<span>{text(t('approval.owner_decides', lang))}</span></p>"
+        )
+    elif forms is None:
         decide = f"<p>{text(t('approval.readonly', lang))}</p>"
     else:
         decide = _decision_forms(project_id, a, forms, lang)
@@ -916,6 +934,8 @@ def render_project(
     asks: tuple[UserRequest, ...] = (),
     change_form: bool = False,
     changes: tuple[ChangeRecord, ...] = (),
+    owner_decides: bool = False,
+    member: str | None = None,
 ) -> str:
     """One project page. ``forms`` (action mode only) adds approve/reject forms;
     ``notice`` is a one-line result of the last decision, shown at the top;
@@ -926,7 +946,9 @@ def render_project(
     events and, while running, a self-refresh of the page; ``rate`` (toman per USD)
     shows every amount first in rounded toman with dollars in parentheses (D133);
     ``lang`` translates the whole page and, with ``now``, times are relative local
-    times in ``tz`` (D144)."""
+    times in ``tz`` (D144). ``owner_decides`` (D186, a member's own project): the
+    approvals are shown without forms, as waiting for the owner; ``member`` (the
+    owner viewing a member's project) names the account the requests come from."""
     when = _when_fn(lang, tz, now)
     running = run is not None and run.running
     stop = _stop_line(view, progress, running, lang, tz, now)
@@ -937,6 +959,7 @@ def render_project(
         running=running,
         budget_stop=run is not None and not running and run.exit_code == 3,
         stop_now=(stop.text, stop.tone) if stop is not None else None,
+        owner_decides=owner_decides,
     )
     resume = (
         stop is not None
@@ -1015,7 +1038,15 @@ def render_project(
     if view.pending:
         heading = text(t("approvals.heading", lang, count=count))
         parts.append(f'<h2 id="approvals">{heading}</h2>')
-        parts.append("".join(_approval(view.id, a, forms, lang, when) for a in view.pending))
+        if member is not None and not owner_decides:
+            lead = t("approvals.member_lead", lang, name=member)
+            parts.append(f'<p class="muted" dir="auto">{text(lead)}</p>')
+        parts.append(
+            "".join(
+                _approval(view.id, a, forms, lang, when, owner_decides=owner_decides)
+                for a in view.pending
+            )
+        )
     if view.plan_version is None:
         parts.append(f"<h2>{text(t('plan.heading', lang))}</h2><p>{text(t('plan.none', lang))}</p>")
     else:

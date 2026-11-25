@@ -27,11 +27,13 @@ def record_decision(
     approve: bool,
     note: str | None = None,
     via: str | None = None,
+    by: str | None = None,
 ) -> ApprovalRequest:
     """Decide a pending request once and log ``approval.decided``.
 
     ``note`` is stripped (empty → ``None``). ``via`` (e.g. ``"web"``) is added to the
-    event only when given, so terminal decisions keep their original event shape.
+    event only when given, so terminal decisions keep their original event shape;
+    ``by`` (the signed-in web account, D186) likewise.
     Raises ``ApprovalError`` if the request is missing, already decided or invalid.
     """
     if note is not None:
@@ -46,6 +48,8 @@ def record_decision(
     }
     if via is not None:
         data["via"] = via
+    if by is not None:
+        data["by"] = by
     store.events(project_id).emit(
         Event(ts=decided.decided_at or decided.created_at, type=DECIDED_EVENT, data=data)
     )

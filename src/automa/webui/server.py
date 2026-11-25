@@ -711,6 +711,23 @@ class WebApp:
             return None
         return signed_in.session.user
 
+    def _member_names(self) -> frozenset[str]:
+        """The member account names (D186); empty without accounts or when unusable."""
+        accounts = self._accounts()
+        if not isinstance(accounts, dict):
+            return frozenset()
+        return frozenset(n for n, u in accounts.items() if u.role is UserRole.MEMBER)
+
+    def _member_of(self, pid: str) -> str | None:
+        """The member account owning project ``pid``, for the owner's page (D186)."""
+        if self._member() is not None:
+            return None
+        try:
+            owner = self._store.load(validate_project_id(pid)).owner
+        except (ProjectStoreError, OSError):
+            return None
+        return owner if owner is not None and owner in self._member_names() else None
+
     def _owned_by(self, pid: str, user: str) -> bool:
         """Whether project ``pid`` exists, is readable and belongs to ``user`` (D182)."""
         try:
@@ -1194,8 +1211,11 @@ class WebApp:
             check_same_origin(lowered, self._actions)
             form = parse_form(lowered, body)
             check_token(form, self._actions)
+            if self._member() is not None:
+                # D186: a member's requests wait for the owner; a member never decides.
+                raise ActionRefused.coded(403, "owner_decides")
             with self._decide_lock:
-                decided = decide_from_form(self._store, action, form)
+                decided = decide_from_form(self._store, action, form, by=self._signed_in_user())
         except ActionRefused as e:
             return self.refused(e)
         location = (
@@ -1332,7 +1352,11 @@ class WebApp:
             except ValueError:
                 show_tests = False
             view = build_overview(
-                self._store, spent, include_tests=show_tests, owner=self._member()
+                self._store,
+                spent,
+                include_tests=show_tests,
+                owner=self._member(),
+                members=self._member_names(),
             )
             if err:
                 view = view.model_copy(update={"errors": (*view.errors, err)})
@@ -1345,6 +1369,7 @@ class WebApp:
                 lang=self._lang,
                 tz=self._tz,
                 now=self._clock(),
+                member=self._member() is not None,
             )
             return _html(200, document, security=self._security)
         if self._ideas is not None and self._actions is not None:
@@ -1427,6 +1452,8 @@ class WebApp:
                 ),
                 changes=tuple(load_changes(self._store.project_dir(pid))),
                 retry=self._runs is not None and self._runs.can_retry(pid),
+                owner_decides=self._member() is not None,
+                member=self._member_of(pid),
             )
             return _html(200, document, security=self._security)
         return self.error(404, "error.title.not_found")

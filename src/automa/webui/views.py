@@ -63,6 +63,10 @@ class ProjectRow(_View):
     tasks_passed: int = 0
     open_asks: int = 0  # unanswered ask_user questions (D159)
     questions_waiting: bool = False  # the Executive's questions before the plan (D124)
+    # D186: approvals only the owner decides (a member's page) and, on the owner's
+    # page, the member account whose project asks for an approval.
+    owner_decides: bool = False
+    member: str | None = None
 
     @property
     def card(self) -> CardState:
@@ -71,7 +75,8 @@ class ProjectRow(_View):
             self.status,
             self.delivery,
             open_asks=self.open_asks,
-            pending_approvals=self.pending_approvals,
+            pending_approvals=0 if self.owner_decides else self.pending_approvals,
+            owner_approvals=self.pending_approvals if self.owner_decides else 0,
             questions_waiting=self.questions_waiting,
         )
 
@@ -231,13 +236,16 @@ def build_overview(
     *,
     include_tests: bool = True,
     owner: str | None = None,
+    members: frozenset[str] = frozenset(),
 ) -> Overview:
     """All projects, newest first (D138). Benchmark projects (``bench-…``) are left
     out unless ``include_tests``; their number is kept. A corrupt project becomes an
     error line, not a crash.
 
     ``owner`` (D182): only that account's projects (a member's page); nothing about
-    the others is shown, not even an unreadable one's id."""
+    the others is shown, not even an unreadable one's id; its approvals are the
+    owner's to decide (D186). ``members`` (the owner's page): the member account
+    names, so a member's project says whose it is."""
     rows: list[ProjectRow] = []
     errors: list[str] = []
     projects: list[Project] = []
@@ -283,6 +291,8 @@ def build_overview(
                 tasks_passed=delivery.passed_tasks if delivery is not None else 0,
                 open_asks=asks,
                 questions_waiting=questions,
+                owner_decides=owner is not None,
+                member=p.owner if owner is None and p.owner in members else None,
             )
         )
     return Overview(

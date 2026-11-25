@@ -70,6 +70,16 @@ _RAW: dict[str, dict[Language, str]] = {
         "en": "Waiting for you: {count} request(s) need your OK below.",
         "fa": "منتظر توئه: {count} درخواست پایین صفحه تأیید تو رو می‌خواد.",
     },
+    "now.owner_approval": {
+        "en": (
+            "Waiting for the owner of Automa: {count} request(s) below can only be "
+            "approved by them; nothing is needed from you."
+        ),
+        "fa": (
+            "منتظر تأییده: فقط صاحب Automa می‌تونه {count} درخواست پایین صفحه رو "
+            "تأیید کنه؛ از تو کاری لازم نیست."
+        ),
+    },
     "now.working": {
         "en": "Working on step {step} of {total}: {title}",
         "fa": "داره روی مرحلهٔ {step} از {total} کار می‌کنه: {title}",
@@ -155,13 +165,16 @@ def build_journey(
     running: bool = False,
     budget_stop: bool = False,
     stop_now: tuple[str, Tone] | None = None,
+    owner_decides: bool = False,
 ) -> Journey:
     """The steps, percentage and "now" sentence of ``view``.
 
     ``questions_waiting``: the Executive asked questions not yet answered;
     ``running``: a background run of this project is alive; ``stop_now``: the
     plain reason and tone of the latest pause (D151), shown instead of the generic
-    "paused" sentence (an approval waiting, questions, done or failed come first)."""
+    "paused" sentence (an approval waiting, questions, done or failed come first);
+    ``owner_decides`` (D186, a member's page): the approvals wait for the owner, so
+    they never say "waiting for you" and the member's own questions come first."""
     has_plan = view.plan_version is not None
     status = view.status
     steps: list[Step] = [Step(jt("step.idea", lang), "done")]
@@ -198,10 +211,12 @@ def build_journey(
     current = next((i for i, s in enumerate(tasks) if s.state == "now"), None)
     failed = next((s for s in tasks if s.state == "fail"), None)
     passed = sum(1 for s in tasks if s.state == "done")
-    if view.pending:
+    if view.pending and not owner_decides:
         now, tone = jt("now.approval", lang, count=len(view.pending)), "busy"
     elif questions_waiting:
         now, tone = jt("now.questions", lang), "busy"
+    elif view.pending:
+        now, tone = jt("now.owner_approval", lang, count=len(view.pending)), "busy"
     elif finished:
         now, tone = jt("now.done", lang), "ok"
     elif status == "failed" or (failed is not None and not running):

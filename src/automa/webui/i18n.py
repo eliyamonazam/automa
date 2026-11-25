@@ -26,6 +26,16 @@ _RAW: dict[str, dict[Language, str]] = {
         "en": "Actions enabled: approve or reject requests on each project page.",
         "fa": "دکمه‌ها فعال‌اند: درخواست‌ها رو در صفحهٔ هر پروژه تأیید یا رد کن.",
     },
+    "overview.mode.member": {
+        "en": (
+            "Your projects. Anything that needs your answer comes first; requests to "
+            "approve go to the owner of Automa."
+        ),
+        "fa": (
+            "پروژه‌های تو. هر چی جواب تو رو لازم داره اول میاد؛ درخواست‌های تأیید "
+            "پیش صاحب Automa می‌رن."
+        ),
+    },
     "overview.mode.readonly": {
         "en": "Read-only view.",
         "fa": "فقط نمایش؛ از این صفحه چیزی تغییر نمی‌کنه.",
@@ -109,6 +119,28 @@ _RAW: dict[str, dict[Language, str]] = {
     "approval.readonly": {
         "en": "This page is read-only: decide in the terminal.",
         "fa": "این صفحه فقط نمایشه: در ترمینال تصمیم بگیر.",
+    },
+    "approval.owner_decides": {
+        "en": (
+            "Waiting for the owner of Automa to approve or reject this. Only the owner "
+            "decides requests like this one; nothing is needed from you. You can tell "
+            "them it is waiting."
+        ),
+        "fa": (
+            "منتظر تأیید صاحب Automa. فقط صاحب Automa می‌تونه چنین درخواستی رو تأیید یا "
+            "رد کنه و از تو کاری لازم نیست؛ می‌تونی بهش خبر بدی که منتظره."
+        ),
+    },
+    "approvals.from_member": {"en": "from {name}", "fa": "از حساب {name}"},
+    "approvals.member_lead": {
+        "en": (
+            "This project belongs to the account {name}. Only you can decide its "
+            "requests; {name} only sees that they are waiting for you."
+        ),
+        "fa": (
+            "این پروژه مال حساب {name} است. فقط تو می‌تونی درخواست‌هاش رو تأیید یا رد "
+            "کنی؛ {name} فقط می‌بینه که منتظر تأیید توئه."
+        ),
     },
     "approval.confirm": {
         "en": "I reviewed the full arguments above: run {tool} once with exactly these arguments",
@@ -788,6 +820,16 @@ _RAW: dict[str, dict[Language, str]] = {
     "refusal.already_done": {
         "en": "project {id} is already done",
         "fa": "پروژهٔ {id} قبلاً تموم شده",
+    },
+    "refusal.owner_decides": {
+        "en": (
+            "only the owner of Automa can approve or reject the requests of this "
+            "account's projects (nothing was decided)"
+        ),
+        "fa": (
+            "فقط صاحب Automa می‌تونه درخواست‌های پروژه‌های این حساب رو تأیید یا رد کنه "
+            "(تصمیمی ثبت نشد)"
+        ),
     },
     "refusal.member_needs_docker": {
         "en": (

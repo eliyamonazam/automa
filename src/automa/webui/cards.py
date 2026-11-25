@@ -21,6 +21,7 @@ from automa.webui.i18n import check_messages, template_fields
 
 class CardState(StrEnum):
     WAITING = "waiting"  # an open question, unanswered idea questions or an approval
+    WITH_OWNER = "with_owner"  # a member's project: an approval only the owner decides (D186)
     READY = "ready"  # delivery ready: done with every main file present
     PARTIAL = "partial"  # delivery incomplete: failed, or done with a main file missing
     WORKING = "working"  # planning or running right now
@@ -38,6 +39,7 @@ def card_state(
     *,
     open_asks: int = 0,
     pending_approvals: int = 0,
+    owner_approvals: int = 0,
     questions_waiting: bool = False,
     running: bool = False,
 ) -> CardState:
@@ -48,9 +50,15 @@ def card_state(
     report could not be built). Anything waiting for the user wins; then a finished
     delivery; then whether work is going on. A project marked ``done`` whose delivery
     could not be built is never shown as ready (it is "incomplete": the product could
-    not be checked)."""
+    not be checked).
+
+    ``owner_approvals`` (D186) are approvals of a member's project seen by that
+    member: only the owner decides them, so they never say "waiting for you"; the
+    member's own questions still come first."""
     if open_asks > 0 or pending_approvals > 0 or questions_waiting:
         return CardState.WAITING
+    if owner_approvals > 0:
+        return CardState.WITH_OWNER
     if status not in KNOWN_STATUSES:
         return CardState.UNKNOWN
     if delivery == "ready":
@@ -75,6 +83,10 @@ ICONS: Mapping[str, str] = MappingProxyType(
         CardState.WAITING: _SVG.format(
             '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3'
             'c-.6.3-1 .9-1 1.6V14"/><path d="M12 17.5h.01"/>'
+        ),
+        CardState.WITH_OWNER: _SVG.format(
+            '<path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.4 7.5 9.5 4.3-1.1 7.5-4.9 7.5-9.5V6z"/>'
+            '<path d="M12 8.5v4l2.5 1.5"/>'
         ),
         CardState.READY: _SVG.format('<circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/>'),
         CardState.PARTIAL: _SVG.format(
@@ -145,6 +157,11 @@ _RAW: dict[str, dict[Language, str]] = {
         "en": "It needs something from you before it can go on.",
         "fa": "برای ادامه یه چیزی از تو لازم داره.",
     },
+    "card.with_owner": {"en": "Waiting for the owner", "fa": "منتظر تأیید صاحب Automa"},
+    "card.with_owner.hint": {
+        "en": "The owner of Automa has to approve one step; nothing is needed from you.",
+        "fa": "صاحب Automa باید یک کار رو تأیید کنه؛ از تو کاری لازم نیست.",
+    },
     "card.ready": {"en": "Ready", "fa": "آماده"},
     "card.ready.hint": {
         "en": "Done, and every main file of the product was checked.",
@@ -185,6 +202,10 @@ _RAW: dict[str, dict[Language, str]] = {
     "card.why.approvals": {
         "en": "{count} request(s) to approve",
         "fa": "{count} درخواست برای تأیید",
+    },
+    "card.why.owner_approvals": {
+        "en": "{count} request(s) for the owner of Automa to approve",
+        "fa": "{count} درخواست منتظر تأیید صاحب Automa",
     },
     "waiting.heading": {"en": "Waiting for your answer", "fa": "منتظر جواب تو"},
     "waiting.lead": {
