@@ -101,7 +101,7 @@ def test_ps1_reports_result_in_colour_and_asks_before_opening() -> None:
 
 def test_web_launcher_has_update_switch() -> None:
     text = _text(WEB_PS1)
-    assert "[switch]$Update\r\n)" in text
+    assert "[switch]$Update,\r\n" in text
     assert "$updateArgs = @{ RepoDir = $RepoDir; NoOpen = $true }" in text
     assert "& (Join-Path $PSScriptRoot 'automa-update.ps1') @updateArgs" in text
     # The update happens before the port check (the server is started after it).

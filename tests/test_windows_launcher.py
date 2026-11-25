@@ -34,11 +34,18 @@ def _inner_template() -> str:
     return match.group("cmd")
 
 
-def _inner(port: int, repo_dir: str = "automa", *, read_only: bool = False) -> str:
+def _inner(
+    port: int,
+    repo_dir: str = "automa",
+    *,
+    read_only: bool = False,
+    launch: str = ".venv/bin/automa web",
+) -> str:
     actions = "" if read_only else " --allow-actions"
     return (
         _inner_template()
         .replace("$RepoDir", repo_dir)
+        .replace("$launch", launch)
         .replace("$Port", str(port), 1)
         .replace("$actions", actions)
     )
@@ -78,7 +85,12 @@ def test_ps1_command_has_no_quote_or_injection_points() -> None:
     template = _inner_template()
     assert "'" not in template and '"' not in template and "`" not in template
     # Only these variables are interpolated, all validated or fixed.
-    assert set(re.findall(r"\$[A-Za-z]+", template)) == {"$RepoDir", "$Port", "$actions"}
+    assert set(re.findall(r"\$[A-Za-z]+", template)) == {
+        "$RepoDir",
+        "$Port",
+        "$actions",
+        "$launch",
+    }
     text = _text(PS1)
     assert "$actions = if ($ReadOnly) { '' } else { ' --allow-actions' }" in text
     assert '$wslArgs += "-e bash -lc `"$inner`""' in text

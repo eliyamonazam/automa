@@ -5,7 +5,11 @@
 #      from ~/automa with that folder's .venv, in this console window;
 #   2. waits until the page answers on http://127.0.0.1:<Port>/ and opens it in the
 #      default browser;
-#   3. keeps running until you press Ctrl+C or close this window (that also stops it,
+#   3. with -PublicHost automa.example.com, also starts the Cloudflare Tunnel of
+#      docs/REMOTE-ACCESS.md (scripts/automa-tunnel.sh, `automa web --public`), so the
+#      family can open https://automa.example.com/ from outside; Automa still listens
+#      only on 127.0.0.1 and the tunnel stops together with it;
+#   4. keeps running until you press Ctrl+C or close this window (that also stops it,
 #      and a background run started from the page is paused cleanly).
 #
 # This file is ASCII only on purpose: Windows PowerShell 5.1 reads files without a
@@ -31,7 +35,15 @@ param(
     [switch]$NoBrowser,
 
     # Update Automa first (automa-update.ps1 next to this file), then open it.
-    [switch]$Update
+    [switch]$Update,
+
+    # Public name of the Cloudflare Tunnel (docs/REMOTE-ACCESS.md), e.g. automa.example.com.
+    [ValidatePattern('^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$')]
+    [string]$PublicHost = '',
+
+    # Name given to `cloudflared tunnel create` (docs/REMOTE-ACCESS.md).
+    [ValidatePattern('^[A-Za-z0-9._-]+$')]
+    [string]$TunnelName = 'automa'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -107,9 +119,16 @@ if (Test-Port $Port) {
 }
 
 $actions = if ($ReadOnly) { '' } else { ' --allow-actions' }
+# Both values passed the patterns above; the host name is sent in lower case.
+$launch = '.venv/bin/automa web'
+if ($PublicHost) {
+    $PublicHost = $PublicHost.ToLowerInvariant()
+    $launch = "bash scripts/automa-tunnel.sh $TunnelName $PublicHost"
+}
 # Fixed command for bash inside WSL. No quotes are needed: Port is an integer and
-# RepoDir passed the pattern above. Exit code 3 = missing clone or venv.
-$inner = "cd ~/$RepoDir 2>/dev/null && test -x .venv/bin/automa || exit 3; exec .venv/bin/automa web --port $Port$actions"
+# RepoDir, TunnelName and PublicHost passed the patterns above. Exit code 3 = missing
+# clone or venv, 4 = cloudflared missing, 127 = clone too old for -PublicHost.
+$inner = "cd ~/$RepoDir 2>/dev/null && test -x .venv/bin/automa || exit 3; exec $launch --port $Port$actions"
 
 # One argument string: Start-Process does not quote array items that contain spaces.
 # $inner has no double quotes, so wrapping it in them is safe.
@@ -118,6 +137,9 @@ if ($Distro) { $wslArgs = "-d $Distro " }
 $wslArgs += "-e bash -lc `"$inner`""
 
 Write-Host "Starting Automa in WSL: ~/$RepoDir ($Url). Press Ctrl+C here to stop."
+if ($PublicHost) {
+    Write-Host "From outside the house: https://$PublicHost/ (only while this window is open)."
+}
 $proc = Start-Process -FilePath $wsl.Source -ArgumentList $wslArgs -NoNewWindow -PassThru
 $null = $proc.Handle  # keep the handle so ExitCode is available later
 
@@ -137,6 +159,10 @@ $proc.WaitForExit()
 $code = $proc.ExitCode
 if ($code -eq 3) {
     Write-Host "No Automa install found at ~/$RepoDir/.venv in WSL. Follow README.md (section Windows) first." -ForegroundColor Red
+} elseif ($code -eq 4) {
+    Write-Host 'cloudflared is not installed in WSL. Follow docs/REMOTE-ACCESS.md (step 2), or open Automa without -PublicHost.' -ForegroundColor Red
+} elseif ($code -eq 127 -and $PublicHost) {
+    Write-Host 'This Automa copy has no scripts/automa-tunnel.sh yet. Update Automa first (automa-update.bat).' -ForegroundColor Red
 } elseif ($code -ne 0 -and $null -ne $code) {
     Write-Host "Automa web stopped with exit code $code (see the messages above)." -ForegroundColor Yellow
 }

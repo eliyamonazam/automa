@@ -59,6 +59,8 @@ cp ~/automa/scripts/automa-*.bat ~/automa/scripts/automa-*.ps1 /mnt/c/Users/<ن�
 
 ۳. از این به بعد فقط روی میانبر دابل‌کلیک کن.
 
+برای باز کردن Automa از بیرون خونه (گوشی خانواده با اینترنت موبایل) از راه Cloudflare Tunnel، راهنمای قدم‌به‌قدم [`docs/REMOTE-ACCESS.md`](docs/REMOTE-ACCESS.md) رو ببین؛ بعد از اون فقط ` -PublicHost automa.example.com` به Target میانبر اضافه می‌شه.
+
 گزینه‌ها (در خط فرمان یا در قسمت Target میانبر بعد از نام فایل): `-ReadOnly` (صفحه فقط‌خواندنی، بدون دکمه‌های تأیید/شروع/توقف)، `-Port 8766` (درگاه دیگر)، `-RepoDir automa2` (کلون در پوشه دیگری از خانه WSL)، `-Distro Ubuntu-24.04` (توزیع غیرپیش‌فرض)، `-NoBrowser`.
 
 نکته‌ها: `-ExecutionPolicy Bypass` در فایل `.bat` فقط برای همون یک پردازه PowerShell اعمال می‌شه و تنظیم سیستم رو عوض نمی‌کنه. اگه پیام «No Automa install found» دیدی، اول مراحل بالا (clone و venv در `~/automa`) رو انجام بده. اگه پنجره می‌گه سرور بالا اومده ولی مرورگر صفحه رو باز نمی‌کنه، احتمالاً forwarding درگاه WSL خاموشه: در فایل `%UserProfile%\.wslconfig` زیر `[wsl2]` خط `networkingMode=mirrored` (یا `localhostForwarding=true`) رو بذار و در PowerShell `wsl --shutdown` بزن. اگه درگاه از قبل اشغال باشه (مثلاً پنجره دیگه‌ای از Automa باز باشه) اسکریپت فقط صفحه رو باز می‌کنه.
