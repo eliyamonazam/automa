@@ -80,6 +80,16 @@ def _body(r: ws.Response) -> str:
     return r.body.decode("utf-8", "replace")
 
 
+# Random per-session tokens (CSRF of the sign-out form) are base64url text: a short
+# project id such as "p1" can occur inside one by chance, so id checks skip them.
+_TOKEN_VALUE = re.compile(r'value="[A-Za-z0-9_-]{32,}"')
+
+
+def _shown(r: ws.Response) -> str:
+    """The page without random token values (for "this id is not on the page")."""
+    return _TOKEN_VALUE.sub('value=""', _body(r))
+
+
 # -- the store keeps the owner ------------------------------------------------------------
 
 
@@ -143,7 +153,7 @@ def test_project_model_rejects_unknown_fields_still() -> None:
 
 def test_member_list_shows_only_their_projects(env: IsoEnv) -> None:
     dad = env.signed_in("dad", PW_KID)
-    body = _body(env.get("/", dad))
+    body = _shown(env.get("/", dad))
     assert "bourse screen" in body
     assert "my web page" not in body and "secret family goal" not in body
     assert "pkid" not in body
@@ -169,7 +179,7 @@ def test_no_accounts_shows_every_project(tmp_path: Path) -> None:
 def test_member_list_hides_unreadable_projects_of_others(env: IsoEnv) -> None:
     env.store.project_file("pkid").write_text("{broken")
     dad = env.signed_in("dad", PW_KID)
-    body = _body(env.get("/", dad))
+    body = _shown(env.get("/", dad))
     assert "pkid" not in body and "bourse screen" in body
     eli = env.signed_in("eli", PW)
     assert "pkid" in _body(env.get("/", eli))  # the owner account still sees the error
@@ -199,7 +209,7 @@ def test_member_gets_404_for_projects_not_theirs(env: IsoEnv, route: str, pid: s
     assert "secret of" not in body and "page of" not in body
     assert "my web page" not in body and "secret family goal" not in body
     # The same page as a missing project: nothing tells "exists, not yours" apart.
-    assert pid not in body
+    assert pid not in _shown(r)
 
 
 @pytest.mark.parametrize("route", POST_ROUTES)
