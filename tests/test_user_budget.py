@@ -447,6 +447,8 @@ def _member_project(env: Env, owner: str, role: UserRole) -> None:
 
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
+    # A member's project only runs in the Docker sandbox (D185): pretend Docker answers.
+    monkeypatch.setattr(cli, "docker_check", lambda sandbox: "27.0.0")
     return Env(tmp_path, monkeypatch)
 
 

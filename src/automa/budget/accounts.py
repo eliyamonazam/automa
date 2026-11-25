@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from automa.config import AutomaConfig, BudgetLimits
+from automa.member_safety import member_config
 from automa.users import UserRole, UsersError, UserStore
 
 
@@ -66,10 +67,16 @@ def config_for_project(
 ) -> tuple[AutomaConfig, ProjectBudget]:
     """``config`` with the project's limits, and the caps for its ``BudgetGuard``.
 
+    A member's project additionally gets the safe mode of ``automa.member_safety``
+    (D185): ``run_command`` only in the Docker sandbox and no automatic approvals.
     Everything that shows or compares against the project cap (estimates, the
     "near the cap" question, the brake) then sees the same, stricter numbers.
     """
     budget = project_budget(config, owner, owner_role(config.workspace, owner))
-    if budget.limits is config.limits:
-        return config, budget
-    return config.model_copy(update={"limits": budget.limits}), budget
+    if budget.limits is not config.limits:
+        config = config.model_copy(update={"limits": budget.limits})
+    if budget.member:
+        # A member's project also runs in the safe mode (D185): commands only in
+        # the Docker sandbox, never approved automatically.
+        config = member_config(config)
+    return config, budget

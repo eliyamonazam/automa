@@ -115,6 +115,15 @@ class RetryPreflight(Protocol):
         ...
 
 
+@runtime_checkable
+class SandboxPreflight(Protocol):
+    """Optional part of the preflight: Docker needed but not usable (D185)."""
+
+    def sandbox_refusal(self, project_id: str) -> str | None:
+        """A refusal code (``member_needs_docker``/``docker_unavailable``) or ``None``."""
+        ...
+
+
 class RunProcess(Protocol):
     """The part of :class:`subprocess.Popen` used here."""
 
@@ -409,6 +418,7 @@ class BackgroundRuns:
                 raise ActionRefused.coded(409, "marked_running", id=project_id)
             if status is ProjectStatus.DONE:
                 raise ActionRefused.coded(409, "already_done", id=project_id)
+            self._check_sandbox(project_id)
             needs = self._preflight.needs_confirm(project_id)
             if needs and confirm != CONFIRM_VALUE:
                 raise ActionRefused.coded(409, "confirm_cost")
@@ -446,12 +456,28 @@ class BackgroundRuns:
                 raise ActionRefused.coded(409, "already_running", id=project_id)
             if not can_retry(self._store, project_id):
                 raise ActionRefused.coded(409, "not_retryable", id=project_id)
+            self._check_sandbox(project_id)
             try:
                 self._preflight.grant_retry(project_id)
             except (RetryError, OSError, ProjectStoreError, ValueError) as e:
                 raise ActionRefused.coded(500, "retry_failed", reason=str(e)) from None
             run = self._spawn_locked(project_id, True)
         self._started(project_id, run)
+
+    def _check_sandbox(self, project_id: str) -> None:
+        """Refuse before spawning when the run needs Docker and Docker is not usable.
+
+        Nothing is spawned or granted then. A member's project always needs Docker
+        (D185); the child ``automa run`` checks the same again (defence in depth).
+        An unknown code from the preflight still refuses (fail closed)."""
+        if not isinstance(self._preflight, SandboxPreflight):
+            return
+        code = self._preflight.sandbox_refusal(project_id)
+        if code is None:
+            return
+        if code == "member_needs_docker":
+            raise ActionRefused.coded(409, "member_needs_docker")
+        raise ActionRefused.coded(409, "docker_unavailable")
 
     def _spawn_locked(self, project_id: str, yes: bool) -> _Run:
         """Start the ``automa run`` child (called under the lock)."""

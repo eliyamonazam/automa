@@ -459,14 +459,26 @@ def _fail(message: str, code: int) -> typer.Exit:
     return typer.Exit(code)
 
 
-def _require_sandbox(config: AutomaConfig) -> None:
-    """With ``mode = "docker"``, stop before any work unless Docker answers (fail closed)."""
+def _require_sandbox(config: AutomaConfig, *, member: bool = False) -> None:
+    """With ``mode = "docker"``, stop before any work unless Docker answers (fail closed).
+
+    A member's project (D185) always runs in Docker; its message never suggests
+    running on the host instead."""
     sandbox = config.sandbox.docker_sandbox()
     if sandbox is None:
+        if member:  # unreachable through config_for_project; never run a member locally
+            raise _fail("a member's project only runs in the Docker sandbox", EXIT_CONFIG)
         return
     try:
         docker_check(sandbox)
     except SandboxError as e:
+        if member:
+            raise _fail(
+                f"this project belongs to a member account: its commands only run in the "
+                f"Docker sandbox, never on this machine, and Docker is not usable: {e}; "
+                "nothing was run (install or start Docker, then run again)",
+                EXIT_CONFIG,
+            ) from None
         raise _fail(
             f"sandbox mode is docker but Docker is not usable: {e}; nothing was run "
             '(start Docker, or set [sandbox] mode = "local" in automa.toml)',
@@ -1235,7 +1247,7 @@ def run(
         prompt_memory = _prompt_memory(config, memory, pid)
     except (ConfigError, RoleError, SkillError, MemoryStoreError) as e:
         raise _fail(str(e), EXIT_CONFIG) from None
-    _require_sandbox(config)
+    _require_sandbox(config, member=budget.member)
     quality = _open_quality(config)
     router, stats = _run_router(config, quality, use_router)
 
@@ -4261,6 +4273,28 @@ class _WebRunPreflight:
 
     def command(self, project_id: str, *, yes: bool) -> list[str]:
         return webui_runs.default_command(project_id, yes=yes, config_path=self._config_path)
+
+    def sandbox_refusal(self, project_id: str) -> str | None:
+        """Why the run cannot start because Docker is needed but not usable (D185).
+
+        ``None`` when the project's commands may run (local mode, or Docker answers).
+        A member's project always needs Docker. The child ``automa run`` checks the
+        same thing again; this only gives the page a clear sentence before spawning.
+        Never raises: an unreadable project is left to the normal start checks."""
+        config = self._config
+        try:
+            project = ProjectStore.for_workspace(config.workspace).load(project_id)
+        except ProjectStoreError:
+            return None
+        config, budget = config_for_project(config, project.owner)
+        sandbox = config.sandbox.docker_sandbox()
+        if sandbox is None:
+            return None
+        try:
+            docker_check(sandbox)
+        except SandboxError:
+            return "member_needs_docker" if budget.member else "docker_unavailable"
+        return None
 
     def grant_retry(self, project_id: str) -> list[str]:
         """The "try again" button (D156): the same grant as ``automa retry``."""

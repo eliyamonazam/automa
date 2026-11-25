@@ -789,6 +789,29 @@ _RAW: dict[str, dict[Language, str]] = {
         "en": "project {id} is already done",
         "fa": "پروژهٔ {id} قبلاً تموم شده",
     },
+    "refusal.member_needs_docker": {
+        "en": (
+            "for safety, the projects of this account only run inside Docker (an "
+            "isolated box on the computer Automa runs on), and Docker is not running "
+            "there right now; ask the owner of Automa to start Docker (nothing was run)"
+        ),
+        "fa": (
+            "برای امنیت، کارهای این حساب فقط داخل Docker (یک محیط جدا و امن روی "
+            "سیستمی که Automa روشه) اجرا می‌شن و الان Docker روی اون سیستم روشن نیست. "
+            "به صاحب Automa بگو Docker رو روشن کنه، بعد دوباره «شروع» رو بزن (چیزی اجرا نشد)"
+        ),
+    },
+    "refusal.docker_unavailable": {
+        "en": (
+            'automa.toml says commands run in Docker ([sandbox] mode = "docker"), but '
+            "Docker is not usable right now; start Docker, then start again (nothing was run)"
+        ),
+        "fa": (
+            'طبق automa.toml دستورها داخل Docker اجرا می‌شن ([sandbox] mode = "docker")، '
+            "ولی الان Docker در دسترس نیست. Docker رو روشن کن و دوباره «شروع» رو بزن "
+            "(چیزی اجرا نشد)"
+        ),
+    },
     "refusal.confirm_cost": {
         "en": (
             "the cost range is above confirm_above_usd: tick the box to confirm "
