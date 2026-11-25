@@ -331,6 +331,18 @@ font-size:.88em;padding:3px 12px;border:1px solid var(--line);border-radius:999p
 white-space:nowrap}.topbar .month strong{color:var(--fg)}.topbar .month .icon{color:var(--accent);
 width:16px;height:16px}
 .badge .icon{width:15px;height:15px}
+.topbar nav a.guide{display:inline-flex;align-items:center;gap:5px}
+.topbar nav a.guide .icon{width:18px;height:18px}
+.guide-hero h1{display:flex;align-items:center;gap:10px}.guide-hero h1 .icon{width:30px;height:30px}
+.guide-toc ul{margin:0;padding:0;list-style:none;columns:2 16em;column-gap:24px}
+:lang(fa) .guide-step ol{list-style-type:persian}
+.guide-toc li{margin:4px 0;break-inside:avoid}
+.guide-step ol{padding-inline-start:1.4em;line-height:1.9}.guide-step li{margin:6px 0}
+.guide-step h3{font-size:1em;margin:1em 0 .3em}
+.guide-examples{padding-inline-start:1.2em;line-height:1.8}.guide-examples li{margin:6px 0}
+b.ui{font-weight:700;color:var(--fg);white-space:normal}
+.guide-tip{margin:.8em 0 0;padding:10px 14px;border-radius:12px;background:var(--info);
+color:var(--infofg);font-size:.92em}
 .topbar nav a.newidea{margin-inline-start:6px;color:#fff;background:var(--accent)}
 .topbar nav a.newidea:hover{color:#fff;background:var(--accent)}
 .topbar .who{display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:.88em;
@@ -403,6 +415,7 @@ background:var(--soft);color:var(--fg);text-decoration:none}
 .topbar{gap:10px}.brand{font-size:1em}.topbar nav a{padding:4px 8px}
 .topbar nav{gap:4px}.topbar .month{padding:3px 8px}.topbar .month .lbl{display:none}
 .topbar nav a.projects{display:none}.topbar{padding-inline:12px}
+.topbar nav a.guide .lbl{display:none}.topbar nav a.guide{padding:4px 6px}
 .waiting-row .button{width:100%;justify-content:center}
 .hero{padding:16px 18px;border-radius:18px}.hero h1{font-size:1.35em}
 .cards{grid-template-columns:1fr}
@@ -587,8 +600,18 @@ def _topbar(lang: Language, bar: TopBar, *, new_idea: bool = False) -> str:
         )
     return (
         f'<header class="topbar">{brand}'
-        f'<nav><a class="projects" href="/">{text(t("nav.projects", lang))}</a>{month}{idea}'
+        f'<nav><a class="projects" href="/">{text(t("nav.projects", lang))}</a>'
+        f"{_guide_link(lang)}{month}{idea}"
         f"{_account(bar, lang)}</nav></header>"
+    )
+
+
+def _guide_link(lang: Language) -> str:
+    """ "Guide" (D189): the family guide, on every page with a full bar."""
+    label = text(t("nav.guide", lang))
+    return (
+        f'<a class="guide" href="/guide" title="{label}">{ICONS["help"]}'
+        f'<span class="lbl">{label}</span></a>'
     )
 
 

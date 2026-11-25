@@ -116,6 +116,10 @@ ICONS: Mapping[str, str] = MappingProxyType(
             '<path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"/><path d="M10 16l-4-4 4-4"/>'
             '<path d="M6 12h10"/>'
         ),
+        "help": _SVG.format(
+            '<circle cx="12" cy="12" r="9"/><path d="M9.6 9.5a2.5 2.5 0 0 1 4.9.7'
+            'c0 1.6-2.5 2.3-2.5 3.8"/><path d="M12 17h.01"/>'
+        ),
         "lock": _SVG.format(
             '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'
         ),

@@ -126,6 +126,7 @@ from automa.webui.files import (
     parse_path_query,
     read_file,
 )
+from automa.webui.guide import GUIDE_PATH, render_guide
 from automa.webui.i18n import MESSAGES, WELCOME_EXAMPLE_KEYS, t
 from automa.webui.ideas import (
     ANSWER_FIELDS,
@@ -1443,6 +1444,8 @@ class WebApp:
             return self._bundle(bundle_pid)
         if path == SPENDING_PATH:
             return self._spending_page()
+        if path == GUIDE_PATH:
+            return _html(200, render_guide(self._lang), security=self._security)
         if path == "/":
             spent, err = self._spending()
             try:

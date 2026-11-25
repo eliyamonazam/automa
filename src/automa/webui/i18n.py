@@ -942,6 +942,7 @@ _RAW: dict[str, dict[Language, str]] = {
     "nav.projects": {"en": "Projects", "fa": "پروژه‌ها"},
     # Login (M15, D181)
     "nav.signed_in": {"en": "Signed in as {name}", "fa": "واردشده با حساب {name}"},
+    "nav.guide": {"en": "Guide", "fa": "راهنما"},
     "nav.logout": {"en": "Sign out", "fa": "خروج"},
     "login.title": {"en": "Sign in", "fa": "ورود"},
     "login.heading": {"en": "Sign in to Automa", "fa": "ورود به Automa"},
