@@ -86,9 +86,9 @@ def _origin_of(url: str) -> str | None:
         parts = urlsplit(url)
     except ValueError:
         return None
-    if parts.scheme != "http" or not parts.netloc or "@" in parts.netloc:
+    if parts.scheme not in ("http", "https") or not parts.netloc or "@" in parts.netloc:
         return None
-    return f"http://{parts.netloc.lower()}"
+    return f"{parts.scheme}://{parts.netloc.lower()}"
 
 
 def check_same_origin(headers: Mapping[str, str], settings: ActionSettings) -> None:

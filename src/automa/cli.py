@@ -4322,9 +4322,30 @@ def web(
             "(same-origin forms with a per-session token). Default: read-only.",
         ),
     ] = False,
+    public: Annotated[
+        bool,
+        typer.Option(
+            "--public",
+            help="Also answer to --host-name through a tunnel such as Cloudflare Tunnel "
+            "(HTTPS). Still listens only on loopback; needs at least one account "
+            "(automa users add) and every page needs sign-in.",
+        ),
+    ] = False,
+    host_name: Annotated[
+        str | None,
+        typer.Option(
+            "--host-name",
+            help="The public name of --public, e.g. automa.example.com (no https:// or port).",
+        ),
+    ] = None,
     config_path: Annotated[Path | None, _CONFIG_OPTION] = None,
 ) -> None:
     """Serve a status page on this computer (read-only unless --allow-actions)."""
+    if public != (host_name is not None):
+        raise _fail(
+            "--public and --host-name go together (e.g. --public --host-name automa.example.com)",
+            EXIT_USER,
+        )
     config = _load(config_path)
     try:
         server = webui_server.create_server(
@@ -4344,6 +4365,7 @@ def web(
             if config.display.update_check
             else None,
             budget_config=config,
+            public_host=host_name,
         )
     except webui_server.WebServerError as e:
         raise _fail(str(e), EXIT_USER) from None
@@ -4361,6 +4383,12 @@ def web(
     else:
         typer.echo(f"automa web (read-only): {url}  (Ctrl+C to stop)")
         typer.echo("approve or reject only in the terminal: automa approvals")
+    if public and host_name is not None:
+        shown = webui_server.validate_public_host_name(host_name)
+        typer.echo(
+            f"public address (through your tunnel): https://{shown}/  "
+            "every page needs sign-in; this computer must stay on"
+        )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

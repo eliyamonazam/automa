@@ -150,13 +150,16 @@ def files_href(project_id: str, route: FilesRoute, path: str = "") -> str:
     return base + ("?" + urlencode({"path": path}) if path else "")
 
 
-def image_source(host: str, project_id: str) -> str:
+def image_source(host: str, project_id: str, scheme: str = "http") -> str:
     """The only image source a file view may load: this server's raw path (D128).
 
-    ``host`` must be an already-checked ``Host`` value (loopback ``addr:port``). CSP
-    matches a source without a trailing slash as one exact path; the query is ignored.
+    ``host`` must be an already-checked ``Host`` value (loopback ``addr:port``, or the
+    public name with ``scheme="https"``, D187). CSP matches a source without a trailing
+    slash as one exact path; the query is ignored.
     """
-    return "http://" + host + _PREFIX + quote(project_id, safe="") + "/files/raw"
+    if scheme not in ("http", "https"):
+        raise ValueError(f"invalid scheme: {scheme!r}")
+    return scheme + "://" + host + _PREFIX + quote(project_id, safe="") + "/files/raw"
 
 
 def _workspace(store: ProjectStore, project_id: str) -> Workspace | None:

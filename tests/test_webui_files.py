@@ -206,7 +206,9 @@ def test_image_source_is_exact_raw_path() -> None:
     assert wf.image_source(HOST, "p1") == "http://127.0.0.1:8765/projects/p1/files/raw"
 
 
-@pytest.mark.parametrize("bad", ["https://x", "http://a b", "http://a;b", "http://a'b", "x"])
+@pytest.mark.parametrize(
+    "bad", ["ftp://x", "https://a b", "https://a;b", "http://a b", "http://a;b", "http://a'b", "x"]
+)
 def test_page_csp_refuses_bad_image_source(bad: str) -> None:
     with pytest.raises(ValueError):
         render.page_csp(img_src=bad)

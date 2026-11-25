@@ -500,11 +500,13 @@ class ActionForms:
 
 def page_csp(*, actions: bool = False, img_src: str | None = None) -> str:
     """The page's Content-Security-Policy; ``img_src`` (D128) is the one image source
-    a file view may load (checked: ``http://`` and no space, quote or ``;``)."""
+    a file view may load (checked: ``http://`` or ``https://`` and no space, quote or ``;``)."""
     csp = ACTION_CONTENT_SECURITY_POLICY if actions else CONTENT_SECURITY_POLICY
     if img_src is None:
         return csp
-    if not img_src.startswith("http://") or any(c in img_src for c in " \t\r\n;,'\"<>"):
+    if not img_src.startswith(("http://", "https://")) or any(
+        c in img_src for c in " \t\r\n;,'\"<>"
+    ):
         raise ValueError(f"invalid image source: {img_src!r}")
     return csp.replace("img-src 'none'", f"img-src {img_src}")
 

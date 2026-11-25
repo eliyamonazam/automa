@@ -989,6 +989,17 @@ _RAW: dict[str, dict[Language, str]] = {
         "fa": "برای امنیت، تا وقتی صاحب Automa فایل حساب‌ها (users.json در پوشهٔ کار) رو "
         "درست نکنه هیچ صفحه‌ای نشون داده نمی‌شه.",
     },
+    "error.title.public_needs_account": {
+        "en": "No account yet",
+        "fa": "هنوز هیچ حسابی تعریف نشده",
+    },
+    "refusal.public_needs_account": {
+        "en": "this address is reachable from the internet, so it needs sign-in; the owner "
+        "must add an account first: automa users add <name>",
+        "fa": "این نشانی از اینترنت باز می‌شه و بدون ورود چیزی نشون نمی‌ده. صاحب Automa اول "
+        "باید در ترمینال با دستور automa users add یک حساب بسازه، بعد این صفحه رو دوباره "
+        "باز کن.",
+    },
     "nav.new": {"en": "New idea", "fa": "ایدهٔ جدید"},
     "deliver.ready.title": {"en": "✅ Your product is ready", "fa": "✅ محصولت آماده‌ست"},
     "deliver.partial.title": {

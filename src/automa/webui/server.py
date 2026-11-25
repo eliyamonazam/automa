@@ -26,6 +26,12 @@ With at least one account in ``users.json`` (M15, D181) every page except
 ``POST /login`` and ``/logout`` are then accepted even by the read-only server, and
 every form carries the session's own CSRF token instead of the per-server one.
 
+With ``public_host`` (``automa web --public --host-name``, D187) the server still
+listens only on loopback but also accepts that one name as ``Host`` for a tunnel
+(Cloudflare Tunnel): forms must then come from ``https://<name>``, every response
+carries HSTS, the login limiter counts each visitor by the tunnel's
+``CF-Connecting-IP`` header, and with no account every request is refused (503).
+
 ``/projects/<pid>/files…`` (D128) browses the project's ``files/`` read-only through
 :mod:`automa.webui.files`; only a file view of a checked image gets an ``img-src``,
 and only for that project's ``raw`` path.
@@ -35,6 +41,7 @@ from __future__ import annotations
 
 import ipaddress
 import math
+import re
 import socket
 import sys
 import threading
@@ -267,6 +274,50 @@ def validate_port(port: int) -> int:
     return port
 
 
+_DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+# Sent only in public mode (D187): the tunnel serves HTTPS, so browsers keep to it.
+HSTS_HEADER = ("Strict-Transport-Security", "max-age=31536000")
+# Set by Cloudflare on every request through the tunnel; a remote client cannot forge it.
+TUNNEL_CLIENT_HEADER = "cf-connecting-ip"
+
+
+def validate_public_host_name(name: str) -> str:
+    """The lower-case public host name of ``--public`` (D187), else ``WebServerError``.
+
+    A plain DNS name with at least two labels: no scheme, port, path, IP address,
+    wildcard or ``localhost``. It is the only extra ``Host`` value the server accepts.
+    """
+    shown = name.strip().lower().removesuffix(".")
+    labels = shown.split(".")
+    bad = (
+        not shown
+        or len(shown) > 253
+        or len(labels) < 2
+        or not all(_DNS_LABEL.fullmatch(label) for label in labels)
+        or labels[-1].isdigit()
+        or labels[-1] == "localhost"
+    )
+    if bad:
+        raise WebServerError(
+            f"invalid public host name {name!r}: use a plain name such as automa.example.com "
+            "(no https://, port or path)"
+        )
+    return shown
+
+
+def public_origins(name: str) -> frozenset[str]:
+    """The only browser origin of the public name: HTTPS through the tunnel (D187)."""
+    return frozenset({f"https://{name}"})
+
+
+def browser_origins(hosts: frozenset[str], public_host: str | None = None) -> frozenset[str]:
+    """Origins a form may come from: ``http://`` for loopback ``Host`` values and only
+    ``https://`` for the public name (D187)."""
+    if public_host is None:
+        return allowed_origins(hosts)
+    return allowed_origins(hosts - {public_host}) | public_origins(public_host)
+
+
 def allowed_hosts(host: str, port: int) -> frozenset[str]:
     """Exact ``Host`` header values accepted for a server bound to ``host:port``."""
     addr = ipaddress.ip_address(host)
@@ -387,13 +438,18 @@ class WebApp:
         updates: UpdateWatcher | None = None,
         auth: AuthSettings | None = None,
         budget_config: AutomaConfig | None = None,
+        public_host: str | None = None,
     ):
         self._store = ProjectStore.for_workspace(workspace)
+        # Public mode (D187): reached through a tunnel; never without an account.
+        self._public_host = None if public_host is None else validate_public_host_name(public_host)
+        if self._public_host is not None and self._public_host not in allowed:
+            raise ValueError("the public host name must be one of the allowed Host values")
         # Display only (D184): the caps shown on "My spending"; the guard reads its own.
         self._budget_config = budget_config
         # Login (D181): only once users.json has an account; checked on every request.
         self._auth = auth or AuthSettings(
-            users=UserStore(workspace), origins=allowed_origins(allowed)
+            users=UserStore(workspace), origins=browser_origins(allowed, self._public_host)
         )
         self._updates = updates  # the "new version" bar (D178); never blocks a request
         if language not in LANGUAGES:
@@ -629,6 +685,10 @@ class WebApp:
             titles={t.id: t.title for t in view.tasks if t.title},
         )
 
+    @property
+    def public_host(self) -> str | None:
+        return self._public_host
+
     def handle(
         self,
         method: str,
@@ -637,6 +697,37 @@ class WebApp:
         headers: Sequence[tuple[str, str]] = (),
         body: bytes = b"",
         client: str = "",
+    ) -> Response:
+        if self._public_host is None:
+            return self._handle(method, target, host, headers, body, client)
+        if host is not None and host.strip().lower() == self._public_host:
+            client = self._tunnel_client(headers, client)
+        response = self._handle(method, target, host, headers, body, client)
+        return response.with_headers(HSTS_HEADER)
+
+    @staticmethod
+    def _tunnel_client(headers: Sequence[tuple[str, str]], client: str) -> str:
+        """The visitor's address through the tunnel, for the login limiter (D187).
+
+        Every tunnelled request comes from 127.0.0.1; without this one stranger's
+        failed logins would lock everyone out. A bad or repeated header keeps the
+        socket address (the per-account lockout of D180 still applies)."""
+        values = [v for k, v in headers if k.lower() == TUNNEL_CLIENT_HEADER]
+        if len(values) != 1:
+            return client
+        try:
+            return f"tunnel:{ipaddress.ip_address(values[0].strip())}"
+        except ValueError:
+            return client
+
+    def _handle(
+        self,
+        method: str,
+        target: str,
+        host: str | None,
+        headers: Sequence[tuple[str, str]],
+        body: bytes,
+        client: str,
     ) -> Response:
         path = urlsplit(target).path
         accounts = self._accounts()
@@ -649,6 +740,12 @@ class WebApp:
             return self.error(421, "error.title.unexpected_host", code="open_printed_address")
         if method != "POST" and is_static_path(path):
             return self._static(path)
+        if accounts is None and self._public_host is not None:
+            # D187: a public server never falls back to the open loopback pages.
+            with top_bar(TopBar(bare=True)):
+                return self.error(
+                    503, "error.title.public_needs_account", code="public_needs_account"
+                )
         if accounts is None:  # no account: unchanged loopback behaviour (D78)
             return self._handle_checked(method, target, host, headers, body)
         with top_bar(TopBar(bare=True)):
@@ -1279,7 +1376,8 @@ class WebApp:
                 return _html(200, document, security=self._security)
             if route is FilesRoute.VIEW:
                 content = read_file(self._store, pid, path)
-                img_src = image_source(host, pid) if content.kind == "image" else None
+                scheme = "https" if host == self._public_host else "http"
+                img_src = image_source(host, pid, scheme) if content.kind == "image" else None
                 document = render_file(content, actions=actions, img_src=img_src, lang=self._lang)
                 security = self._security
                 if img_src is not None:
@@ -1586,6 +1684,7 @@ def create_server(
     timezone: str = DEFAULT_TIMEZONE,
     updates: UpdateWatcher | None = None,
     budget_config: AutomaConfig | None = None,
+    public_host: str | None = None,
 ) -> ThreadingHTTPServer:
     """A bound (not yet serving) server. ``port=0`` picks a free port (tests).
 
@@ -1597,9 +1696,24 @@ def create_server(
     ``toman_per_usd`` shows every amount first in rounded toman (D133); ``language``
     and ``timezone`` are ``[display]`` (translated pages and local times, D140);
     ``updates`` shows a "new version is ready" bar (D178); ``budget_config`` lets the
-    "My spending" page show each account's caps (display only, D184)."""
+    "My spending" page show each account's caps (display only, D184).
+
+    ``public_host`` (``--public --host-name``, D187) also accepts that name as ``Host``
+    (with ``https://`` origins only) for a tunnel such as Cloudflare Tunnel; the server
+    still listens only on loopback, refuses to start without an account in
+    ``users.json``, never serves a page without sign-in and sends HSTS."""
     host = validate_bind_host(host)
     port = validate_port(port)
+    if public_host is not None:
+        public_host = validate_public_host_name(public_host)
+        try:
+            accounts = UserStore(workspace).list()
+        except UsersError as e:
+            raise WebServerError(f"--public: the accounts file cannot be used: {e}") from None
+        if not any(not u.disabled for u in accounts):
+            raise WebServerError(
+                "--public needs at least one active account first: automa users add <name>"
+            )
 
     family = socket.AF_INET6 if ipaddress.ip_address(host).version == 6 else socket.AF_INET
 
@@ -1610,8 +1724,10 @@ def create_server(
     # Bind first so the Host check uses the real port (port=0 picks a free one).
     server = Server((host, port), BaseHTTPRequestHandler)
     hosts = allowed_hosts(host, int(server.server_address[1]))
+    if public_host is not None:
+        hosts = hosts | {public_host}
     actions = (
-        ActionSettings(csrf_token=new_csrf_token(), origins=allowed_origins(hosts))
+        ActionSettings(csrf_token=new_csrf_token(), origins=browser_origins(hosts, public_host))
         if allow_actions
         else None
     )
@@ -1629,6 +1745,7 @@ def create_server(
         background_ideas=True,  # the browser waits on a "thinking" page (D137)
         updates=updates,
         budget_config=budget_config,
+        public_host=public_host,
     )
     server.RequestHandlerClass = make_handler(app, log)
     return server
