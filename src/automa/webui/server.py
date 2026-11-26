@@ -1445,7 +1445,14 @@ class WebApp:
         if path == SPENDING_PATH:
             return self._spending_page()
         if path == GUIDE_PATH:
-            return _html(200, render_guide(self._lang), security=self._security)
+            # The guide's sample pictures are this server's own fixed assets (D190).
+            security = tuple(
+                (name, value.replace("img-src 'none'", "img-src 'self'"))
+                if name == "Content-Security-Policy"
+                else (name, value)
+                for name, value in self._security
+            )
+            return _html(200, render_guide(self._lang), security=security)
         if path == "/":
             spent, err = self._spending()
             try:

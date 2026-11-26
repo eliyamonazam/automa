@@ -18,6 +18,7 @@ import pytest
 from automa.webui import guide as g
 from automa.webui import i18n
 from automa.webui import server as ws
+from automa.webui import static as st
 from test_webui_isolation import IsoEnv
 from test_webui_login import HOST, LEDGER, PW, PW_KID
 
@@ -206,3 +207,156 @@ def test_persian_page(tmp_path: Path) -> None:
 def test_unknown_language_is_refused() -> None:
     with pytest.raises(ValueError):
         g.render_guide("de")  # type: ignore[arg-type]
+
+
+# -- the sample pictures (D190) -------------------------------------------------------------
+
+SHOTS = ROOT / "src" / "automa" / "webui" / "static" / "guide"
+SCRIPT = ROOT / "scripts" / "guide_screenshots.py"
+
+
+def _csp(r: ws.Response) -> str:
+    return dict(r.headers)["Content-Security-Policy"]
+
+
+def test_every_picture_belongs_to_a_section_and_is_an_asset() -> None:
+    ids = [s.id for s in g.SECTIONS]
+    assert set(g.IMAGES) <= set(ids)
+    assert set(g.IMAGES) == set(st.GUIDE_IMAGES)
+    for name in g.IMAGES:
+        path = st.guide_image_path(name)
+        assert path == f"/static/guide/{name}.png" and path in st.ASSETS
+    with pytest.raises(ValueError):
+        st.guide_image_path("../OFL")
+
+
+@pytest.mark.parametrize("name", st.GUIDE_IMAGES)
+def test_picture_is_a_small_phone_png(name: str) -> None:
+    data = (SHOTS / f"{name}.png").read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    assert 5_000 < len(data) < 150_000, len(data)  # small enough for the repo and a phone
+    width, height = st.guide_image_size(name)
+    assert width == 390  # a phone screen
+    assert 200 <= height <= 844
+
+
+def test_no_stray_file_in_the_pictures_folder() -> None:
+    assert sorted(p.name for p in SHOTS.iterdir()) == sorted(f"{n}.png" for n in st.GUIDE_IMAGES)
+
+
+def test_size_of_a_file_that_is_not_png(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(st, "_read", lambda name: b"GIF89a" + b"\0" * 40)
+    with pytest.raises(ValueError):
+        st.guide_image_size("login")
+
+
+def test_check_rejects_a_picture_without_asset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(g, "IMAGES", {**g.IMAGES, "files": g._s("فایل", "File")})
+    with pytest.raises(ValueError, match="pictures"):
+        g._check()
+    monkeypatch.setattr(g, "IMAGES", {k: v for k, v in g.IMAGES.items() if k != "login"})
+    with pytest.raises(ValueError, match="pictures"):
+        g._check()
+
+
+def test_page_shows_each_picture_with_caption_and_size(env: IsoEnv) -> None:
+    main = _main(env.get("/guide", env.signed_in("kid", "kid-pass-123")))
+    for name, alt in g.IMAGES.items():
+        width, height = st.guide_image_size(name)
+        tag = (
+            f'<img src="/static/guide/{name}.png" alt="{alt["en"]}" '
+            f'width="{width}" height="{height}" loading="lazy">'
+        )
+        assert tag in main, name
+        section = main.split(f'id="{name}"', 1)[1].split("</section>", 1)[0]
+        assert tag in section  # under its own section
+        assert f"{alt['en']} · sample picture</figcaption>" in section
+    assert main.count("<img ") == len(g.IMAGES)
+
+
+def test_persian_captions_say_sample(tmp_path: Path) -> None:
+    env = FaEnv(tmp_path)
+    main = _main(env.get("/guide", env.signed_in("kid", "kid-pass-123")))
+    assert main.count("· تصویر نمونه</figcaption>") == len(g.IMAGES)
+    assert 'alt="صفحهٔ ورود"' in main
+
+
+def test_only_the_guide_may_load_own_pictures(env: IsoEnv) -> None:
+    kid = env.signed_in("kid", "kid-pass-123")
+    guide = env.get("/guide", kid)
+    assert "img-src 'self'" in _csp(guide) and "img-src 'none'" not in _csp(guide)
+    assert "frame-ancestors 'none'" in _csp(guide)
+    assert "img-src 'self'" in _body(guide)  # the page's own meta CSP too
+    for other in ("/", "/new", "/spending", "/login"):
+        r = env.get(other, kid if other != "/login" else None)
+        assert "img-src 'self'" not in _csp(r), other
+        assert "img-src 'self'" not in _body(r), other
+
+
+def test_page_csp_self_images() -> None:
+    from automa.webui.render import page_csp
+
+    assert "img-src 'self'" in page_csp(self_images=True)
+    assert "form-action 'self'" in page_csp(actions=True, self_images=True)
+    assert "img-src 'none'" in page_csp()
+    with pytest.raises(ValueError):
+        page_csp(self_images=True, img_src="http://127.0.0.1:8765/x")
+
+
+@pytest.mark.parametrize("name", st.GUIDE_IMAGES)
+def test_pictures_are_served_as_fixed_assets(env: IsoEnv, name: str) -> None:
+    r = env.get(f"/static/guide/{name}.png")
+    assert r.status == 200
+    headers = dict(r.headers)
+    assert headers["Content-Type"] == "image/png"
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert r.body == (SHOTS / f"{name}.png").read_bytes()
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/static/guide/",
+        "/static/guide/LOGIN.png",
+        "/static/guide/login.PNG",
+        "/static/guide/../OFL.txt",
+        "/static/guide/%6cogin.png",
+        "/static/guide/login.png/",
+        "/static/guide//login.png",
+        "/static/guide/other.png",
+    ],
+)
+def test_other_paths_under_guide_are_not_found(env: IsoEnv, path: str) -> None:
+    r = env.get(path)
+    assert r.status in (400, 404), path
+    assert dict(r.headers).get("Content-Type", "").startswith("text/html")
+
+
+def test_markdown_shows_the_same_pictures() -> None:
+    doc = g.guide_markdown("fa")
+    for name, alt in g.IMAGES.items():
+        src = f"../src/automa/webui/static/guide/{name}.png"
+        assert (DOC.parent / src).resolve() == (SHOTS / f"{name}.png").resolve()
+        assert f'<img src="{src}" alt="{alt["fa"]}" width="260">' in doc
+        assert f"<sub>{alt['fa']} · تصویر نمونه</sub>" in doc
+        section = doc.split(
+            f"## {g.fill_text(next(s for s in g.SECTIONS if s.id == name).title, 'fa')}"
+        )[1]
+        assert src in section.split("\n## ", 1)[0]
+
+
+def test_picture_texts_are_safe_in_html_attributes() -> None:
+    for alt in g.IMAGES.values():
+        for value in alt.values():
+            assert not set(value) & set('"<>&'), value
+
+
+def test_screenshot_script_matches_the_guide_and_stays_offline() -> None:
+    src = SCRIPT.read_text(encoding="utf-8")
+    assert "from automa.webui.guide import EXAMPLES, IMAGES" in src
+    for name in g.IMAGES:
+        assert f'"{name}":' in src, name
+    # Stand-ins only: no provider, no gateway, no real run, no outside page.
+    for banned in ("automa.providers", "Gateway", "subprocess", "http://", "https://"):
+        assert banned not in src, banned
+    assert "tempfile.TemporaryDirectory()" in src

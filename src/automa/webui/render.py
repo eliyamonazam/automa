@@ -341,6 +341,10 @@ width:16px;height:16px}
 .guide-step h3{font-size:1em;margin:1em 0 .3em}
 .guide-examples{padding-inline-start:1.2em;line-height:1.8}.guide-examples li{margin:6px 0}
 b.ui{font-weight:700;color:var(--fg);white-space:normal}
+.guide-shot{margin:1em auto 0;max-width:260px;text-align:center}
+.guide-shot img{display:block;width:100%;height:auto;border:1px solid var(--line);
+border-radius:16px;box-shadow:0 6px 20px rgba(0,0,0,.12);background:#fff}
+.guide-shot figcaption{margin-top:6px;color:var(--muted);font-size:.85em}
 .guide-tip{margin:.8em 0 0;padding:10px 14px;border-radius:12px;background:var(--info);
 color:var(--infofg);font-size:.92em}
 .topbar nav a.newidea{margin-inline-start:6px;color:#fff;background:var(--accent)}
@@ -511,10 +515,17 @@ class ActionForms:
     csrf_token: str
 
 
-def page_csp(*, actions: bool = False, img_src: str | None = None) -> str:
+def page_csp(
+    *, actions: bool = False, img_src: str | None = None, self_images: bool = False
+) -> str:
     """The page's Content-Security-Policy; ``img_src`` (D128) is the one image source
-    a file view may load (checked: ``http://`` or ``https://`` and no space, quote or ``;``)."""
+    a file view may load (checked: ``http://`` or ``https://`` and no space, quote or ``;``).
+    ``self_images`` (D190) allows this server's own fixed pictures (the guide only)."""
     csp = ACTION_CONTENT_SECURITY_POLICY if actions else CONTENT_SECURITY_POLICY
+    if self_images:
+        if img_src is not None:
+            raise ValueError("img_src and self_images cannot be combined")
+        return csp.replace("img-src 'none'", "img-src 'self'")
     if img_src is None:
         return csp
     if not img_src.startswith(("http://", "https://")) or any(
@@ -533,6 +544,7 @@ def page(
     img_src: str | None = None,
     lang: Language = "en",
     new_idea: bool = False,
+    self_images: bool = False,
 ) -> str:
     """A complete HTML document around already-safe ``body``.
 
@@ -548,7 +560,7 @@ def page(
     bar = _TOP_BAR.get()
     # The "Sign out" form (D181) posts to this server: same CSP as action mode.
     actions = actions or bar.logout_token is not None
-    csp = page_csp(actions=actions, img_src=img_src)
+    csp = page_csp(actions=actions, img_src=img_src, self_images=self_images)
     referrer = "same-origin" if actions else "no-referrer"
     if lang not in ("fa", "en"):
         raise ValueError(f"unknown language: {lang!r}")

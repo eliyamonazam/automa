@@ -29,6 +29,7 @@ from automa.ideafiles import MAX_IDEA_FILE_BYTES, MAX_IDEA_FILES
 from automa.l10n import LANGUAGES, Language, localize_digits
 from automa.webui import cards, i18n, spending
 from automa.webui.render import ICONS, page, text
+from automa.webui.static import GUIDE_IMAGES, guide_image_path, guide_image_size
 
 GUIDE_PATH = "/guide"
 
@@ -352,9 +353,31 @@ SECTIONS: tuple[Section, ...] = (
     ),
 )
 
+# One sample picture per section that has one (D190): ``<section id>.png`` in
+# ``automa/webui/static/guide/``, made by ``scripts/guide_screenshots.py`` and served
+# at ``/static/guide/<id>.png``. The text is the picture's alt text and caption.
+IMAGES: Mapping[str, Text] = {
+    "login": _s("صفحهٔ ورود", "The sign-in page"),
+    "idea": _s("فرم ایدهٔ جدید با یک ایدهٔ نوشته‌شده", "The new-idea form with an idea typed in"),
+    "questions": _s(
+        "صفحهٔ سؤال‌ها و چیزهایی که Automa لازم داره",
+        "The questions page and what Automa needs from you",
+    ),
+    "start": _s(
+        "صفحهٔ پروژه با برنامه، هزینه و دکمهٔ شروع", "A project page with the plan, cost and Start"
+    ),
+    "result": _s("صفحهٔ پروژه وقتی محصول آماده‌ست", "A project page when the product is ready"),
+}
+SAMPLE_NOTE = _s(
+    "تصویر نمونه",
+    "sample picture",
+)
+
 _ALL_TEXTS: tuple[Text, ...] = (
     TITLE,
     LEAD,
+    SAMPLE_NOTE,
+    *IMAGES.values(),
     EXAMPLES_HEADING,
     *EXAMPLES,
     *(t for s in SECTIONS for t in (s.title, *s.steps, *((s.tip,) if s.tip else ()))),
@@ -372,7 +395,11 @@ def label(ref: str, key: str, lang: Language) -> str:
 
 def _check() -> None:
     """Every text has both languages, the same references in each, and only known
-    references; run at import so a renamed key fails every test."""
+    references; every picture belongs to a section and is a served asset; run at
+    import so a renamed key fails every test."""
+    ids = {s.id for s in SECTIONS}
+    if set(IMAGES) - ids or set(IMAGES) != set(GUIDE_IMAGES):
+        raise ValueError("guide pictures must match the sections and the static assets")
     for item in _ALL_TEXTS:
         if set(item) != set(LANGUAGES):
             raise ValueError(f"guide text without both languages: {item!r}")
@@ -434,6 +461,15 @@ def render_guide(lang: Language) -> str:
     for s in SECTIONS:
         steps = "".join(f"<li>{_html(step, lang)}</li>" for step in s.steps)
         tip = f'<p class="guide-tip">{_html(s.tip, lang)}</p>' if s.tip else ""
+        shot = ""
+        if s.id in IMAGES:
+            alt = IMAGES[s.id][lang]
+            width, height = guide_image_size(s.id)
+            shot = (
+                f'<figure class="guide-shot"><img src="{guide_image_path(s.id)}" '
+                f'alt="{text(alt)}" width="{width}" height="{height}" loading="lazy">'
+                f"<figcaption>{text(alt)} · {text(SAMPLE_NOTE[lang])}</figcaption></figure>"
+            )
         extra = ""
         if s.id == "idea":
             extra = (
@@ -442,9 +478,9 @@ def render_guide(lang: Language) -> str:
             )
         parts.append(
             f'<section class="card guide-step" id="{s.id}"><h2>{_html(s.title, lang)}</h2>'
-            f"<ol>{steps}</ol>{extra}{tip}</section>"
+            f"<ol>{steps}</ol>{extra}{shot}{tip}</section>"
         )
-    return page(TITLE[lang], "".join(parts), lang=lang)
+    return page(TITLE[lang], "".join(parts), lang=lang, self_images=True)
 
 
 def guide_markdown(lang: Language = "fa") -> str:
@@ -468,6 +504,14 @@ def guide_markdown(lang: Language = "fa") -> str:
             lines += [f"### {fill_text(EXAMPLES_HEADING, lang)}", ""]
             lines += [f"- {fill_text(e, lang)}" for e in EXAMPLES]
             lines.append("")
+        if s.id in IMAGES:
+            alt = IMAGES[s.id][lang]
+            src = f"../src/automa/webui/static/guide/{s.id}.png"
+            lines += [
+                f'<p align="center"><img src="{src}" alt="{alt}" width="260"><br>',
+                f"<sub>{alt} · {SAMPLE_NOTE[lang]}</sub></p>",
+                "",
+            ]
         if s.tip:
             lines += [f"> {_fill(s.tip[lang], lang, bold, lambda v: v)}", ""]
     return "\n".join(lines).rstrip("\n") + "\n"
