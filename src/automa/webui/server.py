@@ -126,7 +126,13 @@ from automa.webui.files import (
     parse_path_query,
     read_file,
 )
-from automa.webui.guide import GUIDE_PATH, render_guide
+from automa.webui.guide import (
+    FIRST_STEPS_FIELDS,
+    FIRST_STEPS_PATH,
+    GUIDE_PATH,
+    render_first_steps,
+    render_guide,
+)
 from automa.webui.i18n import MESSAGES, WELCOME_EXAMPLE_KEYS, t
 from automa.webui.ideas import (
     ANSWER_FIELDS,
@@ -844,6 +850,49 @@ class WebApp:
         pid = path[len(_PROJECT_PREFIX) :].split("/", 1)[0]
         return self._owned_by(pid, user)
 
+    def _first_steps(self) -> str:
+        """The three-step card of a member who has not dismissed it yet (D191).
+
+        Only where its steps are true: a signed-in member on a server that takes new
+        ideas (action mode with a planner). An unreadable users file shows nothing."""
+        signed_in = _SIGNED_IN.get()
+        if (
+            signed_in is None
+            or signed_in.session.role is not UserRole.MEMBER
+            or self._ideas is None
+            or self._actions is None
+        ):
+            return ""
+        accounts = self._accounts()
+        if not isinstance(accounts, dict):
+            return ""
+        user = accounts.get(signed_in.session.user)
+        if user is None or user.welcomed_at is not None:
+            return ""
+        return render_first_steps(self._lang, signed_in.session.csrf_token)
+
+    def _post_first_steps(self, headers: Sequence[tuple[str, str]], body: bytes) -> Response:
+        """``POST /welcome`` (D191): "Got it" on the first-visit card, after the same
+        single-header, same-origin, strict-form and session-token checks as every
+        action. Only a signed-in member has the card; anyone else gets 404."""
+        member = self._member()
+        if self._actions is None or member is None:
+            return self.error(404, "error.title.not_found")
+        lowered = self._single_headers(headers)
+        if isinstance(lowered, Response):
+            return lowered
+        try:
+            check_same_origin(lowered, self._actions)
+            form = parse_form(lowered, body, fields=FIRST_STEPS_FIELDS)
+            check_token(form, self._actions)
+        except ActionRefused as e:
+            return self.refused(e)
+        try:
+            self._auth.users.mark_welcomed(member)
+        except UsersError as e:
+            return self.error(503, "error.title.accounts_unusable", str(e), lead="lead.accounts")
+        return self._redirect("/")
+
     def _top_bar(self, totals: tuple[float, float] | None) -> TopBar:
         """The app bar of this request's pages (D161)."""
         welcome = None if self._member() else self._welcome()
@@ -893,6 +942,8 @@ class WebApp:
         if self._actions is None:  # POST is only allowed in action mode (never reached)
             return self.error(405, "error.title.method_not_allowed", code="read_only")
         parts = urlsplit(target)
+        if parts.path == FIRST_STEPS_PATH and not parts.query:
+            return self._post_first_steps(headers, body)
         if self._ideas is not None and not parts.query and is_idea_path(parts.path):
             return self._post_idea(parts.path, headers, body)
         start_pid = parse_start_path(parts.path) if not parts.query else None
@@ -1478,6 +1529,7 @@ class WebApp:
                 tz=self._tz,
                 now=self._clock(),
                 member=self._member() is not None,
+                first_steps=self._first_steps(),
             )
             return _html(200, document, security=self._security)
         if self._ideas is not None and self._actions is not None:

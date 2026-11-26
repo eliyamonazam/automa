@@ -347,6 +347,16 @@ border-radius:16px;box-shadow:0 6px 20px rgba(0,0,0,.12);background:#fff}
 .guide-shot figcaption{margin-top:6px;color:var(--muted);font-size:.85em}
 .guide-tip{margin:.8em 0 0;padding:10px 14px;border-radius:12px;background:var(--info);
 color:var(--infofg);font-size:.92em}
+.first-steps{border-color:color-mix(in srgb,var(--accent) 40%,var(--line));
+background:color-mix(in srgb,var(--accent) 6%,var(--card))}
+.first-steps h2{margin:0 0 .5em;font-size:1.2em}
+.first-list{list-style:none;margin:0;padding:0;display:grid;gap:12px;
+grid-template-columns:repeat(auto-fit,minmax(14em,1fr))}
+.first-list li{display:flex;gap:10px;align-items:flex-start}
+.first-list .num{flex:none;display:inline-flex;align-items:center;justify-content:center;
+width:30px;height:30px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700}
+.first-list p{margin:.2em 0 0;line-height:1.75}
+.first-steps form{margin:0}.first-steps .hint{margin:.4em 0 0;font-size:.85em}
 .topbar nav a.newidea{margin-inline-start:6px;color:#fff;background:var(--accent)}
 .topbar nav a.newidea:hover{color:#fff;background:var(--accent)}
 .topbar .who{display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:.88em;
@@ -720,6 +730,7 @@ def render_overview(
     tz: tzinfo | None = None,
     now: datetime | None = None,
     member: bool = False,
+    first_steps: str = "",
 ) -> str:
     """The home page (D160): projects waiting for the user's answer first (with an
     "Answer" button), then every project as a card with its delivery state, step
@@ -727,7 +738,8 @@ def render_overview(
     to the top bar; ``rate`` (toman per USD) shows costs first in toman (D133);
     ``totals`` is (spent today, this month); ``lang`` translates the page and
     ``now``/``tz`` show times relative and local (D140); ``member`` (D186): a
-    member's page, where approvals are the owner's, says so instead."""
+    member's page, where approvals are the owner's, says so instead;
+    ``first_steps`` (D191): the ready-made first-visit card, shown under the heading."""
     can_plan = actions and ideas
     mode_key = "overview.mode.actions" if actions else "overview.mode.readonly"
     if member and actions:
@@ -746,6 +758,8 @@ def render_overview(
         )
     head.append(f'<p class="muted mode">{text(mode)}</p></header>')
     parts = ["".join(head)]
+    if first_steps:
+        parts.append(first_steps)
     if not view.projects:
         parts.append(_welcome(actions=actions, ideas=ideas, lang=lang))
     else:

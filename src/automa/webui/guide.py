@@ -32,6 +32,9 @@ from automa.webui.render import ICONS, page, text
 from automa.webui.static import GUIDE_IMAGES, guide_image_path, guide_image_size
 
 GUIDE_PATH = "/guide"
+# D191: the first-visit card of a member is dismissed with a POST here.
+FIRST_STEPS_PATH = "/welcome"
+FIRST_STEPS_FIELDS = frozenset({"csrf"})
 
 Text = Mapping[Language, str]
 
@@ -373,8 +376,54 @@ SAMPLE_NOTE = _s(
     "sample picture",
 )
 
+# The three-step card a member sees on the home page until they dismiss it (D191):
+# the same journey as sections 3-8 of the guide, in one line each, with the same
+# button names (checked like every guide text).
+FIRST_TITLE = _s("خوش اومدی! کار با Automa در سه قدم", "Welcome! Automa in three steps")
+FIRST_STEPS: tuple[tuple[Text, Text], ...] = (
+    (
+        _s("ایده‌ات رو بنویس", "Write your idea"),
+        _s(
+            "دکمهٔ {ui:nav.new} بالای صفحه رو بزن (در گوشی دکمهٔ +) و با زبان خودت بنویس "
+            "چی می‌خوای. اگه داده‌ات در فایله (مثلاً اکسل)، همون‌جا بفرستش.",
+            "Press {ui:nav.new} at the top (on a phone, the + button) and write in your own "
+            "words what you want. If your data is in a file (an Excel file, say), attach it "
+            "there.",
+        ),
+    ),
+    (
+        _s("جواب بده و شروع کن", "Answer, then start"),
+        _s(
+            "اگه Automa چیزی لازم داشته باشه ازت می‌پرسه. بعد برنامه و هزینهٔ تقریبی رو "
+            "می‌بینی؛ تا {ui:run.start.button} رو نزنی کار اصلی شروع نمی‌شه.",
+            "If Automa needs something it asks you. Then you see the plan and a rough "
+            "cost; the real work only begins when you press {ui:run.start.button}.",
+        ),
+    ),
+    (
+        _s("نتیجه رو بگیر", "Get the result"),
+        _s(
+            "وقتی کارت پروژه {card:card.ready} شد، بازش کن و فایل‌ها رو ببین یا دانلود کن. "
+            "اگه چیزی کم مونده باشه، دقیق می‌گه چی.",
+            "When the project card says {card:card.ready}, open it to see or download the "
+            "files. If anything is missing, it says exactly what.",
+        ),
+    ),
+)
+FIRST_DONE = _s("فهمیدم", "Got it")
+FIRST_MORE = _s("راهنمای کامل", "Full guide")
+FIRST_NOTE = _s(
+    "این پیام بعد از «فهمیدم» دیگه نشون داده نمی‌شه؛ راهنما همیشه از بالای صفحه باز می‌شه.",
+    "After “Got it” this message is not shown again; the guide is always at the top.",
+)
+
 _ALL_TEXTS: tuple[Text, ...] = (
     TITLE,
+    FIRST_TITLE,
+    *(t for pair in FIRST_STEPS for t in pair),
+    FIRST_DONE,
+    FIRST_MORE,
+    FIRST_NOTE,
     LEAD,
     SAMPLE_NOTE,
     *IMAGES.values(),
@@ -445,6 +494,31 @@ def fill_text(item: Text, lang: Language) -> str:
 
 def _html(item: Text, lang: Language) -> str:
     return _fill(item[lang], lang, lambda s: f'<b class="ui">{text(s)}</b>', text)
+
+
+def render_first_steps(lang: Language, csrf_token: str) -> str:
+    """The three-step first-visit card of a member's home page (D191).
+
+    "Got it" posts to :data:`FIRST_STEPS_PATH` with the session's CSRF token; the
+    full guide is one tap away. Fixed text only."""
+    if lang not in LANGUAGES:
+        raise ValueError(f"unknown language: {lang!r}")
+    steps = "".join(
+        f'<li><span class="num" aria-hidden="true">{localize_digits(str(n), lang)}</span>'
+        f"<div><strong>{_html(title, lang)}</strong><p>{_html(body, lang)}</p></div></li>"
+        for n, (title, body) in enumerate(FIRST_STEPS, 1)
+    )
+    return (
+        '<section class="card first-steps" aria-labelledby="first-steps-title">'
+        f'<h2 id="first-steps-title">{_html(FIRST_TITLE, lang)}</h2>'
+        f'<ol class="first-list">{steps}</ol>'
+        f'<div class="btn-row"><form method="post" action="{FIRST_STEPS_PATH}">'
+        f'<input type="hidden" name="csrf" value="{text(csrf_token)}">'
+        f'<button type="submit">{ICONS["check"]}{_html(FIRST_DONE, lang)}</button></form>'
+        f'<a class="button secondary" href="{GUIDE_PATH}">{ICONS["help"]}'
+        f"{_html(FIRST_MORE, lang)}</a></div>"
+        f'<p class="muted hint">{_html(FIRST_NOTE, lang)}</p></section>'
+    )
 
 
 def render_guide(lang: Language) -> str:

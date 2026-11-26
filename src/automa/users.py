@@ -191,8 +191,11 @@ class User(BaseModel):
     disabled: bool = False
     failed_attempts: Annotated[int, Field(ge=0, le=1000)] = 0
     locked_until: datetime | None = None
+    # D191: when this account dismissed the three-step first-visit card of the web UI;
+    # ``None`` (also every account made before D191): not yet shown or not dismissed.
+    welcomed_at: datetime | None = None
 
-    @field_validator("created_at", "password_changed_at", "locked_until")
+    @field_validator("created_at", "password_changed_at", "locked_until", "welcomed_at")
     @classmethod
     def _aware(cls, v: datetime | None) -> datetime | None:
         if v is not None and v.tzinfo is None:
@@ -391,6 +394,20 @@ class UserStore:
 
     def enable(self, name: str) -> User:
         return self._update(name, disabled=False, failed_attempts=0, locked_until=None)
+
+    # -- web UI (the account itself) -----------------------------------------
+
+    def mark_welcomed(self, name: str) -> User:
+        """Record that ``name`` dismissed the first-visit card (D191).
+
+        Idempotent: the first time is kept. Touches nothing that ends a session
+        (role, password, disabled), so the browser stays signed in."""
+        with self._locked():
+            data = self._read()
+            user = _find(data, name)
+            if user.welcomed_at is not None:
+                return user
+            return self._replace(data, user, welcomed_at=self._now())
 
     # -- login ---------------------------------------------------------------
 
